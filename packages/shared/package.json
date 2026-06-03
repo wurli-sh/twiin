@@ -2,9 +2,34 @@
   "name": "@twiin/shared",
   "version": "0.1.0",
   "private": true,
-  "main": "./index.ts",
-  "types": "./index.ts",
+  "files": [
+    "dist",
+    "abis",
+    "addresses.json",
+    "deployments"
+  ],
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./addresses.json": "./addresses.json",
+    "./deployments/hardhat.json": "./deployments/hardhat.json",
+    "./deployments/somniaTestnet.json": "./deployments/somniaTestnet.json",
+    "./abis/AgentOrchestrator.json": "./abis/AgentOrchestrator.json",
+    "./abis/AgentPolicy.json": "./abis/AgentPolicy.json",
+    "./abis/AgentRegistry.json": "./abis/AgentRegistry.json",
+    "./abis/AgentVault.json": "./abis/AgentVault.json",
+    "./abis/OracleFeed.json": "./abis/OracleFeed.json",
+    "./abis/TwiinAccount.json": "./abis/TwiinAccount.json",
+    "./abis/TwiinAgent.json": "./abis/TwiinAgent.json",
+    "./abis/TwiinFactory.json": "./abis/TwiinFactory.json",
+    "./abis/TwiinNames.json": "./abis/TwiinNames.json"
+  },
   "scripts": {
+    "build": "tsc -p tsconfig.json",
     "copy-abis": "tsx scripts/copy-abis.ts",
     "test": "vitest run",
     "test:watch": "vitest"

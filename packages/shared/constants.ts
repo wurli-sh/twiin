@@ -62,3 +62,4 @@ export enum PlanMode {
 // Policy seed defaults — must match TwiinFactory.sol deployTwiin seed values
 export const DEFAULT_DAILY_CAP_WEI = parseEther("2");
 export const DEFAULT_MAX_PER_TASK_WEI = parseEther("1");
+export const DEFAULT_MAX_TRUSTLESS_WEI = parseEther("2");
