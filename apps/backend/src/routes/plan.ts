@@ -22,7 +22,8 @@ function getClientIp(c: Context): string {
     if (xff) return xff.split(",")[0].trim();
   }
   // Use real socket address — cannot be spoofed by client headers
-  const incoming = (c.env as { incoming?: IncomingMessage }).incoming;
+  const incoming = (c.env as { incoming?: IncomingMessage } | undefined)
+    ?.incoming;
   return incoming?.socket?.remoteAddress ?? "unknown";
 }
 

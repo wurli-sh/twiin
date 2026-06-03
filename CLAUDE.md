@@ -156,14 +156,6 @@ twiin/
 | `OracleFeed` | `OracleFeed.sol` | On-chain feed + templates |
 | `TwiinTypes` | `TwiinTypes.sol` | Shared enums/structs |
 
-### `apps/backend/src/keepers/` — Keeper Details
-
-| Keeper | File | Role |
-|--------|------|------|
-| Relay | `relay.ts` | Watches for `TaskCreated` events, dispatches steps to Claude Sonnet planner |
-| Rater | `rater.ts` | Rates completed task results via Claude Haiku, releases payment if score ≥ 40/100 |
-| Indexer | `indexer.ts` | Indexes on-chain events into SQLite for query performance |
-
 ## Architecture
 
 ```

@@ -7,13 +7,14 @@ Part of the `twiin/` pnpm monorepo — consumed by `@twiin/shared`, `apps/backen
 
 ## Commands
 
-| Command              | Description                                           |
-| -------------------- | ----------------------------------------------------- |
-| `pnpm compile`       | `hardhat compile` — builds artifacts to `./artifacts` |
-| `pnpm test`          | `hardhat test`                                        |
-| `pnpm coverage`      | `hardhat coverage`                                    |
-| `pnpm deploy:local`  | deploy to local Hardhat node                          |
-| `pnpm deploy:somnia` | deploy to Somnia Testnet                              |
+| Command              | Description                                              |
+| -------------------- | -------------------------------------------------------- |
+| `pnpm compile`       | `hardhat compile` — builds artifacts to `./artifacts`    |
+| `pnpm test`          | `hardhat test`                                           |
+| `pnpm coverage`      | `hardhat coverage`                                       |
+| `pnpm deploy:local`  | deploy to local Hardhat node                             |
+| `pnpm deploy:somnia` | deploy to Somnia Testnet                                 |
+| `pnpm soak:somnia`   | run soak/load tests on Somnia Testnet                    |
 
 ## Source Layout
 
@@ -29,7 +30,7 @@ src/
 │   ├── MockAgentsApi.sol           — test IAgentRequester; fulfill/failRequest helpers
 │   ├── MockERC20.sol
 │   └── MockUniswapV2Router02.sol
-├── AgentOrchestrator.sol           — core engine; extends SomniaEventHandler
+├── AgentOrchestrator.sol           — core engine; extends SomniaEventHandler; registerTaskTemplate()
 ├── AgentPolicy.sol                 — per-agent caps, kill switch, allowlist
 ├── AgentRegistry.sol               — two-lane registry; Elo ranking
 ├── AgentVault.sol                  — pure task-time escrow
@@ -39,6 +40,12 @@ src/
 ├── TwiinFactory.sol                — one-tx bootstrap
 ├── TwiinNames.sol                  — name registry
 └── TwiinTypes.sol                  — shared enums/structs
+scripts/
+├── deploy.ts    — full deployment with manifest export, ABI gen, wiring validation
+├── soak.ts      — load/soak test runner for Somnia testnet
+deployments/
+├── hardhat.json          — local deployment manifest
+├── somniaTestnet.json    — Somnia testnet deployment manifest
 ```
 
 ## Key Architecture Rules
@@ -100,11 +107,13 @@ Size check (`result too large`) fires **before** state/bounds checks — test su
 | `Account.test.ts`              | ERC-6551 TBA: token(), execute, auth, subscribePull           |
 | `Factory.test.ts`              | deployTwiin end-to-end, name claim, policy seed               |
 | `Names.test.ts`                | name validation, claim, collision, immutability               |
-| `OrchestratorExternal.test.ts` | external result flow, ECDSA digest, refresh preflight         |
-| `OrchestratorTask.test.ts`     | task lifecycle, auth, transfer lock, timeouts                 |
+| `OrchestratorExternal.test.ts` | external result flow, ECDSA digest, refresh preflight, timeout slash, refund |
+| `OrchestratorTask.test.ts`     | task lifecycle, auth, transfer lock, timeouts, retry, daily reset |
 | `Policy.test.ts`               | caps, kill switch, daily reset, setPolicy auth                |
 | `Registry.test.ts`             | two-lane registration, Elo sort, capability map               |
 | `Vault.test.ts`                | removed-fn absence, access control                            |
+| `Invariant.test.ts`            | system-level invariant tests                                  |
+| `Soak.test.ts`                 | soak/load test runner                                         |
 | `helpers.ts`                   | `deployAll()`, `deriveTwiinAccount()`, `signExternalResult()` |
 
 ## Hardhat Config Notes
