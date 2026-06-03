@@ -4,6 +4,7 @@ import {
   deployAll,
   signExternalResult,
   CAP_WEB_SCRAPE,
+  CAP_WEB_SCRAPE_DISCORD,
   deriveTwiinAccount,
 } from "./helpers";
 
@@ -146,6 +147,166 @@ describe("AgentOrchestrator — external result flow", () => {
 
     expect((await d.orchestrator.tasks(1n)).state).to.equal(2n);
     expect(await d.orchestrator.taskLock(agentId)).to.equal(0n);
+  });
+
+  it("external settlement uses the dispatched price even if the agent updates cost later", async () => {
+    const d = await deployAll();
+    const [, keeper, user, , externalOp] = await ethers.getSigners();
+    const chainId = (await ethers.provider.getNetwork()).chainId;
+    const quotedCost = ethers.parseEther("0.2");
+    const raisedCost = ethers.parseEther("0.29");
+
+    await d.agentRegistry
+      .connect(externalOp)
+      .registerExternalAgent(
+        "price-lock",
+        "http://price-lock.test",
+        quotedCost,
+        [CAP_WEB_SCRAPE_DISCORD],
+        { value: ethers.parseEther("5") },
+      );
+    await d.factory
+      .connect(user)
+      .deployTwiin("costlock", { value: ethers.parseEther("5") });
+    await d.policy.connect(user).toggleKillSwitch(1n, false);
+
+    const acctAddr = await deriveTwiinAccount(
+      d.registry6551,
+      d.twiinAccountImpl,
+      await d.twiinAgent.getAddress(),
+      1n,
+    );
+    const acct = await ethers.getContractAt("TwiinAccount", acctAddr);
+    const budget = ethers.parseEther("0.5");
+    const createCalldata = d.orchestrator.interface.encodeFunctionData(
+      "createTask",
+      [
+        1n,
+        [
+          {
+            subAgentConfigId: 6n,
+            payload: ethers.toUtf8Bytes("discord scrape"),
+            maxCostWei: ethers.parseEther("0.3"),
+            timeoutSeconds: 900,
+          },
+        ],
+        budget,
+        0,
+      ],
+    );
+
+    const createTx = await acct
+      .connect(user)
+      .execute(await d.orchestrator.getAddress(), budget, createCalldata, 0);
+    const createReceipt = await createTx.wait();
+    const requestLog = createReceipt!.logs
+      .map((l) => {
+        try {
+          return d.orchestrator.interface.parseLog(l);
+        } catch {
+          return null;
+        }
+      })
+      .find((e) => e?.name === "ExternalAgentRequest");
+    const reqId = requestLog!.args.reqId as string;
+
+    await d.agentRegistry.connect(externalOp).updateCost(6n, raisedCost);
+
+    const result = ethers.toUtf8Bytes("priced-result");
+    const sig = await signExternalResult(
+      externalOp,
+      await d.orchestrator.getAddress(),
+      1n,
+      0,
+      reqId,
+      result,
+      chainId,
+    );
+
+    await d.orchestrator.submitExternalResult(1n, 0, result, sig);
+    await d.orchestrator.connect(keeper).finalizeExternalStep(1n, 0, 80);
+
+    const task = await d.orchestrator.tasks(1n);
+    expect(task.state).to.equal(2n);
+    expect(task.spentWei).to.equal(quotedCost);
+  });
+
+  it("rejected external steps slash the operator deposit", async () => {
+    const d = await deployAll();
+    const [, keeper, user, , externalOp] = await ethers.getSigners();
+    const chainId = (await ethers.provider.getNetwork()).chainId;
+
+    await d.agentRegistry
+      .connect(externalOp)
+      .registerExternalAgent(
+        "slash-me",
+        "http://slash-me.test",
+        ethers.parseEther("0.2"),
+        [CAP_WEB_SCRAPE_DISCORD],
+        { value: ethers.parseEther("5") },
+      );
+    await d.factory
+      .connect(user)
+      .deployTwiin("slashuser", { value: ethers.parseEther("5") });
+    await d.policy.connect(user).toggleKillSwitch(1n, false);
+
+    const acctAddr = await deriveTwiinAccount(
+      d.registry6551,
+      d.twiinAccountImpl,
+      await d.twiinAgent.getAddress(),
+      1n,
+    );
+    const acct = await ethers.getContractAt("TwiinAccount", acctAddr);
+    const budget = ethers.parseEther("0.5");
+    const createCalldata = d.orchestrator.interface.encodeFunctionData(
+      "createTask",
+      [
+        1n,
+        [
+          {
+            subAgentConfigId: 6n,
+            payload: ethers.toUtf8Bytes("discord scrape"),
+            maxCostWei: ethers.parseEther("0.3"),
+            timeoutSeconds: 900,
+          },
+        ],
+        budget,
+        0,
+      ],
+    );
+
+    const createTx = await acct
+      .connect(user)
+      .execute(await d.orchestrator.getAddress(), budget, createCalldata, 0);
+    const createReceipt = await createTx.wait();
+    const requestLog = createReceipt!.logs
+      .map((l) => {
+        try {
+          return d.orchestrator.interface.parseLog(l);
+        } catch {
+          return null;
+        }
+      })
+      .find((e) => e?.name === "ExternalAgentRequest");
+    const reqId = requestLog!.args.reqId as string;
+
+    const result = ethers.toUtf8Bytes("bad-result");
+    const sig = await signExternalResult(
+      externalOp,
+      await d.orchestrator.getAddress(),
+      1n,
+      0,
+      reqId,
+      result,
+      chainId,
+    );
+
+    await d.orchestrator.submitExternalResult(1n, 0, result, sig);
+    await d.orchestrator.connect(keeper).finalizeExternalStep(1n, 0, 10);
+
+    const agent = await d.agentRegistry.get(6n);
+    expect(agent.depositWei).to.equal(ethers.parseEther("4.75"));
+    expect((await d.orchestrator.tasks(1n)).state).to.equal(3n);
   });
 });
 

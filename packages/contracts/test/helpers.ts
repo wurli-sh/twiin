@@ -71,7 +71,9 @@ export interface DeployOptions {
   useMockApi?: boolean;
 }
 
-export async function deployAll(options: DeployOptions = {}): Promise<Deployment> {
+export async function deployAll(
+  options: DeployOptions = {},
+): Promise<Deployment> {
   const [deployer, keeper, ...rest] = await ethers.getSigners();
   const admin = deployer;
 
@@ -341,7 +343,11 @@ export async function signExternalResult(
   chainId: bigint,
 ): Promise<string> {
   const resultBytes =
-    typeof result === "string" ? ethers.toUtf8Bytes(result) : result;
+    result instanceof Uint8Array
+      ? result
+      : ethers.isHexString(result)
+        ? ethers.getBytes(result)
+        : ethers.toUtf8Bytes(result);
   const resultHash = ethers.keccak256(resultBytes);
   const digest = ethers.solidityPackedKeccak256(
     ["string", "uint256", "address", "uint256", "uint8", "bytes32", "bytes32"],
