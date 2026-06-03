@@ -1,0 +1,71 @@
+import {
+  integer,
+  primaryKey,
+  sqliteTable,
+  text,
+} from "drizzle-orm/sqlite-core";
+
+export const keeperCursors = sqliteTable("keeper_cursors", {
+  name: text("name").primaryKey(),
+  block: integer("block").notNull().default(0),
+});
+
+export const tasks = sqliteTable("tasks", {
+  taskId: text("task_id").primaryKey(),
+  personalAgentId: text("personal_agent_id").notNull(),
+  mode: integer("mode").notNull().default(0),
+  budgetWei: text("budget_wei").notNull(),
+  state: integer("state").notNull().default(0),
+  cursor: integer("cursor").notNull().default(0),
+  deadline: integer("deadline").notNull().default(0),
+  createdAt: integer("created_at").notNull(),
+});
+
+export const steps = sqliteTable(
+  "steps",
+  {
+    taskId: text("task_id").notNull(),
+    stepIdx: integer("step_idx").notNull(),
+    configId: text("config_id").notNull(),
+    state: integer("state").notNull().default(0),
+    payload: text("payload").notNull().default(""),
+    reqId: text("req_id"),
+    resultHex: text("result_hex"),
+    score: integer("score"),
+    deadline: integer("deadline"),
+    updatedAt: integer("updated_at").notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.taskId, t.stepIdx] })],
+);
+
+export const submittedResults = sqliteTable(
+  "submitted_results",
+  {
+    taskId: text("task_id").notNull(),
+    stepIdx: integer("step_idx").notNull(),
+    resultHex: text("result_hex").notNull(),
+    sig: text("sig").notNull(),
+    submittedAt: integer("submitted_at").notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.taskId, t.stepIdx] })],
+);
+
+export const submittedRatings = sqliteTable(
+  "submitted_ratings",
+  {
+    taskId: text("task_id").notNull(),
+    stepIdx: integer("step_idx").notNull(),
+    score: integer("score").notNull(),
+    submittedAt: integer("submitted_at").notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.taskId, t.stepIdx] })],
+);
+
+export const planRequests = sqliteTable("plan_requests", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  personalAgentId: text("personal_agent_id").notNull(),
+  goal: text("goal").notNull(),
+  stepsJson: text("steps_json").notNull(),
+  budgetWei: text("budget_wei").notNull(),
+  createdAt: integer("created_at").notNull(),
+});
