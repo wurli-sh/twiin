@@ -10,19 +10,21 @@ Somnia Agentathon (Encode Club, May 18 – Jun 11 2026). Somnia Testnet chainId 
 | ------------------- | ----------- | -------------------------------------------------------- |
 | 1 — Contracts       | ✅ Complete | 85/85 tests passing                                      |
 | 2 — Shared package  | ✅ Complete | 22/22 vitest tests; ABIs, constants, digest, 6551 helper |
-| 3 — Backend         | ⬜ Pending  | Hono, Claude planner, relay keepers, SSE                 |
+| 3 — Backend         | ✅ Complete | Hono, Claude planner, relay + rater keepers, SSE, SQLite |
 | 4 — Frontend        | ⬜ Pending  | React/Vite/wagmi, deploy flow, task flow                 |
 | 5 — TrustlessJanice | ⬜ Gated    | Feature-flagged off until T2/T3/T4 testnet pass          |
 
 ## Commands
 
-| Command              | Description                             |
-| -------------------- | --------------------------------------- |
-| `pnpm build`         | builds all packages                     |
-| `pnpm test`          | runs `@twiin/contracts` tests (Hardhat) |
-| `pnpm compile`       | compiles `@twiin/contracts` (Hardhat)   |
-| `pnpm deploy:local`  | deploy contracts to local Hardhat node  |
-| `pnpm deploy:somnia` | deploy contracts to Somnia Testnet      |
+| Command              | Description                                                  |
+| -------------------- | ------------------------------------------------------------ |
+| `pnpm build`         | builds all packages with `pnpm -r run build`                 |
+| `pnpm test`          | runs `@twiin/contracts` tests (Hardhat)                      |
+| `pnpm compile`       | compiles `@twiin/contracts` (Hardhat)                        |
+| `pnpm deploy:local`  | deploy contracts to local Hardhat node                       |
+| `pnpm deploy:somnia` | deploy contracts to Somnia Testnet                           |
+| `pnpm dev:backend`   | `pnpm --filter @twiin/backend dev` (from `apps/backend/`)    |
+| `pnpm start:backend` | `pnpm --filter @twiin/backend start` (from `apps/backend/`)  |
 
 ## Structure
 
@@ -31,10 +33,136 @@ twiin/
 ├── packages/
 │   ├── contracts/   — Solidity smart contracts (Hardhat, Solidity 0.8.30) ✅
 │   └── shared/      — TypeScript shared lib (ABIs, types, constants, helpers) ✅
-├── apps/            — backend (Hono) + frontend (React/Vite/wagmi) ⬜
+├── apps/
+│   ├── backend/     — Hono server, Claude planner, keepers, SSE, SQLite ✅
+│   └── frontend/    — React/Vite/wagmi ⬜
+├── .agents/         — Agent skill definitions (empty, for future use)
+├── .codex/          — Codex metadata (empty, for future use)
 ├── pnpm-workspace.yaml
 └── CLAUDE.md (this file)
 ```
+
+## Core Folders & Subdirectories
+
+### `packages/contracts/` — Solidity Smart Contracts
+
+| Path | Purpose |
+|------|---------|
+| `src/` | All `.sol` source files (11 contracts + interfaces + mocks) |
+| `src/interfaces/` | `IAgentRequesterHandler.sol`, `IERC6551Account.sol`, `IERC6551Registry.sol`, `ITwiin.sol` |
+| `src/mocks/` | `ERC6551Registry.sol`, `MockAgentsApi.sol`, `MockERC20.sol`, `MockUniswapV2Router02.sol` |
+| `test/` | 11 test files: `Account.test.ts`, `Factory.test.ts`, `Names.test.ts`, `OrchestratorTask.test.ts`, `OrchestratorExternal.test.ts`, `Policy.test.ts`, `Registry.test.ts`, `Vault.test.ts`, `Invariant.test.ts`, `Soak.test.ts`, `helpers.ts` |
+| `scripts/` | `deploy.ts` (local + Somnia deploy), `soak.ts` (soak test runner) |
+| `deployments/` | `hardhat.json` + `somniaTestnet.json` (deployed addresses per network) |
+| `artifacts/` | Hardhat compilation output |
+| `cache/` | Hardhat cache |
+| `typechain-types/` | TypeChain generated TS types |
+
+### `packages/shared/` — TypeScript Shared Library
+
+| Path | Purpose |
+|------|---------|
+| `abis/` | 9 contract ABIs as `.json` + barrel `index.ts` re-export |
+| `deployments/` | Mirrored `hardhat.json` + `somniaTestnet.json` |
+| `scripts/` | `copy-abis.ts` — copies ABIs from contracts build |
+| `test/` | `parity.test.ts` — 22 vitest parity tests |
+| Top-level files | `index.ts` (barrel), `constants.ts`, `digest.ts`, `twiin-account.ts`, `addresses.json` |
+
+### `apps/backend/` — Hono Backend Server
+
+| Path | Purpose |
+|------|---------|
+| `src/` | All backend source |
+| `src/routes/` | `plan.ts` (Claude planning), `stream.ts` (SSE), `tasks.ts` (task CRUD) |
+| `src/keepers/` | `relay.ts` (task relay keeper), `rater.ts` (Claude Haiku rating keeper), `indexer.ts` (event indexer) |
+| Top-level `src/` files | `index.ts` (entry), `clients.ts` (viem clients), `contracts.ts` (contract instances), `db.ts` (SQLite/Drizzle), `schema.ts` (DB schema), `sse.ts` (SSE helpers), `env.ts` (env vars) |
+| Config | `drizzle.config.ts`, `tsconfig.json`, `.env.example` |
+
+### `packages/contracts/src/interfaces/` — Interface Details
+
+| Interface | File | Role |
+|-----------|------|------|
+| `IAgentRequesterHandler` | `IAgentRequesterHandler.sol` | Somnia Agents API callback types (`ConsensusType`, `ResponseStatus`, `Request`, `Response`); `handleResponse()` for Somnia-native sub-agent callbacks |
+| `IERC6551Account` | `IERC6551Account.sol` | ERC-6551 TBA interface: `execute()`, `token()`, `isValidSigner()`, `state()` |
+| `IERC6551Registry` | `IERC6551Registry.sol` | ERC-6551 registry — `createAccount()` and `account()` with pinned arg order (implementation, salt, chainId, tokenContract, tokenId) |
+| `ITwiin` | `ITwiin.sol` | `ITwiinAgent` + `IOrchestrator` — breaks circular dep between TwiinAgent and AgentOrchestrator |
+
+### `packages/contracts/src/mocks/` — Mock Details
+
+| Mock | File | Role |
+|------|------|------|
+| `ERC6551Registry` | `ERC6551Registry.sol` | Local ERC-6551 registry (canonical `0x0000...6551...75758` absent on Somnia testnet) |
+| `MockAgentsApi` | `MockAgentsApi.sol` | Simulates `IAgentRequester` for test — `fulfillRequest`/`failRequest` helpers |
+| `MockERC20` | `MockERC20.sol` | Standard ERC-20 mock for testing token interactions |
+| `MockUniswapV2Router02` | `MockUniswapV2Router02.sol` | Uniswap V2 router mock for testing swaps |
+
+### `packages/contracts/test/` — Test File Details
+
+| File | Coverage |
+|------|----------|
+| `Account.test.ts` | ERC-6551 TBA: `token()`, `execute`, auth, `subscribePull` |
+| `Factory.test.ts` | `deployTwiin` end-to-end, name claim, policy seed |
+| `Names.test.ts` | Name validation, claim, collision, immutability |
+| `OrchestratorExternal.test.ts` | External result flow, ECDSA digest, refresh preflight |
+| `OrchestratorTask.test.ts` | Task lifecycle, auth, transfer lock, timeouts |
+| `Policy.test.ts` | Caps, kill switch, daily reset, `setPolicy` auth |
+| `Registry.test.ts` | Two-lane registration, Elo sort, capability map |
+| `Vault.test.ts` | Removed-fn absence, access control |
+| `Invariant.test.ts` | System-level invariant tests |
+| `Soak.test.ts` | Soak/load test runner |
+| `helpers.ts` | `deployAll()`, `deriveTwiinAccount()`, `signExternalResult()` |
+
+### `apps/backend/src/` — Source File Details
+
+| File | Role |
+|------|------|
+| `index.ts` | Entry point — Hono server, CORS, route mounting, keeper startup |
+| `clients.ts` | viem `publicClient`, `walletClient`, `keeperAccount` for Somnia Testnet |
+| `contracts.ts` | `getContract` instances for Orchestrator, Registry, TwiinAgent, OracleFeed |
+| `db.ts` | Turso/Drizzle SQLite client + all query helpers |
+| `schema.ts` | Drizzle ORM schema: `keeperCursors`, `tasks`, `steps`, `planRequests`, `submittedResults`, `submittedRatings` |
+| `env.ts` | Zod-enforced env vars: `KEEPER_PRIVATE_KEY`, `ANTHROPIC_API_KEY`, `SOMNIA_RPC_URL`, `TURSO_DB_URL`, etc. |
+| `sse.ts` | SSE pub/sub — `subscribe()`, `publish()`, `publishAll()`, `makeSseStream()`, heartbeat |
+
+### `apps/backend/src/routes/` — Route Details
+
+| Route | File | Endpoint | Role |
+|-------|------|----------|------|
+| Plan | `plan.ts` | `POST /api/plan` | Accepts user goal → Claude Haiku planner → returns `createTask` calldata; rate-limited (10 req/min/IP), optional `x-plan-secret` auth |
+| Tasks | `tasks.ts` | `GET /api/tasks/:taskId` | Reads task state from on-chain `AgentOrchestrator.tasks()` |
+| Tasks Steps | `tasks.ts` | `GET /api/tasks/:taskId/steps` | Returns indexed steps from SQLite |
+| Stream | `stream.ts` | `GET /api/stream/:taskId` | SSE stream for real-time task execution updates |
+
+### `apps/backend/src/keepers/` — Keeper Details
+
+| Keeper | File | Role |
+|--------|------|------|
+| Indexer | `indexer.ts` | Polls `TaskCreated`/`StepUpdated`/`TaskCompleted`/`TaskFailed` events; upserts into SQLite; publishes SSE updates; 4s poll interval |
+| Relay | `relay.ts` | Watches for `StepUpdated(Assigned)` → dispatches to Claude Sonnet for native steps or sends HTTP for external steps; submits ECDSA-signed results on-chain; 4s poll |
+| Rater | `rater.ts` | Watches for `StepUpdated(Completed)` → rates result via Claude Haiku; submits `rateStep` on-chain if score ≥ 40; 6s poll |
+
+### `packages/contracts/src/` — Contract Source Details
+
+| Contract | File | Role |
+|----------|------|------|
+| `TwiinFactory` | `TwiinFactory.sol` | Bootstrap + per-user deploy |
+| `TwiinAgent` | `TwiinAgent.sol` | ERC-721 "Twiin Agent" |
+| `TwiinAccount` | `TwiinAccount.sol` | ERC-6551 TBA |
+| `TwiinNames` | `TwiinNames.sol` | `name@twiin` namespace |
+| `AgentRegistry` | `AgentRegistry.sol` | Two-lane agent registry |
+| `AgentVault` | `AgentVault.sol` | Task-time escrow |
+| `AgentPolicy` | `AgentPolicy.sol` | Per-agent spending policy |
+| `AgentOrchestrator` | `AgentOrchestrator.sol` | Core task engine |
+| `OracleFeed` | `OracleFeed.sol` | On-chain feed + templates |
+| `TwiinTypes` | `TwiinTypes.sol` | Shared enums/structs |
+
+### `apps/backend/src/keepers/` — Keeper Details
+
+| Keeper | File | Role |
+|--------|------|------|
+| Relay | `relay.ts` | Watches for `TaskCreated` events, dispatches steps to Claude Sonnet planner |
+| Rater | `rater.ts` | Rates completed task results via Claude Haiku, releases payment if score ≥ 40/100 |
+| Indexer | `indexer.ts` | Indexes on-chain events into SQLite for query performance |
 
 ## Architecture
 
@@ -117,6 +245,6 @@ Phases 1–4: **ClaudePlan only** (Claude API plans). **TrustlessJanice** (valid
 
 1. **Contracts** ✅ — auth, escrow, events, ABIs, 6551 derivation, deployed addresses
 2. **Shared package** ✅ — ABIs/types, `addresses.json`, chain constants, digest helper, 6551 helper
-3. **Backend** 🔜 — contract clients, indexing, Claude planning, external relay/rating, SSE
+3. **Backend** ✅ — Hono server, viem clients, Claude Sonnet planner, relay + rater keepers, event indexer, SSE, SQLite
 4. **Frontend** ⬜ — wallet UX, deploy flow, task flow, live execution, panels
 5. **TrustlessJanice** ⬜ — feature-flagged off until T2/T3/T4 pass
