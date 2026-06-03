@@ -1,6 +1,11 @@
 import { expect } from "chai";
 import { ethers } from "hardhat";
-import { deployAll, deriveTwiinAccount } from "./helpers";
+import {
+  deployAll,
+  deriveTwiinAccount,
+  CAP_JSON_FETCH,
+  signExternalResult,
+} from "./helpers";
 import type { Deployment } from "./helpers";
 import type { TwiinAccount } from "../typechain-types";
 
@@ -107,7 +112,12 @@ describe("AgentOrchestrator — task lifecycle", () => {
     const d = await deployAll({ useMockApi: true });
     const { user, agentId, acct } = await setupLiveAgent(d);
 
-    await createTaskThroughAccount(d, agentId, acct.connect(user));
+    await createTaskThroughAccount(
+      d,
+      agentId,
+      acct.connect(user),
+      ethers.parseEther("1"),
+    );
     expect(await d.orchestrator.taskLock(agentId)).to.equal(1n);
 
     await expect(
@@ -195,6 +205,139 @@ describe("AgentOrchestrator — task lifecycle", () => {
     expect(task.state).to.equal(3n);
     expect(task.cursor).to.equal(0n);
     expect(await d.orchestrator.taskLock(agentId)).to.equal(0n);
+  });
+
+  it("failed native steps retry onto the next capable agent", async () => {
+    const d = await deployAll({ useMockApi: true });
+    const { user, agentId, acct } = await setupLiveAgent(d);
+    const mockApi = d.mockApi!;
+    const [, keeper, , , externalOp] = await ethers.getSigners();
+    const chainId = (await ethers.provider.getNetwork()).chainId;
+
+    await d.agentRegistry
+      .connect(externalOp)
+      .registerExternalAgent(
+        "json-fallback",
+        "http://json-fallback.test",
+        ethers.parseEther("0.2"),
+        [CAP_JSON_FETCH],
+        { value: ethers.parseEther("5") },
+      );
+
+    await createTaskThroughAccount(
+      d,
+      agentId,
+      acct.connect(user),
+      ethers.parseEther("1"),
+    );
+    const mockApiAddr = await mockApi.getAddress();
+    await ethers.provider.send("hardhat_setBalance", [
+      mockApiAddr,
+      "0x" + ethers.parseEther("1").toString(16),
+    ]);
+    const mockApiSigner = await ethers.getImpersonatedSigner(mockApiAddr);
+    const emptyRequest = {
+      id: 0n,
+      requester: ethers.ZeroAddress,
+      callbackAddress: ethers.ZeroAddress,
+      callbackSelector: "0x00000000",
+      subcommittee: [] as string[],
+      responses: [] as never[],
+      responseCount: 0n,
+      failureCount: 0n,
+      threshold: 0n,
+      createdAt: 0n,
+      deadline: 0n,
+      status: 0,
+      consensusType: 0,
+      remainingBudget: 0n,
+      perAgentBudget: 0n,
+    };
+    const failTx = await d.orchestrator
+      .connect(mockApiSigner)
+      .handleResponse(1n, [], 3, emptyRequest);
+    const failReceipt = await failTx.wait();
+
+    const taskMid = await d.orchestrator.tasks(1n);
+    expect(taskMid.state).to.equal(1n);
+    expect(taskMid.cursor).to.equal(0n);
+    expect((await d.agentRegistry.get(2n)).tasksFailed).to.equal(1n);
+    expect((await d.agentRegistry.get(6n)).registrant).to.equal(externalOp.address);
+
+    const requestLog = failReceipt!.logs
+      .map((l) => {
+        try {
+          return d.orchestrator.interface.parseLog(l);
+        } catch {
+          return null;
+        }
+      })
+      .find((e) => e?.name === "ExternalAgentRequest");
+    expect(requestLog).to.not.equal(null);
+    const reqId = requestLog!.args.reqId as string;
+    const result = ethers.toUtf8Bytes("retry-result");
+    const signature = await signExternalResult(
+      externalOp,
+      await d.orchestrator.getAddress(),
+      1n,
+      0,
+      reqId,
+      result,
+      chainId,
+    );
+
+    await d.orchestrator.submitExternalResult(1n, 0, result, signature);
+    await d.orchestrator.connect(keeper).finalizeExternalStep(1n, 0, 80);
+
+    expect((await d.orchestrator.tasks(1n)).state).to.equal(2n);
+    expect((await d.agentRegistry.get(6n)).tasksCompleted).to.equal(1n);
+  });
+
+  it("aborted external tasks release same-day daily budget", async () => {
+    const d = await deployAll();
+    const { user, agentId, acct } = await setupLiveAgent(d);
+    const [, , , , externalOp] = await ethers.getSigners();
+
+    await d.agentRegistry
+      .connect(externalOp)
+      .registerExternalAgent(
+        "daily-reset",
+        "http://daily-reset.test",
+        ethers.parseEther("0.2"),
+        [CAP_JSON_FETCH],
+        { value: ethers.parseEther("5") },
+      );
+
+    const budget = ethers.parseEther("1");
+    const createCalldata = d.orchestrator.interface.encodeFunctionData(
+      "createTask",
+      [
+        agentId,
+        [
+          {
+            subAgentConfigId: 6n,
+            payload: ethers.toUtf8Bytes("daily"),
+            maxCostWei: ethers.parseEther("0.3"),
+            timeoutSeconds: 1,
+          },
+        ],
+        budget,
+        0,
+      ],
+    );
+
+    await acct
+      .connect(user)
+      .execute(await d.orchestrator.getAddress(), budget, createCalldata, 0);
+
+    expect(await d.policy.canReserveTaskBudget(0, agentId, ethers.parseEther("1.1"))).to.equal(false);
+
+    await ethers.provider.send("evm_increaseTime", [2]);
+    await ethers.provider.send("evm_mine", []);
+    await d.orchestrator.timeoutExternalStep(1n, 0);
+
+    expect((await d.orchestrator.tasks(1n)).state).to.equal(3n);
+    expect(await d.policy.canReserveTaskBudget(0, agentId, ethers.parseEther("1"))).to.equal(true);
   });
 
   it("timeoutTask is permissionless after TASK_DEADLINE", async () => {

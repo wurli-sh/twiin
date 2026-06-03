@@ -308,6 +308,62 @@ describe("AgentOrchestrator — external result flow", () => {
     expect(agent.depositWei).to.equal(ethers.parseEther("4.75"));
     expect((await d.orchestrator.tasks(1n)).state).to.equal(3n);
   });
+
+  it("timed-out external steps slash the operator deposit", async () => {
+    const d = await deployAll();
+    const [, , user, , externalOp] = await ethers.getSigners();
+
+    await d.agentRegistry
+      .connect(externalOp)
+      .registerExternalAgent(
+        "timeout-slash",
+        "http://timeout-slash.test",
+        ethers.parseEther("0.2"),
+        [CAP_WEB_SCRAPE_DISCORD],
+        { value: ethers.parseEther("5") },
+      );
+    await d.factory
+      .connect(user)
+      .deployTwiin("timeoutuser", { value: ethers.parseEther("5") });
+    await d.policy.connect(user).toggleKillSwitch(1n, false);
+
+    const acctAddr = await deriveTwiinAccount(
+      d.registry6551,
+      d.twiinAccountImpl,
+      await d.twiinAgent.getAddress(),
+      1n,
+    );
+    const acct = await ethers.getContractAt("TwiinAccount", acctAddr);
+    const budget = ethers.parseEther("0.5");
+    const createCalldata = d.orchestrator.interface.encodeFunctionData(
+      "createTask",
+      [
+        1n,
+        [
+          {
+            subAgentConfigId: 6n,
+            payload: ethers.toUtf8Bytes("discord scrape"),
+            maxCostWei: ethers.parseEther("0.3"),
+            timeoutSeconds: 1,
+          },
+        ],
+        budget,
+        0,
+      ],
+    );
+
+    await acct
+      .connect(user)
+      .execute(await d.orchestrator.getAddress(), budget, createCalldata, 0);
+
+    await ethers.provider.send("evm_increaseTime", [2]);
+    await ethers.provider.send("evm_mine", []);
+    await d.orchestrator.timeoutExternalStep(1n, 0);
+
+    const agent = await d.agentRegistry.get(6n);
+    expect(agent.depositWei).to.equal(ethers.parseEther("4.75"));
+    expect((await d.orchestrator.tasks(1n)).state).to.equal(3n);
+  });
 });
 
 describe("AgentOrchestrator — refresh preflight", () => {
@@ -502,5 +558,59 @@ describe("AgentOrchestrator — refresh preflight", () => {
     expect(await d.orchestrator.taskLock(agentId)).to.equal(0n);
     expect(await d.vault.taskLockedAmount(1n)).to.equal(0n);
     expect(await d.mockApi!.nextReqId()).to.equal(0n);
+  });
+
+  it("refresh refunds pulled funds if task creation fails after preflight", async () => {
+    const d = await deployAll({ useMockApi: true });
+    const [, keeper, user] = await ethers.getSigners();
+
+    await d.factory
+      .connect(user)
+      .deployTwiin("refreshrefund", { value: ethers.parseEther("5") });
+    const agentId = 1n;
+    await d.policy.connect(user).toggleKillSwitch(agentId, false);
+
+    const acctAddr = await deriveTwiinAccount(
+      d.registry6551,
+      d.twiinAccountImpl,
+      await d.twiinAgent.getAddress(),
+      agentId,
+    );
+    const acct = await ethers.getContractAt("TwiinAccount", acctAddr);
+    await acct
+      .connect(user)
+      .subscribePull(await d.orchestrator.getAddress(), ethers.parseEther("0.2"), 60);
+    const before = await ethers.provider.getBalance(acctAddr);
+
+    const orchAddr = await d.orchestrator.getAddress();
+    await ethers.provider.send("hardhat_setBalance", [
+      orchAddr,
+      "0x" + ethers.parseEther("40").toString(16),
+    ]);
+    const orchSigner = await ethers.getImpersonatedSigner(orchAddr);
+
+    const badStep = {
+      subAgentConfigId: 2n,
+      payload: "0x",
+      maxCostWei: ethers.parseEther("0.01"),
+      timeoutSeconds: 900,
+    };
+    const budget = ethers.parseEther("0.2");
+    const templateHash = await d.feed
+      .connect(orchSigner)
+      .registerTemplate.staticCall([badStep], budget);
+    await d.feed.connect(orchSigner).registerTemplate([badStep], budget);
+
+    await expect(
+      d.orchestrator
+        .connect(keeper)
+        .refreshFromTemplateByKeeper(agentId, "health", templateHash),
+    )
+      .to.emit(d.orchestrator, "RefreshSkipped")
+      .withArgs(agentId, "health", "task create");
+
+    expect(await ethers.provider.getBalance(acctAddr)).to.equal(before);
+    expect(await d.orchestrator.taskLock(agentId)).to.equal(0n);
+    expect(await d.vault.taskLockedAmount(1n)).to.equal(0n);
   });
 });
