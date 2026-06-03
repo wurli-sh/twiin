@@ -7,7 +7,8 @@
     "test": "hardhat test",
     "coverage": "hardhat coverage",
     "deploy:local": "hardhat run scripts/deploy.ts --network hardhat",
-    "deploy:somnia": "hardhat run scripts/deploy.ts --network somniaTestnet"
+    "deploy:somnia": "hardhat run scripts/deploy.ts --network somniaTestnet",
+    "soak:somnia": "hardhat run scripts/soak.ts --network somniaTestnet"
   },
   "devDependencies": {
     "@nomicfoundation/hardhat-toolbox": "^5.0.0",

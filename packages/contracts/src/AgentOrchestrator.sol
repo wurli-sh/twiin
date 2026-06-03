@@ -559,6 +559,14 @@ contract AgentOrchestrator is
         );
     }
 
+    function registerTaskTemplate(
+        Step[] calldata steps,
+        uint256 budgetWei
+    ) external returns (bytes32 hash) {
+        require(msg.sender == admin, "not allowed");
+        return oracleFeed.registerTemplate(steps, budgetWei);
+    }
+
     function _publishFeedAndMaybeSchedule(
         uint256 personalAgentId,
         string memory topic,

@@ -1073,6 +1073,52 @@
     "type": "function"
   },
   {
+    "inputs": [
+      {
+        "components": [
+          {
+            "internalType": "uint256",
+            "name": "subAgentConfigId",
+            "type": "uint256"
+          },
+          {
+            "internalType": "bytes",
+            "name": "payload",
+            "type": "bytes"
+          },
+          {
+            "internalType": "uint256",
+            "name": "maxCostWei",
+            "type": "uint256"
+          },
+          {
+            "internalType": "uint32",
+            "name": "timeoutSeconds",
+            "type": "uint32"
+          }
+        ],
+        "internalType": "struct Step[]",
+        "name": "steps",
+        "type": "tuple[]"
+      },
+      {
+        "internalType": "uint256",
+        "name": "budgetWei",
+        "type": "uint256"
+      }
+    ],
+    "name": "registerTaskTemplate",
+    "outputs": [
+      {
+        "internalType": "bytes32",
+        "name": "hash",
+        "type": "bytes32"
+      }
+    ],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
     "inputs": [],
     "name": "registry6551",
     "outputs": [
