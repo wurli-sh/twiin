@@ -1,0 +1,13 @@
+{
+  "name": "twiin",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "build": "pnpm -r run build",
+    "test": "pnpm --filter contracts test",
+    "compile": "pnpm --filter contracts compile"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
