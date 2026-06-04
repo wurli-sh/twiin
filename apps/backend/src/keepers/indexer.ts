@@ -1,11 +1,14 @@
-import { parseAbiItem } from "viem";
-import { AgentOrchestratorAbi, StepState, TaskState } from "@twiin/shared";
+import { parseAbiItem, type AbiEvent } from "viem";
+import { StepState, TaskState } from "@twiin/shared";
 import { publicClient } from "../clients";
-import { addresses } from "../contracts";
+import { addresses, defaultStartBlock } from "../contracts";
 import {
+  deactivateExternalAgent,
+  getExternalAgent,
   getCursor,
   setCursor,
   updateTaskState,
+  upsertExternalAgent,
   upsertStep,
   upsertTask,
 } from "../db";
@@ -16,270 +19,350 @@ const CURSOR_KEY = "indexer";
 const POLL_MS = 4_000;
 const CHUNK = 500n;
 
-let running = false;
+const taskCreatedEvent = parseAbiItem(
+  "event TaskCreated(uint256 indexed taskId, uint256 indexed personalAgentId, uint8 mode, uint256 budgetWei)",
+) as AbiEvent;
+const externalAgentRequestEvent = parseAbiItem(
+  "event ExternalAgentRequest(uint256 indexed taskId, uint8 stepIdx, uint256 configId, address registrant, bytes32 endpointHash, bytes payload, bytes32 reqId, uint64 deadline)",
+) as AbiEvent;
+const stepStateChangedEvent = parseAbiItem(
+  "event StepStateChanged(uint256 indexed taskId, uint8 stepIdx, uint8 state)",
+) as AbiEvent;
+const externalResultPendingEvent = parseAbiItem(
+  "event ExternalResultPending(uint256 indexed taskId, uint8 stepIdx, address registrant, bytes result)",
+) as AbiEvent;
+const externalStepApprovedEvent = parseAbiItem(
+  "event ExternalStepApproved(uint256 indexed taskId, uint8 stepIdx, address registrant, uint8 score)",
+) as AbiEvent;
+const externalStepRejectedEvent = parseAbiItem(
+  "event ExternalStepRejected(uint256 indexed taskId, uint8 stepIdx, address registrant, uint8 score)",
+) as AbiEvent;
+const taskCompletedEvent = parseAbiItem(
+  "event TaskCompleted(uint256 indexed taskId, string result)",
+) as AbiEvent;
+const taskAbortedEvent = parseAbiItem(
+  "event TaskAborted(uint256 indexed taskId, string reason)",
+) as AbiEvent;
+const externalAgentRegisteredEvent = parseAbiItem(
+  "event ExternalAgentRegistered(uint256 indexed configId, address indexed registrant, string endpointUrl, bytes32 endpointHash, bytes32[] caps, uint256 costWei)",
+) as AbiEvent;
+const externalEndpointUpdatedEvent = parseAbiItem(
+  "event ExternalEndpointUpdated(uint256 indexed configId, string newUrl, bytes32 newHash)",
+) as AbiEvent;
+const externalDeregisteredEvent = parseAbiItem(
+  "event ExternalDeregistered(uint256 indexed configId, address indexed registrant)",
+) as AbiEvent;
 
-export function startIndexer(): void {
-  if (running) return;
-  running = true;
-  void poll();
-}
+type LogArgs = Record<
+  string,
+  bigint | number | string | `0x${string}` | `0x${string}`[] | null | undefined
+>;
 
-async function poll(): Promise<void> {
-  while (running) {
-    try {
-      await tick();
-    } catch (e) {
-      console.error("[indexer] error:", e);
+type IndexerDeps = {
+  getBlockNumber: () => Promise<bigint>;
+  getLogs: (args: {
+    address: `0x${string}`;
+    event: AbiEvent;
+    fromBlock: bigint;
+    toBlock: bigint;
+  }) => Promise<Array<{ args: LogArgs; blockNumber?: bigint | null }>>;
+  addresses: { orchestrator: `0x${string}`; agentRegistry: `0x${string}` };
+  startBlock: bigint;
+  getCursor: (name: string) => Promise<bigint>;
+  setCursor: (name: string, block: bigint) => Promise<void>;
+  getExternalAgent: typeof getExternalAgent;
+  upsertExternalAgent: typeof upsertExternalAgent;
+  deactivateExternalAgent: typeof deactivateExternalAgent;
+  upsertTask: typeof upsertTask;
+  upsertStep: typeof upsertStep;
+  updateTaskState: typeof updateTaskState;
+  publish: typeof publish;
+};
+
+export function createIndexer(overrides: Partial<IndexerDeps> = {}) {
+  const deps: IndexerDeps = {
+    getBlockNumber: () => publicClient.getBlockNumber(),
+    getLogs: (args) =>
+      publicClient.getLogs(args) as Promise<
+        Array<{ args: LogArgs; blockNumber?: bigint | null }>
+      >,
+    addresses: {
+      orchestrator: addresses.orchestrator,
+      agentRegistry: addresses.agentRegistry,
+    },
+    startBlock: env.START_BLOCK ?? defaultStartBlock,
+    getCursor,
+    setCursor,
+    getExternalAgent,
+    upsertExternalAgent,
+    deactivateExternalAgent,
+    upsertTask,
+    upsertStep,
+    updateTaskState,
+    publish,
+    ...overrides,
+  };
+
+  let running = false;
+
+  async function tick(): Promise<void> {
+    const latest = await deps.getBlockNumber();
+    const stored = await deps.getCursor(CURSOR_KEY);
+    const from = stored === 0n && deps.startBlock > 0n ? deps.startBlock : stored;
+    if (from > latest) return;
+    const to = from + CHUNK < latest ? from + CHUNK : latest;
+
+    const load = (event: AbiEvent) =>
+      deps.getLogs({
+        address: deps.addresses.orchestrator,
+        event,
+        fromBlock: from,
+        toBlock: to,
+      });
+
+    for (const log of await load(taskCreatedEvent)) {
+      const { taskId, personalAgentId, mode, budgetWei } = log.args;
+      if (taskId == null || personalAgentId == null) continue;
+      await deps.upsertTask(
+        taskId.toString(),
+        personalAgentId.toString(),
+        Number(mode ?? 0),
+        budgetWei?.toString() ?? "0",
+        TaskState.Running,
+        0,
+        0,
+        Number(log.blockNumber ?? 0n),
+      );
+      deps.publish(taskId.toString(), "task_created", {
+        taskId: taskId.toString(),
+        personalAgentId: personalAgentId.toString(),
+        mode,
+        budgetWei: budgetWei?.toString(),
+      });
     }
-    await sleep(POLL_MS);
-  }
-}
 
-async function tick(): Promise<void> {
-  const latest = await publicClient.getBlockNumber();
-  const stored = await getCursor(CURSOR_KEY);
-  const from = stored === 0n && env.START_BLOCK > 0n ? env.START_BLOCK : stored;
-  if (from > latest) return;
-  const to = from + CHUNK < latest ? from + CHUNK : latest;
+    for (const log of await load(externalAgentRequestEvent)) {
+      const { taskId, stepIdx, configId, payload, reqId, deadline } = log.args;
+      if (taskId == null || stepIdx == null) continue;
+      await deps.upsertStep(
+        taskId.toString(),
+        Number(stepIdx),
+        configId?.toString() ?? "0",
+        StepState.RunningExternal,
+        decodePayload((payload as `0x${string}` | null) ?? "0x"),
+        (reqId as `0x${string}` | null) ?? null,
+        null,
+        null,
+        deadline == null ? null : Number(deadline),
+      );
+      deps.publish(taskId.toString(), "step_dispatched", {
+        taskId: taskId.toString(),
+        stepIdx,
+        configId: configId?.toString(),
+      });
+    }
 
-  // TaskCreated
-  const taskCreated = await publicClient.getLogs({
-    address: addresses.orchestrator,
-    event: parseAbiItem(
-      "event TaskCreated(uint256 indexed taskId, uint256 indexed personalAgentId, uint8 mode, uint256 budgetWei)",
-    ),
-    fromBlock: from,
-    toBlock: to,
-  });
+    for (const log of await load(stepStateChangedEvent)) {
+      const { taskId, stepIdx, state } = log.args;
+      if (taskId == null || stepIdx == null) continue;
+      await deps.upsertStep(
+        taskId.toString(),
+        Number(stepIdx),
+        "0",
+        Number(state ?? 0),
+        "",
+        null,
+        null,
+        null,
+        null,
+      );
+      deps.publish(taskId.toString(), "step_state", {
+        taskId: taskId.toString(),
+        stepIdx,
+        state,
+        stateName: StepState[Number(state ?? 0)] ?? "Unknown",
+      });
+    }
 
-  for (const log of taskCreated) {
-    const { taskId, personalAgentId, mode, budgetWei } = log.args;
-    if (taskId == null || personalAgentId == null) continue;
-    await upsertTask(
-      taskId.toString(),
-      personalAgentId.toString(),
-      mode ?? 0,
-      budgetWei?.toString() ?? "0",
-      TaskState.Running,
-      0,
-      0,
-      Number(log.blockNumber ?? 0n),
-    );
-    publish(taskId.toString(), "task_created", {
-      taskId: taskId.toString(),
-      personalAgentId: personalAgentId.toString(),
-      mode,
-      budgetWei: budgetWei?.toString(),
-    });
-  }
+    for (const log of await load(externalResultPendingEvent)) {
+      const { taskId, stepIdx, result } = log.args;
+      if (taskId == null || stepIdx == null) continue;
+      await deps.upsertStep(
+        taskId.toString(),
+        Number(stepIdx),
+        "0",
+        StepState.AwaitingRating,
+        "",
+        null,
+        (result as `0x${string}` | null) ?? "0x",
+        null,
+        null,
+      );
+      deps.publish(taskId.toString(), "step_result_pending", {
+        taskId: taskId.toString(),
+        stepIdx,
+      });
+    }
 
-  // ExternalAgentRequest — gives us step payload + reqId
-  const extReqs = await publicClient.getLogs({
-    address: addresses.orchestrator,
-    event: parseAbiItem(
-      "event ExternalAgentRequest(uint256 indexed taskId, uint8 stepIdx, uint256 configId, address registrant, bytes32 endpointHash, bytes payload, bytes32 reqId, uint64 deadline)",
-    ),
-    fromBlock: from,
-    toBlock: to,
-  });
+    for (const log of await load(externalStepApprovedEvent)) {
+      const { taskId, stepIdx, score } = log.args;
+      if (taskId == null || stepIdx == null) continue;
+      await deps.upsertStep(
+        taskId.toString(),
+        Number(stepIdx),
+        "0",
+        StepState.Succeeded,
+        "",
+        null,
+        null,
+        score == null ? null : Number(score),
+        null,
+      );
+      deps.publish(taskId.toString(), "step_approved", {
+        taskId: taskId.toString(),
+        stepIdx,
+        score,
+      });
+    }
 
-  for (const log of extReqs) {
-    const { taskId, stepIdx, configId, payload, reqId, deadline } = log.args;
-    if (taskId == null || stepIdx == null) continue;
-    const payloadText = decodePayload(payload ?? "0x");
-    await upsertStep(
-      taskId.toString(),
-      stepIdx,
-      configId?.toString() ?? "0",
-      StepState.RunningExternal,
-      payloadText,
-      reqId ?? null,
-      null,
-      null,
-      deadline ? Number(deadline) : null,
-    );
-    publish(taskId.toString(), "step_dispatched", {
-      taskId: taskId.toString(),
-      stepIdx,
-      configId: configId?.toString(),
-    });
-  }
+    for (const log of await load(externalStepRejectedEvent)) {
+      const { taskId, stepIdx, score } = log.args;
+      if (taskId == null || stepIdx == null) continue;
+      await deps.upsertStep(
+        taskId.toString(),
+        Number(stepIdx),
+        "0",
+        StepState.Failed,
+        "",
+        null,
+        null,
+        score == null ? null : Number(score),
+        null,
+      );
+      deps.publish(taskId.toString(), "step_rejected", {
+        taskId: taskId.toString(),
+        stepIdx,
+        score,
+      });
+    }
 
-  // StepStateChanged — generic state update
-  const stateChanges = await publicClient.getLogs({
-    address: addresses.orchestrator,
-    event: parseAbiItem(
-      "event StepStateChanged(uint256 indexed taskId, uint8 stepIdx, uint8 state)",
-    ),
-    fromBlock: from,
-    toBlock: to,
-  });
+    for (const log of await load(taskCompletedEvent)) {
+      const { taskId, result } = log.args;
+      if (taskId == null) continue;
+      await deps.updateTaskState(taskId.toString(), TaskState.Completed);
+      deps.publish(taskId.toString(), "task_completed", {
+        taskId: taskId.toString(),
+        result,
+      });
+    }
 
-  for (const log of stateChanges) {
-    const { taskId, stepIdx, state } = log.args;
-    if (taskId == null || stepIdx == null) continue;
-    await upsertStep(
-      taskId.toString(),
-      stepIdx,
-      "0",
-      state ?? 0,
-      "",
-      null,
-      null,
-      null,
-      null,
-    );
-    publish(taskId.toString(), "step_state", {
-      taskId: taskId.toString(),
-      stepIdx,
-      state,
-      stateName: StepState[state ?? 0] ?? "Unknown",
-    });
-  }
+    for (const log of await load(taskAbortedEvent)) {
+      const { taskId, reason } = log.args;
+      if (taskId == null) continue;
+      await deps.updateTaskState(taskId.toString(), TaskState.Aborted);
+      deps.publish(taskId.toString(), "task_aborted", {
+        taskId: taskId.toString(),
+        reason,
+      });
+    }
 
-  // ExternalResultPending — result bytes landed, awaiting rating
-  const resultsPending = await publicClient.getLogs({
-    address: addresses.orchestrator,
-    event: parseAbiItem(
-      "event ExternalResultPending(uint256 indexed taskId, uint8 stepIdx, address registrant, bytes result)",
-    ),
-    fromBlock: from,
-    toBlock: to,
-  });
+    const registryLoad = (event: AbiEvent) =>
+      deps.getLogs({
+        address: deps.addresses.agentRegistry,
+        event,
+        fromBlock: from,
+        toBlock: to,
+      });
 
-  for (const log of resultsPending) {
-    const { taskId, stepIdx, result } = log.args;
-    if (taskId == null || stepIdx == null) continue;
-    await upsertStep(
-      taskId.toString(),
-      stepIdx,
-      "0",
-      StepState.AwaitingRating,
-      "",
-      null,
-      result ?? "0x",
-      null,
-      null,
-    );
-    publish(taskId.toString(), "step_result_pending", {
-      taskId: taskId.toString(),
-      stepIdx,
-    });
-  }
+    for (const log of await registryLoad(externalAgentRegisteredEvent)) {
+      const { configId, registrant, endpointUrl, endpointHash, caps } = log.args;
+      if (
+        configId == null ||
+        registrant == null ||
+        typeof endpointUrl !== "string" ||
+        endpointHash == null
+      ) {
+        continue;
+      }
+      await deps.upsertExternalAgent(
+        configId.toString(),
+        registrant.toString(),
+        endpointUrl,
+        endpointHash.toString(),
+        normalizeCapabilities(caps),
+      );
+    }
 
-  // ExternalStepApproved
-  const approved = await publicClient.getLogs({
-    address: addresses.orchestrator,
-    event: parseAbiItem(
-      "event ExternalStepApproved(uint256 indexed taskId, uint8 stepIdx, address registrant, uint8 score)",
-    ),
-    fromBlock: from,
-    toBlock: to,
-  });
-  for (const log of approved) {
-    const { taskId, stepIdx, score } = log.args;
-    if (taskId == null || stepIdx == null) continue;
-    await upsertStep(
-      taskId.toString(),
-      stepIdx,
-      "0",
-      StepState.Succeeded,
-      "",
-      null,
-      null,
-      score ?? null,
-      null,
-    );
-    publish(taskId.toString(), "step_approved", {
-      taskId: taskId.toString(),
-      stepIdx,
-      score,
-    });
-  }
+    for (const log of await registryLoad(externalEndpointUpdatedEvent)) {
+      const { configId, newUrl, newHash } = log.args;
+      if (configId == null || typeof newUrl !== "string" || newHash == null) {
+        continue;
+      }
+      const agentConfigId = configId.toString();
+      const existing = await deps.getExternalAgent(agentConfigId);
+      if (!existing) continue;
+      await deps.upsertExternalAgent(
+        agentConfigId,
+        existing.registrant,
+        newUrl,
+        newHash.toString(),
+        existing.capabilities,
+      );
+    }
 
-  // ExternalStepRejected
-  const rejected = await publicClient.getLogs({
-    address: addresses.orchestrator,
-    event: parseAbiItem(
-      "event ExternalStepRejected(uint256 indexed taskId, uint8 stepIdx, address registrant, uint8 score)",
-    ),
-    fromBlock: from,
-    toBlock: to,
-  });
-  for (const log of rejected) {
-    const { taskId, stepIdx, score } = log.args;
-    if (taskId == null || stepIdx == null) continue;
-    await upsertStep(
-      taskId.toString(),
-      stepIdx,
-      "0",
-      StepState.Failed,
-      "",
-      null,
-      null,
-      score ?? null,
-      null,
-    );
-    publish(taskId.toString(), "step_rejected", {
-      taskId: taskId.toString(),
-      stepIdx,
-      score,
-    });
+    for (const log of await registryLoad(externalDeregisteredEvent)) {
+      const { configId } = log.args;
+      if (configId == null) continue;
+      await deps.deactivateExternalAgent(configId.toString());
+    }
+
+    await deps.setCursor(CURSOR_KEY, to + 1n);
   }
 
-  // TaskCompleted
-  const completed = await publicClient.getLogs({
-    address: addresses.orchestrator,
-    event: parseAbiItem(
-      "event TaskCompleted(uint256 indexed taskId, string result)",
-    ),
-    fromBlock: from,
-    toBlock: to,
-  });
-  for (const log of completed) {
-    const { taskId, result } = log.args;
-    if (taskId == null) continue;
-    await updateTaskState(taskId.toString(), TaskState.Completed);
-    publish(taskId.toString(), "task_completed", {
-      taskId: taskId.toString(),
-      result,
-    });
+  async function poll(): Promise<void> {
+    while (running) {
+      try {
+        await tick();
+      } catch (e) {
+        console.error("[indexer] error:", e);
+      }
+      await sleep(POLL_MS);
+    }
   }
 
-  // TaskAborted
-  const aborted = await publicClient.getLogs({
-    address: addresses.orchestrator,
-    event: parseAbiItem(
-      "event TaskAborted(uint256 indexed taskId, string reason)",
-    ),
-    fromBlock: from,
-    toBlock: to,
-  });
-  for (const log of aborted) {
-    const { taskId, reason } = log.args;
-    if (taskId == null) continue;
-    await updateTaskState(taskId.toString(), TaskState.Aborted);
-    publish(taskId.toString(), "task_aborted", {
-      taskId: taskId.toString(),
-      reason,
-    });
-  }
-
-  await setCursor(CURSOR_KEY, to + 1n);
+  return {
+    start(): void {
+      if (running) return;
+      running = true;
+      void poll();
+    },
+    tick,
+  };
 }
 
 function decodePayload(hex: `0x${string}`): string {
   try {
     const bytes = Buffer.from(hex.slice(2), "hex");
-    const decoded = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
-    return decoded;
+    return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
   } catch {
-    // Non-UTF-8 binary payload — store empty string so Claude doesn't
-    // receive a raw hex blob as an instruction
     return "";
   }
 }
 
+function normalizeCapabilities(
+  caps: `0x${string}`[] | bigint | number | string | `0x${string}` | null | undefined,
+): string[] {
+  return Array.isArray(caps)
+    ? caps.filter((value): value is `0x${string}` => typeof value === "string")
+    : [];
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
+}
+
+const defaultIndexer = createIndexer();
+
+export function startIndexer(): void {
+  defaultIndexer.start();
 }

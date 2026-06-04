@@ -1,19 +1,40 @@
 import { Hono } from "hono";
 import { cors } from "hono/cors";
-import { planRouter } from "./routes/plan";
-import { tasksRouter } from "./routes/tasks";
-import { streamRouter } from "./routes/stream";
+import {
+  createPlanRouter,
+  type PlanRouterDeps,
+} from "./routes/plan";
+import {
+  createTasksRouter,
+  type TasksRouterDeps,
+} from "./routes/tasks";
+import {
+  createStreamRouter,
+  type StreamRouterDeps,
+} from "./routes/stream";
+import {
+  createAgentsRouter,
+  type AgentsRouterDeps,
+} from "./routes/agents";
 
-export function createApp(): Hono {
+export type AppDeps = {
+  plan?: Partial<PlanRouterDeps>;
+  tasks?: Partial<TasksRouterDeps>;
+  stream?: Partial<StreamRouterDeps>;
+  agents?: Partial<AgentsRouterDeps>;
+};
+
+export function createApp(deps: AppDeps = {}): Hono {
   const app = new Hono();
 
   app.use("*", cors({ origin: "*" }));
 
   app.get("/health", (c) => c.json({ ok: true, ts: new Date().toISOString() }));
 
-  app.route("/api/plan", planRouter);
-  app.route("/api/tasks", tasksRouter);
-  app.route("/api/stream", streamRouter);
+  app.route("/api/plan", createPlanRouter(deps.plan));
+  app.route("/api/tasks", createTasksRouter(deps.tasks));
+  app.route("/api/stream", createStreamRouter(deps.stream));
+  app.route("/api/agents", createAgentsRouter(deps.agents));
 
   app.onError((err, c) => {
     console.error("[server] unhandled error:", err);

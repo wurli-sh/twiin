@@ -31,10 +31,13 @@ const EnvSchema = z
     PORT: z.coerce.number().int().positive().optional().default(3001),
     TURSO_DB_URL: z.string().min(1).default("file:./twiin.db"),
     TURSO_AUTH_TOKEN: z.string().optional().default(""),
-    START_BLOCK: z.coerce.bigint().optional().default(0n),
+    START_BLOCK: z.coerce.bigint().optional(),
     PLAN_SECRET: z.string().optional(),
     TRUST_PROXY: BoolFromEnv.optional().default(false),
     RUN_KEEPERS: BoolFromEnv.optional().default(true),
+    ANTHROPIC_BUDGET_TOTAL_USD: z.coerce.number().positive().default(2.5),
+    ANTHROPIC_WARN_REMAINING_USD: z.coerce.number().nonnegative().default(2),
+    ANTHROPIC_HARD_STOP_REMAINING_USD: z.coerce.number().nonnegative().default(0.5),
   })
   .refine(
     (v) =>
@@ -43,6 +46,20 @@ const EnvSchema = z
     {
       message:
         "TURSO_AUTH_TOKEN is required when TURSO_DB_URL is a remote libsql:// URL",
+    },
+  )
+  .refine(
+    (v) => v.ANTHROPIC_HARD_STOP_REMAINING_USD <= v.ANTHROPIC_WARN_REMAINING_USD,
+    {
+      message:
+        "ANTHROPIC_HARD_STOP_REMAINING_USD must be <= ANTHROPIC_WARN_REMAINING_USD",
+    },
+  )
+  .refine(
+    (v) => v.ANTHROPIC_WARN_REMAINING_USD <= v.ANTHROPIC_BUDGET_TOTAL_USD,
+    {
+      message:
+        "ANTHROPIC_WARN_REMAINING_USD must be <= ANTHROPIC_BUDGET_TOTAL_USD",
     },
   );
 

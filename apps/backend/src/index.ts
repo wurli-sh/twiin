@@ -6,6 +6,8 @@ import { ensureSchema } from "./db";
 import { startIndexer } from "./keepers/indexer";
 import { startRelay } from "./keepers/relay";
 import { startRater } from "./keepers/rater";
+import { startTimeoutKeeper } from "./keepers/timeouts";
+import { createExternalAgentBootstrap } from "./keepers/externals";
 
 const app = createApp();
 
@@ -18,17 +20,26 @@ async function bootstrap(): Promise<void> {
     );
   }
 
-  if (env.RUN_KEEPERS) {
-    startIndexer();
-    startRelay();
-    startRater();
-  }
-
   serve({ fetch: app.fetch, port: env.PORT }, (info) => {
     console.log(`[twiin-backend] listening on http://localhost:${info.port}`);
     console.log(`[twiin-backend] keeper address: ${keeperAccount.address}`);
     console.log(`[twiin-backend] keepers enabled: ${env.RUN_KEEPERS}`);
   });
+
+  if (env.RUN_KEEPERS) {
+    startIndexer();
+    startRelay();
+    startRater();
+    startTimeoutKeeper();
+    void createExternalAgentBootstrap()
+      .run()
+      .then(() => {
+        console.log("[twiin-backend] external-agent bootstrap complete");
+      })
+      .catch((error) => {
+        console.error("[twiin-backend] external-agent bootstrap failed:", error);
+      });
+  }
 }
 
 void bootstrap().catch((err) => {

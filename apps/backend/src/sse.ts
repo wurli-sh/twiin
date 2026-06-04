@@ -1,8 +1,17 @@
 import type { Context } from "hono";
 
 type SseConn = { write: (data: string) => void; close: () => void };
+type SseEvent = {
+  id: number;
+  taskId: string;
+  type: string;
+  data: unknown;
+};
 
 const subscribers = new Map<string, Set<SseConn>>();
+const history = new Map<string, SseEvent[]>();
+const nextEventIds = new Map<string, number>();
+const MAX_HISTORY = 200;
 
 export function subscribe(taskId: string, conn: SseConn): () => void {
   if (!subscribers.has(taskId)) subscribers.set(taskId, new Set());
@@ -14,9 +23,14 @@ export function subscribe(taskId: string, conn: SseConn): () => void {
 }
 
 export function publish(taskId: string, type: string, data: unknown): void {
+  const id = (nextEventIds.get(taskId) ?? 0) + 1;
+  nextEventIds.set(taskId, id);
+  const event = { id, taskId, type, data };
+  pushHistory(event);
+
   const conns = subscribers.get(taskId);
   if (!conns || conns.size === 0) return;
-  const msg = `event: ${type}\ndata: ${JSON.stringify(data, bigintReplacer)}\n\n`;
+  const msg = formatEvent(event);
   for (const conn of conns) {
     try {
       conn.write(msg);
@@ -34,6 +48,17 @@ function bigintReplacer(_: string, v: unknown) {
   return typeof v === "bigint" ? v.toString() : v;
 }
 
+function formatEvent(event: SseEvent): string {
+  return `id: ${event.id}\nevent: ${event.type}\ndata: ${JSON.stringify(event.data, bigintReplacer)}\n\n`;
+}
+
+function pushHistory(event: SseEvent): void {
+  const events = history.get(event.taskId) ?? [];
+  events.push(event);
+  if (events.length > MAX_HISTORY) events.splice(0, events.length - MAX_HISTORY);
+  history.set(event.taskId, events);
+}
+
 export function sseHeaders(): Record<string, string> {
   return {
     "Content-Type": "text/event-stream",
@@ -46,6 +71,7 @@ export function sseHeaders(): Record<string, string> {
 export function makeSseStream(
   c: Context,
   taskId: string,
+  lastEventId?: string | null,
 ): ReadableStream<Uint8Array> {
   const encoder = new TextEncoder();
   let unsub: (() => void) | null = null;
@@ -62,6 +88,7 @@ export function makeSseStream(
         },
       };
       unsub = subscribe(taskId, conn);
+      replayMissedEvents(controller, encoder, taskId, lastEventId);
       // heartbeat every 15 s to prevent proxy timeouts
       timer = setInterval(() => {
         try {
@@ -81,4 +108,20 @@ export function makeSseStream(
       if (timer) clearInterval(timer);
     },
   });
+}
+
+function replayMissedEvents(
+  controller: ReadableStreamDefaultController<Uint8Array>,
+  encoder: { encode: (input?: string) => Uint8Array },
+  taskId: string,
+  lastEventId?: string | null,
+): void {
+  const sinceId = Number(lastEventId ?? "");
+  if (!Number.isFinite(sinceId) || sinceId <= 0) return;
+  const events = history.get(taskId) ?? [];
+  for (const event of events) {
+    if (event.id > sinceId) {
+      controller.enqueue(encoder.encode(formatEvent(event)));
+    }
+  }
 }

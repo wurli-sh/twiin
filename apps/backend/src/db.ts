@@ -2,6 +2,7 @@ import { drizzle } from "drizzle-orm/libsql";
 import { and, eq, sql } from "drizzle-orm";
 import * as schema from "./schema";
 import {
+  externalAgents,
   keeperCursors,
   planRequests,
   steps,
@@ -20,6 +21,21 @@ export const db = drizzle({
 });
 
 let schemaReady: Promise<void> | null = null;
+
+async function ensureColumn(
+  _table: string,
+  _column: string,
+  definition: string,
+): Promise<void> {
+  try {
+    await db.run(sql.raw(`ALTER TABLE external_agents ADD COLUMN ${definition}`));
+  } catch (error) {
+    const detail = `${String(error)} ${String((error as { cause?: unknown }).cause ?? "")}`;
+    if (!detail.includes("duplicate column name")) {
+      throw error;
+    }
+  }
+}
 
 export function ensureSchema(): Promise<void> {
   if (!schemaReady) {
@@ -86,6 +102,25 @@ export function ensureSchema(): Promise<void> {
           created_at integer NOT NULL
         )
       `);
+      await db.run(sql`
+        CREATE TABLE IF NOT EXISTS external_agents (
+          config_id text PRIMARY KEY NOT NULL,
+          registrant text NOT NULL,
+          endpoint_url text NOT NULL,
+          endpoint_hash text NOT NULL,
+          capabilities_json text NOT NULL DEFAULT '[]',
+          is_active integer NOT NULL DEFAULT 1,
+          is_verified integer NOT NULL DEFAULT 0,
+          last_verified_at integer,
+          last_error text,
+          updated_at integer NOT NULL
+        )
+      `);
+      await ensureColumn(
+        "external_agents",
+        "capabilities_json",
+        "capabilities_json text NOT NULL DEFAULT '[]'",
+      );
     })().catch((error) => {
       schemaReady = null;
       throw error;
@@ -228,8 +263,10 @@ export async function getStepsForTask(taskId: string): Promise<
     config_id: string;
     state: number;
     payload: string;
+    req_id: string | null;
     result_hex: string | null;
     score: number | null;
+    deadline: number | null;
   }[]
 > {
   const rows = await db
@@ -238,13 +275,36 @@ export async function getStepsForTask(taskId: string): Promise<
       config_id: steps.configId,
       state: steps.state,
       payload: steps.payload,
+      req_id: steps.reqId,
       result_hex: steps.resultHex,
       score: steps.score,
+      deadline: steps.deadline,
     })
     .from(steps)
     .where(eq(steps.taskId, taskId))
     .orderBy(steps.stepIdx);
   return rows;
+}
+
+export async function getTimedOutSteps(
+  nowSeconds: number,
+): Promise<
+  {
+    task_id: string;
+    step_idx: number;
+    state: number;
+    deadline: number | null;
+  }[]
+> {
+  return db
+    .select({
+      task_id: steps.taskId,
+      step_idx: steps.stepIdx,
+      state: steps.state,
+      deadline: steps.deadline,
+    })
+    .from(steps)
+    .where(sql`${steps.deadline} IS NOT NULL AND ${steps.deadline} <= ${nowSeconds}`);
 }
 
 // ── Submitted results dedup ───────────────────────────────────────────────────
@@ -362,4 +422,173 @@ export async function savePlanRequest(
     budgetWei,
     createdAt: Math.floor(Date.now() / 1000),
   });
+}
+
+export async function upsertExternalAgent(
+  configId: string,
+  registrant: string,
+  endpointUrl: string,
+  endpointHash: string,
+  capabilities: string[],
+): Promise<void> {
+  const updatedAt = Math.floor(Date.now() / 1000);
+  await db
+    .insert(externalAgents)
+    .values({
+      configId,
+      registrant,
+      endpointUrl,
+      endpointHash,
+      capabilitiesJson: JSON.stringify(capabilities),
+      isActive: 1,
+      isVerified: 0,
+      lastVerifiedAt: null,
+      lastError: null,
+      updatedAt,
+    })
+    .onConflictDoUpdate({
+      target: externalAgents.configId,
+      set: {
+        registrant,
+        endpointUrl,
+        endpointHash,
+        capabilitiesJson: JSON.stringify(capabilities),
+        isActive: 1,
+        isVerified: 0,
+        lastVerifiedAt: null,
+        lastError: null,
+        updatedAt,
+      },
+    });
+}
+
+export async function setExternalAgentVerification(
+  configId: string,
+  verified: boolean,
+  lastError: string | null,
+): Promise<void> {
+  await db
+    .update(externalAgents)
+    .set({
+      isVerified: verified ? 1 : 0,
+      lastVerifiedAt: verified ? Math.floor(Date.now() / 1000) : null,
+      lastError,
+      updatedAt: Math.floor(Date.now() / 1000),
+    })
+    .where(eq(externalAgents.configId, configId));
+}
+
+export async function deactivateExternalAgent(configId: string): Promise<void> {
+  await db
+    .update(externalAgents)
+    .set({
+      isActive: 0,
+      isVerified: 0,
+      updatedAt: Math.floor(Date.now() / 1000),
+    })
+    .where(eq(externalAgents.configId, configId));
+}
+
+export async function getExternalAgent(configId: string): Promise<{
+  config_id: string;
+  registrant: string;
+  endpoint_url: string;
+  endpoint_hash: string;
+  capabilities: string[];
+  is_active: number;
+  is_verified: number;
+  last_verified_at: number | null;
+  last_error: string | null;
+} | null> {
+  const [row] = await db
+    .select({
+      config_id: externalAgents.configId,
+      registrant: externalAgents.registrant,
+      endpoint_url: externalAgents.endpointUrl,
+      endpoint_hash: externalAgents.endpointHash,
+      capabilities_json: externalAgents.capabilitiesJson,
+      is_active: externalAgents.isActive,
+      is_verified: externalAgents.isVerified,
+      last_verified_at: externalAgents.lastVerifiedAt,
+      last_error: externalAgents.lastError,
+    })
+    .from(externalAgents)
+    .where(eq(externalAgents.configId, configId))
+    .limit(1);
+  if (!row) return null;
+  return {
+    ...row,
+    capabilities: parseCapabilities(row.capabilities_json),
+  };
+}
+
+export async function listExternalAgents(
+  options: { activeOnly?: boolean; verifiedOnly?: boolean } = {},
+): Promise<
+  {
+    config_id: string;
+    registrant: string;
+    endpoint_url: string;
+    endpoint_hash: string;
+    capabilities: string[];
+    is_active: number;
+    is_verified: number;
+    last_verified_at: number | null;
+    last_error: string | null;
+    updated_at: number;
+  }[]
+> {
+  const predicates = [];
+  if (options.activeOnly) predicates.push(eq(externalAgents.isActive, 1));
+  if (options.verifiedOnly) predicates.push(eq(externalAgents.isVerified, 1));
+
+  const selection = {
+    config_id: externalAgents.configId,
+    registrant: externalAgents.registrant,
+    endpoint_url: externalAgents.endpointUrl,
+    endpoint_hash: externalAgents.endpointHash,
+    capabilities_json: externalAgents.capabilitiesJson,
+    is_active: externalAgents.isActive,
+    is_verified: externalAgents.isVerified,
+    last_verified_at: externalAgents.lastVerifiedAt,
+    last_error: externalAgents.lastError,
+    updated_at: externalAgents.updatedAt,
+  };
+
+  const rows =
+    predicates.length > 0
+      ? await db
+          .select(selection)
+          .from(externalAgents)
+          .where(and(...predicates))
+          .orderBy(externalAgents.configId)
+      : await db
+          .select(selection)
+          .from(externalAgents)
+          .orderBy(externalAgents.configId);
+
+  return rows.map((row) => ({
+    ...row,
+    capabilities: parseCapabilities(row.capabilities_json),
+  }));
+}
+
+function parseCapabilities(raw: string | null | undefined): string[] {
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    return Array.isArray(parsed)
+      ? parsed.filter((value): value is string => typeof value === "string")
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+export async function listRunningTaskIds(): Promise<string[]> {
+  const rows = await db
+    .select({ taskId: tasks.taskId })
+    .from(tasks)
+    .where(eq(tasks.state, 1));
+  return rows.map((row) => row.taskId);
 }

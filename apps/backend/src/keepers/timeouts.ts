@@ -1,0 +1,106 @@
+import { StepState, TaskState } from "@twiin/shared";
+import { orchestratorContract } from "../contracts";
+import {
+  getTimedOutSteps,
+  listRunningTaskIds,
+} from "../db";
+
+const POLL_MS = 5_000;
+
+type TimeoutDeps = {
+  getTimedOutSteps: typeof getTimedOutSteps;
+  listRunningTaskIds: typeof listRunningTaskIds;
+  readTask: (
+    taskId: bigint,
+  ) => Promise<readonly [number, bigint, number, bigint, bigint, bigint, number]>;
+  timeoutExternalStep: (args: readonly [bigint, number]) => Promise<unknown>;
+  timeoutRating: (args: readonly [bigint, number]) => Promise<unknown>;
+  timeoutNativeStep: (args: readonly [bigint, number]) => Promise<unknown>;
+  timeoutTask: (args: readonly [bigint]) => Promise<unknown>;
+  nowSeconds: () => number;
+  logger: Pick<Console, "log" | "warn" | "error">;
+};
+
+export function createTimeoutKeeper(overrides: Partial<TimeoutDeps> = {}) {
+  const deps: TimeoutDeps = {
+    getTimedOutSteps,
+    listRunningTaskIds,
+    readTask: (taskId) => orchestratorContract.read.tasks([taskId]),
+    timeoutExternalStep: (args) => orchestratorContract.write.timeoutExternalStep(args),
+    timeoutRating: (args) => orchestratorContract.write.timeoutRating(args),
+    timeoutNativeStep: (args) => orchestratorContract.write.timeoutNativeStep(args),
+    timeoutTask: (args) => orchestratorContract.write.timeoutTask(args),
+    nowSeconds: () => Math.floor(Date.now() / 1000),
+    logger: console,
+    ...overrides,
+  };
+
+  let running = false;
+
+  async function tick(): Promise<void> {
+    const now = deps.nowSeconds();
+    const timedOutSteps = await deps.getTimedOutSteps(now);
+    for (const step of timedOutSteps) {
+      try {
+        const taskId = BigInt(step.task_id);
+        if (step.state === StepState.RunningExternal) {
+          await deps.timeoutExternalStep([taskId, step.step_idx]);
+        } else if (step.state === StepState.AwaitingRating) {
+          await deps.timeoutRating([taskId, step.step_idx]);
+        } else if (step.state === StepState.RunningNative) {
+          await deps.timeoutNativeStep([taskId, step.step_idx]);
+        }
+      } catch (error) {
+        deps.logger.warn(
+          `[timeouts] step timeout skipped task=${step.task_id} step=${step.step_idx}: ${String(error)}`,
+        );
+      }
+    }
+
+    const runningTaskIds = await deps.listRunningTaskIds();
+    for (const taskIdStr of runningTaskIds) {
+      try {
+        const raw = await deps.readTask(BigInt(taskIdStr));
+        const deadline = Number(raw[5]);
+        const state = Number(raw[6]);
+        if (state === TaskState.Running && deadline > 0 && deadline <= now) {
+          await deps.timeoutTask([BigInt(taskIdStr)]);
+        }
+      } catch (error) {
+        deps.logger.warn(
+          `[timeouts] task timeout skipped task=${taskIdStr}: ${String(error)}`,
+        );
+      }
+    }
+  }
+
+  async function poll(): Promise<void> {
+    while (running) {
+      try {
+        await tick();
+      } catch (error) {
+        deps.logger.error("[timeouts] error:", error);
+      }
+      await sleep(POLL_MS);
+    }
+  }
+
+  return {
+    start(): void {
+      if (running) return;
+      running = true;
+      void poll();
+    },
+    tick,
+  };
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+const defaultTimeoutKeeper = createTimeoutKeeper();
+
+export function startTimeoutKeeper(): void {
+  defaultTimeoutKeeper.start();
+}

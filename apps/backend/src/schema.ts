@@ -61,6 +61,19 @@ export const submittedRatings = sqliteTable(
   (t) => [primaryKey({ columns: [t.taskId, t.stepIdx] })],
 );
 
+export const externalAgents = sqliteTable("external_agents", {
+  configId: text("config_id").primaryKey(),
+  registrant: text("registrant").notNull(),
+  endpointUrl: text("endpoint_url").notNull(),
+  endpointHash: text("endpoint_hash").notNull(),
+  capabilitiesJson: text("capabilities_json").notNull().default("[]"),
+  isActive: integer("is_active").notNull().default(1),
+  isVerified: integer("is_verified").notNull().default(0),
+  lastVerifiedAt: integer("last_verified_at"),
+  lastError: text("last_error"),
+  updatedAt: integer("updated_at").notNull(),
+});
+
 export const planRequests = sqliteTable("plan_requests", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   personalAgentId: text("personal_agent_id").notNull(),
