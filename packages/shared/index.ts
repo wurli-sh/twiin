@@ -35,6 +35,7 @@ export const DeploymentManifestSchema = z.object({
   _note: z.string(),
   network: z.string().min(1),
   chainId: NumericString,
+  startBlock: NumericString,
   deployer: AddrField,
   keeper: AddrField,
   agentsApi: AddrField,
