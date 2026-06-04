@@ -11,9 +11,14 @@
     "test:all": "pnpm test && pnpm test:shared && pnpm test:backend",
     "compile": "pnpm --filter contracts compile",
     "dev:backend": "pnpm --filter @twiin/backend dev",
+    "dev:frontend": "pnpm --filter @twiin/frontend dev",
+    "dev:all": "concurrently \"pnpm dev:backend\" \"pnpm dev:frontend\"",
     "start:backend": "pnpm --filter @twiin/backend start",
     "deploy:local": "pnpm --filter contracts deploy:local",
     "deploy:somnia": "pnpm --filter contracts deploy:somnia"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.1"
   },
   "engines": {
     "node": ">=20"
