@@ -12,6 +12,6 @@
     "outDir": "dist",
     "rootDir": "."
   },
-  "include": ["index.ts", "constants.ts", "digest.ts", "twiin-account.ts", "abis/index.ts"],
+  "include": ["index.ts", "constants.ts", "digest.ts", "twiin-account.ts", "somnia-agents.ts", "abis/index.ts"],
   "exclude": ["node_modules", "dist", "scripts", "test", "vitest.config.ts"]
 }

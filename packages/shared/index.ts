@@ -1,6 +1,7 @@
 export * from "./constants";
 export * from "./digest";
 export * from "./twiin-account";
+export * from "./somnia-agents";
 
 // ABIs — populated by `pnpm copy-abis` (requires contracts to be compiled first)
 export * from "./abis/index";

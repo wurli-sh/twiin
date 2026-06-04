@@ -6,6 +6,12 @@ const LLM_INFERENCE_ID = BigInt("12847293847561029384");
 const PARSE_WEB_ID = BigInt("12875401142070969085");
 const JSON_API_ID = BigInt("13174292974160097713");
 
+// Somnia Agents API per-validator runner price (docs.somnia.network/agents).
+// AgentOrchestrator charges: getRequestDeposit() + (costWei × SUBCOMMITTEE_SIZE).
+const SOMNIA_JSON_API_PER_AGENT = ethers.parseEther("0.03");
+const SOMNIA_LLM_INFERENCE_PER_AGENT = ethers.parseEther("0.07");
+const SOMNIA_PARSE_WEB_PER_AGENT = ethers.parseEther("0.10");
+
 const CONTRACT_EXPORTS = [
   "TwiinFactory",
   "TwiinAgent",
@@ -337,7 +343,7 @@ async function main() {
       name: "janice",
       somniaId: LLM_INFERENCE_ID,
       payload: "0x",
-      cost: ethers.parseEther("0.24"),
+      cost: SOMNIA_LLM_INFERENCE_PER_AGENT,
       caps: [CAP("plan.trustless")],
       tier: 2,
     },
@@ -346,7 +352,7 @@ async function main() {
       name: "web-intel",
       somniaId: PARSE_WEB_ID,
       payload: "0x",
-      cost: ethers.parseEther("0.33"),
+      cost: SOMNIA_PARSE_WEB_PER_AGENT,
       caps: [CAP("web.scrape")],
       tier: 1,
     },
@@ -355,7 +361,7 @@ async function main() {
       name: "somnia-oracle",
       somniaId: JSON_API_ID,
       payload: "0x",
-      cost: ethers.parseEther("0.12"),
+      cost: SOMNIA_JSON_API_PER_AGENT,
       caps: [CAP("json.fetch")],
       tier: 1,
     },
@@ -364,7 +370,7 @@ async function main() {
       name: "analysis-bot",
       somniaId: LLM_INFERENCE_ID,
       payload: "0x",
-      cost: ethers.parseEther("0.24"),
+      cost: SOMNIA_LLM_INFERENCE_PER_AGENT,
       caps: [CAP("llm.analyze")],
       tier: 1,
     },
@@ -373,7 +379,7 @@ async function main() {
       name: "reporter-bot",
       somniaId: LLM_INFERENCE_ID,
       payload: "0x",
-      cost: ethers.parseEther("0.24"),
+      cost: SOMNIA_LLM_INFERENCE_PER_AGENT,
       caps: [CAP("llm.report")],
       tier: 1,
     },
@@ -382,7 +388,7 @@ async function main() {
       name: "executor-bot",
       somniaId: LLM_INFERENCE_ID,
       payload: "0x",
-      cost: ethers.parseEther("0.24"),
+      cost: SOMNIA_LLM_INFERENCE_PER_AGENT,
       caps: [CAP("onchain.execute")],
       tier: 2,
     },

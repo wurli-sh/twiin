@@ -225,14 +225,17 @@ export async function deployAll(
       .registerCapability(cap.id, cap.name, cap.tier, cap.nativeOnly);
   }
 
-  // 8. Register native sub-agents (configIds 0–5) — use dummy Somnia IDs for tests
+  // 8. Register native sub-agents (configIds 0–5) — per-agent Somnia runner prices
   const DUMMY_SOMNIA_ID = BigInt("12847293847561029384");
+  const SOMNIA_JSON_API_PER_AGENT = ethers.parseEther("0.03");
+  const SOMNIA_LLM_INFERENCE_PER_AGENT = ethers.parseEther("0.07");
+  const SOMNIA_PARSE_WEB_PER_AGENT = ethers.parseEther("0.10");
   const nativeAgents = [
     {
       id: 0,
       name: "janice",
       somniaId: DUMMY_SOMNIA_ID,
-      cost: ethers.parseEther("0.24"),
+      cost: SOMNIA_LLM_INFERENCE_PER_AGENT,
       caps: [CAP_PLAN_TRUSTLESS],
       tier: 2,
     },
@@ -240,7 +243,7 @@ export async function deployAll(
       id: 1,
       name: "web-intel",
       somniaId: BigInt("12875401142070969085"),
-      cost: ethers.parseEther("0.33"),
+      cost: SOMNIA_PARSE_WEB_PER_AGENT,
       caps: [CAP_WEB_SCRAPE],
       tier: 1,
     },
@@ -248,7 +251,7 @@ export async function deployAll(
       id: 2,
       name: "somnia-oracle",
       somniaId: BigInt("13174292974160097713"),
-      cost: ethers.parseEther("0.12"),
+      cost: SOMNIA_JSON_API_PER_AGENT,
       caps: [CAP_JSON_FETCH],
       tier: 1,
     },
@@ -256,7 +259,7 @@ export async function deployAll(
       id: 3,
       name: "analysis-bot",
       somniaId: DUMMY_SOMNIA_ID,
-      cost: ethers.parseEther("0.24"),
+      cost: SOMNIA_LLM_INFERENCE_PER_AGENT,
       caps: [CAP_LLM_ANALYZE],
       tier: 1,
     },
@@ -264,7 +267,7 @@ export async function deployAll(
       id: 4,
       name: "reporter-bot",
       somniaId: DUMMY_SOMNIA_ID,
-      cost: ethers.parseEther("0.24"),
+      cost: SOMNIA_LLM_INFERENCE_PER_AGENT,
       caps: [CAP_LLM_REPORT],
       tier: 1,
     },
@@ -272,7 +275,7 @@ export async function deployAll(
       id: 5,
       name: "executor-bot",
       somniaId: DUMMY_SOMNIA_ID,
-      cost: ethers.parseEther("0.24"),
+      cost: SOMNIA_LLM_INFERENCE_PER_AGENT,
       caps: [CAP_ONCHAIN_EXECUTE],
       tier: 2,
     },
