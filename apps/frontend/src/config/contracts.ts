@@ -35,4 +35,7 @@ export const CONTRACTS = {
   oracleFeed: {
     address: addresses.oracleFeed,
   },
+  mockRouter: {
+    address: addresses.mockRouter,
+  },
 } as const

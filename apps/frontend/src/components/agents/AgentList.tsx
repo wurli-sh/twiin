@@ -3,6 +3,7 @@ import { Bot, Loader2, RefreshCw } from 'lucide-react'
 import { toast } from 'sonner'
 import { AgentRow } from './AgentRow'
 import type { TwiinAgentInfo } from '@/hooks/useTwiinAgents'
+import { useUIStore } from '@/stores/ui'
 import { cn } from '@/lib/cn'
 
 function SkeletonRow() {
@@ -33,6 +34,7 @@ export function AgentList({
   onToggleKillSwitch,
 }: AgentListProps) {
   const [togglingId, setTogglingId] = useState<bigint | null>(null)
+  const setSelectedAgentId = useUIStore((s) => s.setSelectedAgentId)
 
   async function handleToggle(agentId: bigint, current: boolean) {
     setTogglingId(agentId)
@@ -96,6 +98,7 @@ export function AgentList({
             <AgentRow
               key={agent.id.toString()}
               agent={agent}
+              onSelect={setSelectedAgentId}
               onToggleKillSwitch={handleToggle}
               togglingId={togglingId}
             />

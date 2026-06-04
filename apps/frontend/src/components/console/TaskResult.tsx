@@ -1,7 +1,11 @@
 import { hexToString } from 'viem'
 import { CheckCircle2, Star, XCircle } from 'lucide-react'
 import { Badge } from '@/components/ui/Badge'
-import { TaskState } from '@/config/contracts'
+import {
+  TaskState,
+  decodeNativeAgentResult,
+  isSomniaNativeConfigId,
+} from '@/config/contracts'
 import {
   stepStateLabel,
   stepStateVariant,
@@ -11,8 +15,12 @@ import {
 import { configIdLabel } from '@/lib/config-names'
 import type { ChainTask, TaskStep } from '@/hooks/useTaskDetail'
 
-function decodeResult(hex: string | null): string {
+function decodeResult(hex: string | null, configId: number): string {
   if (!hex || hex === '0x') return ''
+  // Native Somnia agents return ABI-encoded results; external agents return raw bytes.
+  if (isSomniaNativeConfigId(configId)) {
+    return decodeNativeAgentResult(hex) ?? ''
+  }
   try {
     return hexToString(hex as `0x${string}`)
   } catch {
@@ -54,7 +62,7 @@ export function TaskResult({ task, steps }: TaskResultProps) {
       {steps.length > 0 && (
         <ul className="divide-y divide-border/40 border-t border-border/40">
           {steps.map((step) => {
-            const result = decodeResult(step.resultHex)
+            const result = decodeResult(step.resultHex, Number(step.configId))
             return (
               <li key={step.stepIdx} className="px-4 py-3">
                 <div className="flex flex-wrap items-center justify-between gap-2">
@@ -82,6 +90,28 @@ export function TaskResult({ task, steps }: TaskResultProps) {
             )
           })}
         </ul>
+      )}
+
+      {isAborted && (
+        <p className="border-t border-danger/20 bg-danger/5 px-4 py-3 text-xs leading-relaxed text-text-muted">
+          {Number(task.spent) > 0 && Number(task.cursor) === 0 ? (
+            <>
+              Step 1 (native Somnia agent) failed or timed out.{' '}
+              {Number(task.spent).toFixed(3)} STT was charged for the attempt; unused budget
+              returns to your 6551 wallet. Common causes: the API returned no data (e.g. CoinGecko
+              search with an empty result), the endpoint timed out, or the plan used a fragile
+              selector like coins.0.id. Try a new task — research goals work best with
+              analysis-bot + reporter-bot, not search APIs.
+            </>
+          ) : (
+            <>
+              Step {task.cursor + 1} failed or timed out.{' '}
+              {Number(task.spent) > 0
+                ? `${Number(task.spent).toFixed(3)} STT was spent; unused budget returns to your 6551 wallet.`
+                : 'No STT was spent.'}
+            </>
+          )}
+        </p>
       )}
 
       <p className="border-t border-border/40 px-4 py-2 text-[10px] text-text-faint">

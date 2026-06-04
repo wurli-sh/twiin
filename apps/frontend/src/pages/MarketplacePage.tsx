@@ -2,10 +2,12 @@ import { useMemo } from 'react'
 import { motion } from 'framer-motion'
 import { RefreshCw } from 'lucide-react'
 import { Tabs } from '@/components/ui/Tabs'
+import { ExternalAgentPanel } from '@/components/marketplace/ExternalAgentPanel'
 import { SubAgentTable } from '@/components/marketplace/SubAgentTable'
 import { useUIStore } from '@/stores/ui'
 import { usePageReady } from '@/hooks/usePageReady'
 import { useSubAgents } from '@/hooks/useSubAgents'
+import { useWallet } from '@/hooks/useWallet'
 import { cn } from '@/lib/cn'
 
 const TABS = [
@@ -20,6 +22,7 @@ function Skeleton({ className }: { className?: string }) {
 
 export function MarketplacePage() {
   const ready = usePageReady()
+  const { isConnected } = useWallet()
   const activeTab = useUIStore((s) => s.activeMarketplaceTab)
   const setActiveTab = useUIStore((s) => s.setActiveMarketplaceTab)
   const { subAgents, isLoading, error, refetchSubAgents } = useSubAgents()
@@ -68,8 +71,7 @@ export function MarketplacePage() {
       >
         <h1 className="text-3xl font-bold tracking-tight text-text">Marketplace</h1>
         <p className="mt-1.5 text-sm text-text-muted">
-          Sub-agent registry on Somnia — Elo, lane, trust tier, and status read directly from
-          chain (F6).
+          Sub-agent registry on Somnia with backend verification state for external HTTP agents.
         </p>
       </motion.div>
 
@@ -94,7 +96,14 @@ export function MarketplacePage() {
           }
         />
 
-        <div className="mt-4">
+        <div className="mt-4 space-y-4">
+          {activeTab === 'external' && (
+            <ExternalAgentPanel
+              agents={subAgents}
+              onUpdated={() => void refetchSubAgents()}
+            />
+          )}
+
           <SubAgentTable
             agents={filtered}
             isLoading={isLoading}
@@ -102,7 +111,11 @@ export function MarketplacePage() {
             onRefresh={() => void refetchSubAgents()}
             showRank={activeTab === 'leaderboard'}
             emptyTitle={emptyCopy.title}
-            emptyHint={emptyCopy.hint}
+            emptyHint={
+              activeTab === 'external' && !isConnected
+                ? 'Connect wallet to register an HTTP agent, or refresh to inspect existing competitors.'
+                : emptyCopy.hint
+            }
           />
         </div>
       </motion.div>

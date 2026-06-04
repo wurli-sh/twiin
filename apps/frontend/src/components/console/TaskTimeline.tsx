@@ -1,13 +1,17 @@
 import { motion } from 'framer-motion'
 import { Activity, Radio } from 'lucide-react'
+import { Badge } from '@/components/ui/Badge'
+import { TaskState } from '@/config/contracts'
 import { streamEventLabel, type StreamEvent } from '@/hooks/useTaskStream'
-import { stepStateLabel } from '@/lib/task-state'
+import { stepStateLabel, taskStateLabel, taskStateVariant } from '@/lib/task-state'
 import { cn } from '@/lib/cn'
 
 type TaskTimelineProps = {
   taskId: string
   events: StreamEvent[]
   connected: boolean
+  /** On-chain task state — overrides misleading "Live" SSE badge when terminal. */
+  taskState?: number | null
 }
 
 function formatEventDetail(type: string, data: Record<string, unknown>): string {
@@ -27,7 +31,11 @@ function formatEventDetail(type: string, data: Record<string, unknown>): string 
   return ''
 }
 
-export function TaskTimeline({ taskId, events, connected }: TaskTimelineProps) {
+export function TaskTimeline({ taskId, events, connected, taskState }: TaskTimelineProps) {
+  const isTerminal =
+    taskState === TaskState.Completed || taskState === TaskState.Aborted
+  const isRunning = taskState === TaskState.Running
+
   return (
     <div className="overflow-hidden rounded-xl border border-border">
       <div className="flex items-center justify-between border-b border-border bg-surface-alt/60 px-4 py-3">
@@ -37,21 +45,36 @@ export function TaskTimeline({ taskId, events, connected }: TaskTimelineProps) {
             Task #{taskId}
           </span>
         </div>
-        <span
-          className={cn(
-            'inline-flex items-center gap-1 text-[10px] font-bold uppercase',
-            connected ? 'text-success' : 'text-text-faint',
-          )}
-        >
-          <Radio size={10} className={connected ? 'animate-pulse' : ''} />
-          {connected ? 'Live' : 'Connecting…'}
-        </span>
+        {isTerminal && taskState != null ? (
+          <Badge variant={taskStateVariant(taskState)}>{taskStateLabel(taskState)}</Badge>
+        ) : (
+          <span
+            className={cn(
+              'inline-flex items-center gap-1 text-[10px] font-bold uppercase',
+              connected && isRunning ? 'text-success' : 'text-text-faint',
+            )}
+          >
+            <Radio size={10} className={connected && isRunning ? 'animate-pulse' : ''} />
+            {connected ? 'Stream on' : 'Connecting…'}
+          </span>
+        )}
       </div>
 
       <div className="max-h-80 overflow-y-auto p-3">
         {events.length === 0 ? (
-          <p className="py-8 text-center text-xs text-text-faint">
-            Waiting for keeper events…
+          <p className="py-8 text-center text-xs leading-relaxed text-text-faint">
+            {taskState === TaskState.Aborted ? (
+              <>
+                Task aborted on-chain before any events were indexed.
+                {connected
+                  ? ' The indexer did not record any step events for this task. This can happen if the step failed quickly or the backend was not indexing at the time.'
+                  : ' Reconnecting to event stream…'}
+              </>
+            ) : taskState === TaskState.Completed ? (
+              'Task completed on-chain. No live events were recorded.'
+            ) : (
+              'Waiting for keeper events…'
+            )}
           </p>
         ) : (
           <ul className="space-y-2">

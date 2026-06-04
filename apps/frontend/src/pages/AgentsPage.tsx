@@ -7,6 +7,7 @@ import { Tabs } from '@/components/ui/Tabs'
 import { DeployAgentPanel } from '@/components/agents/DeployAgentPanel'
 import { AgentList } from '@/components/agents/AgentList'
 import { TaskActivity } from '@/components/agents/TaskActivity'
+import { PolicyPanel } from '@/components/agents/PolicyPanel'
 import { useUIStore } from '@/stores/ui'
 import { usePageReady } from '@/hooks/usePageReady'
 import { useWallet } from '@/hooks/useWallet'
@@ -51,6 +52,10 @@ export function AgentsPage() {
   const selectedAgentId = useUIStore((s) => s.selectedAgentId)
 
   const agentIds = useMemo(() => agents.map((a) => a.id), [agents])
+  const selectedAgent = useMemo(
+    () => agents.find((a) => a.id.toString() === selectedAgentId) ?? null,
+    [agents, selectedAgentId],
+  )
   const {
     tasks,
     isLoading: tasksLoading,
@@ -122,13 +127,27 @@ export function AgentsPage() {
                     </p>
                   </div>
                 ) : (
-                  <AgentList
-                    agents={agents}
-                    isLoading={isLoading}
-                    error={error}
-                    onRefresh={() => void refetchAgents()}
-                    onToggleKillSwitch={toggleKillSwitch}
-                  />
+                  <>
+                    <AgentList
+                      agents={agents}
+                      isLoading={isLoading}
+                      error={error}
+                      onRefresh={() => void refetchAgents()}
+                      onToggleKillSwitch={toggleKillSwitch}
+                    />
+                    {selectedAgent ? (
+                      <PolicyPanel
+                        agent={selectedAgent}
+                        onUpdated={() => void refetchAgents()}
+                      />
+                    ) : (
+                      agents.length > 0 && (
+                        <p className="mt-4 text-center text-xs text-text-faint">
+                          Select an agent row to edit policy and refresh allowance.
+                        </p>
+                      )
+                    )}
+                  </>
                 )}
               </>
             )}

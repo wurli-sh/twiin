@@ -1,5 +1,5 @@
 import { motion } from 'framer-motion'
-import { Award, Crown, Globe, Medal, Server } from 'lucide-react'
+import { AlertTriangle, Award, Crown, Globe, Medal, Server, ShieldCheck } from 'lucide-react'
 import { Badge } from '@/components/ui/Badge'
 import { TwiinAvatar } from '@/components/ui/TwiinAvatar'
 import { cn } from '@/lib/cn'
@@ -54,6 +54,13 @@ export function SubAgentRow({ agent, rank, showRank = true }: SubAgentRowProps) 
   const label = formatAgentLabel(agent.name, BigInt(agent.configId))
   const wr = winRate(agent)
   const isNative = agent.lane === 'SomniaNative'
+  const verificationLabel = isNative
+    ? null
+    : agent.isVerified
+      ? 'Verified'
+      : agent.lastError
+        ? 'Verify failed'
+        : 'Pending verify'
 
   return (
     <motion.div
@@ -90,6 +97,21 @@ export function SubAgentRow({ agent, rank, showRank = true }: SubAgentRowProps) 
               )}
             </Badge>
             <Badge variant={statusBadgeVariant(status)}>{statusLabel(status)}</Badge>
+            {!isNative && verificationLabel && (
+              <Badge variant={agent.isVerified ? 'success' : agent.lastError ? 'danger' : 'warning'}>
+                {agent.isVerified ? (
+                  <span className="inline-flex items-center gap-1">
+                    <ShieldCheck size={10} />
+                    {verificationLabel}
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center gap-1">
+                    <AlertTriangle size={10} />
+                    {verificationLabel}
+                  </span>
+                )}
+              </Badge>
+            )}
           </div>
           <p className="mt-0.5 text-[11px] text-text-faint">
             config #{agent.configId}
@@ -100,6 +122,12 @@ export function SubAgentRow({ agent, rank, showRank = true }: SubAgentRowProps) 
               <> · {agent.capabilities.slice(0, 3).join(', ')}</>
             )}
           </p>
+          {!isNative && (agent.endpointUrl || agent.lastError) && (
+            <p className="mt-1 text-[11px] text-text-faint">
+              {agent.endpointUrl ? agent.endpointUrl : 'No endpoint cached'}
+              {agent.lastError ? ` · ${agent.lastError}` : ''}
+            </p>
+          )}
         </div>
       </div>
 

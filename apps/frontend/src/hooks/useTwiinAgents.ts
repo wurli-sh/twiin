@@ -25,6 +25,7 @@ export interface TwiinAgentInfo {
   killSwitch: boolean
   dailyCap: string
   maxPerTask: string
+  maxPerTaskTrustless: string
   dailySpent: string
 }
 
@@ -101,6 +102,7 @@ export function useTwiinAgents() {
               killSwitch: policy[3],
               dailyCap: formatEther(policy[0]),
               maxPerTask: formatEther(policy[1]),
+              maxPerTaskTrustless: formatEther(policy[2]),
               dailySpent: formatEther(policy[4]),
             })
           } catch (e) {

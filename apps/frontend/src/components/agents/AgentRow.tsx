@@ -23,10 +23,11 @@ const EXPLORER = somniaTestnet.blockExplorers.default.url
 type AgentRowProps = {
   agent: TwiinAgentInfo
   onToggleKillSwitch: (agentId: bigint, current: boolean) => Promise<unknown>
+  onSelect?: (agentId: string) => void
   togglingId: bigint | null
 }
 
-export function AgentRow({ agent, onToggleKillSwitch, togglingId }: AgentRowProps) {
+export function AgentRow({ agent, onToggleKillSwitch, onSelect, togglingId }: AgentRowProps) {
   const [copied, setCopied] = useState(false)
   const setSelectedAgentId = useUIStore((s) => s.setSelectedAgentId)
   const selectedAgentId = useUIStore((s) => s.selectedAgentId)
@@ -49,8 +50,17 @@ export function AgentRow({ agent, onToggleKillSwitch, togglingId }: AgentRowProp
   return (
     <motion.div
       layout
+      role="button"
+      tabIndex={0}
+      onClick={() => onSelect?.(idStr)}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault()
+          onSelect?.(idStr)
+        }
+      }}
       className={cn(
-        'flex flex-col gap-3 border-b border-border/40 p-4 last:border-b-0 sm:flex-row sm:items-center',
+        'flex cursor-pointer flex-col gap-3 border-b border-border/40 p-4 last:border-b-0 sm:flex-row sm:items-center',
         isSelected && 'bg-primary/5',
       )}
     >
@@ -79,7 +89,10 @@ export function AgentRow({ agent, onToggleKillSwitch, togglingId }: AgentRowProp
       <div className="flex shrink-0 flex-wrap items-center gap-2 sm:justify-end">
         <button
           type="button"
-          onClick={() => void copyAddress()}
+          onClick={(e) => {
+            e.stopPropagation()
+            void copyAddress()
+          }}
           className="inline-flex cursor-pointer items-center gap-1 rounded-lg border border-border px-2.5 py-1.5 text-[11px] font-semibold text-text-muted hover:bg-surface-alt"
         >
           <ClipboardCopy size={12} />
@@ -96,11 +109,12 @@ export function AgentRow({ agent, onToggleKillSwitch, togglingId }: AgentRowProp
         <button
           type="button"
           disabled={isToggling}
-          onClick={() =>
-            void onToggleKillSwitch(agent.id, agent.killSwitch).catch((e) => {
-              toast.error(e instanceof Error ? e.message : 'Toggle failed')
+          onClick={(e) => {
+            e.stopPropagation()
+            void onToggleKillSwitch(agent.id, agent.killSwitch).catch((err) => {
+              toast.error(err instanceof Error ? err.message : 'Toggle failed')
             })
-          }
+          }}
           className="inline-flex cursor-pointer items-center gap-1 rounded-lg border border-border px-2.5 py-1.5 text-[11px] font-semibold text-text-muted hover:bg-surface-alt disabled:opacity-50"
         >
           {isToggling ? (
@@ -112,7 +126,10 @@ export function AgentRow({ agent, onToggleKillSwitch, togglingId }: AgentRowProp
         </button>
         <Link
           to="/console"
-          onClick={selectForConsole}
+          onClick={(e) => {
+            e.stopPropagation()
+            selectForConsole()
+          }}
           className="inline-flex items-center gap-1 rounded-lg bg-primary px-3 py-1.5 text-[11px] font-bold text-secondary hover:bg-primary/90"
         >
           Console

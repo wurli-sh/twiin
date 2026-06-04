@@ -1,10 +1,11 @@
-import { useEffect, useState, useRef } from 'react'
+import { useEffect, useState, useRef, useMemo } from 'react'
 import { motion } from 'framer-motion'
-import { Check, Clock, Loader2, X } from 'lucide-react'
+import { AlertTriangle, Check, Clock, Loader2, X } from 'lucide-react'
 import { formatEther } from 'viem'
 import { Button } from '@/components/ui/Button'
 import { configIdLabel } from '@/lib/config-names'
 import type { PlanResponse } from '@/lib/plan-api'
+import type { TwiinAgentInfo } from '@/hooks/useTwiinAgents'
 import { cn } from '@/lib/cn'
 
 const APPROVAL_SECONDS = 60
@@ -12,6 +13,7 @@ const APPROVAL_SECONDS = 60
 type PlanApprovalProps = {
   plan: PlanResponse
   goal: string
+  agent: TwiinAgentInfo
   onApprove: () => Promise<void>
   onReject: () => void
   isSubmitting: boolean
@@ -20,6 +22,7 @@ type PlanApprovalProps = {
 export function PlanApproval({
   plan,
   goal,
+  agent,
   onApprove,
   onReject,
   isSubmitting,
@@ -51,6 +54,22 @@ export function PlanApproval({
 
   const pct = (secondsLeft / APPROVAL_SECONDS) * 100
   const expired = secondsLeft === 0
+
+  const budgetStt = Number(formatEther(BigInt(plan.budgetWei)))
+  const blockReason = useMemo(() => {
+    if (agent.killSwitch) return 'Kill switch is ON — enable the agent on Agents first.'
+    if (budgetStt > Number(agent.maxPerTask)) {
+      return `Budget ${budgetStt.toFixed(2)} STT exceeds per-task cap ${agent.maxPerTask} STT.`
+    }
+    const dailyLeft = Math.max(0, Number(agent.dailyCap) - Number(agent.dailySpent))
+    if (dailyLeft > 0 && budgetStt > dailyLeft) {
+      return `Budget exceeds daily cap remaining (${dailyLeft.toFixed(2)} STT).`
+    }
+    if (budgetStt > Number(agent.tbaBalance)) {
+      return `6551 wallet only has ${agent.tbaBalance} STT.`
+    }
+    return null
+  }, [agent, budgetStt, plan.budgetWei])
 
   return (
     <motion.div
@@ -120,11 +139,18 @@ export function PlanApproval({
         </span>
       </div>
 
+      {blockReason && (
+        <p className="mb-4 flex items-start gap-2 rounded-lg border border-danger/30 bg-danger/10 px-3 py-2 text-xs text-danger">
+          <AlertTriangle size={14} className="mt-0.5 shrink-0" />
+          {blockReason}
+        </p>
+      )}
+
       <div className="flex gap-2">
         <Button
           type="button"
           className="flex-1"
-          disabled={expired || isSubmitting}
+          disabled={expired || isSubmitting || Boolean(blockReason)}
           onClick={() => void onApprove()}
         >
           {isSubmitting ? (

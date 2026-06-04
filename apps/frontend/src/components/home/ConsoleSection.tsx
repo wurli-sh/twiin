@@ -72,7 +72,7 @@ export function ConsoleSection() {
         >
           <div className="w-full flex-1 space-y-3">
             <ChatBubble side="user">
-              Check Somnia ecosystem health. Budget: 0.9 STT
+              Check Somnia ecosystem health. Budget: 3.5 STT
             </ChatBubble>
             <ChatBubble side="agent">
               Plan ready — 3 steps: discord-bot@twiin (external), somnia-oracle@twiin,

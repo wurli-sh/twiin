@@ -13,36 +13,43 @@ import { TextShimmer } from '@/components/ui/TextShimmer'
 import { ThinkingSpinner } from '@/components/ui/ThinkingSpinner'
 import { useTwiinAgents } from '@/hooks/useTwiinAgents'
 import { useCreateTask } from '@/hooks/useCreateTask'
+import { useAgentPolicy } from '@/hooks/useAgentPolicy'
 import { useTaskStream } from '@/hooks/useTaskStream'
 import { useTaskDetail } from '@/hooks/useTaskDetail'
 import { useWallet } from '@/hooks/useWallet'
 import { useUIStore } from '@/stores/ui'
-import { requestPlan, type PlanResponse } from '@/lib/plan-api'
+import { PlanBudgetRecovery, type PlanBudgetMismatch } from '@/components/console/PlanBudgetRecovery'
+import { requestPlan, isPlanOverBudgetError, type PlanResponse } from '@/lib/plan-api'
+import { maxTaskBudgetStt } from '@/lib/agent-budget'
 import { somniaTestnet } from '@/config/chains'
+import { TaskState } from '@/config/contracts'
 import { toast } from 'sonner'
 
 const PROMPTS = [
-  'Check Somnia ecosystem health. Budget: 0.9 STT',
+  'Fetch Somnia ecosystem stats via oracle. Budget: 0.75 STT',
   'Research dreamDEX — should I LP?',
   'Daily Somnia sentiment oracle',
 ]
 
 export function ConsolePage() {
   const { isConnected } = useWallet()
-  const { agents, isLoading: agentsLoading } = useTwiinAgents()
+  const { agents, isLoading: agentsLoading, refetchAgents } = useTwiinAgents()
   const selectedAgentId = useUIStore((s) => s.selectedAgentId)
   const setSelectedAgentId = useUIStore((s) => s.setSelectedAgentId)
 
   const [goal, setGoal] = useState('')
-  const [budgetStt, setBudgetStt] = useState('0.9')
+  const [budgetStt, setBudgetStt] = useState('1')
   const [plan, setPlan] = useState<PlanResponse | null>(null)
   const [planGoal, setPlanGoal] = useState('')
+  const [planMismatch, setPlanMismatch] = useState<PlanBudgetMismatch | null>(null)
   const [isPlanning, setIsPlanning] = useState(false)
   const [isApproving, setIsApproving] = useState(false)
+  const [isRaisingCaps, setIsRaisingCaps] = useState(false)
   const [activeTaskId, setActiveTaskId] = useState<string | null>(null)
   const [detailVersion, setDetailVersion] = useState(0)
 
   const { submitCreateTask } = useCreateTask()
+  const { updatePolicy } = useAgentPolicy()
   const { events, connected } = useTaskStream(activeTaskId)
   const { task: chainTask, steps: chainSteps } = useTaskDetail(activeTaskId, detailVersion)
 
@@ -50,8 +57,15 @@ export function ConsolePage() {
   const agent = agents.find((a) => a.id.toString() === agentId)
 
   const budgetNum = Number(budgetStt)
+  const maxPerTaskNum = agent ? Number(agent.maxPerTask) : 0
+  const dailyRemaining =
+    agent ? Math.max(0, Number(agent.dailyCap) - Number(agent.dailySpent)) : 0
   const lowBalance =
     agent && !Number.isNaN(budgetNum) && Number(agent.tbaBalance) < budgetNum
+  const overPerTaskCap =
+    agent && !Number.isNaN(budgetNum) && maxPerTaskNum > 0 && budgetNum > maxPerTaskNum
+  const overDailyCap =
+    agent && !Number.isNaN(budgetNum) && dailyRemaining > 0 && budgetNum > dailyRemaining
 
   useEffect(() => {
     const terminal = events.some(
@@ -66,18 +80,46 @@ export function ConsolePage() {
     }
   }, [agents, selectedAgentId, setSelectedAgentId])
 
+  useEffect(() => {
+    if (!agent) return
+    const affordable = maxTaskBudgetStt(agent)
+    if (affordable > 0) {
+      setBudgetStt(Math.min(affordable, Number(agent.maxPerTask)).toFixed(2))
+    }
+  }, [agent?.id.toString()])
+
+  async function runPlan(trimmedGoal: string, budget: string) {
+    if (!agentId || !agent) return
+    setIsPlanning(true)
+    setPlan(null)
+    setPlanMismatch(null)
+    try {
+      const budgetWei = parseEther(budget).toString()
+      const result = await requestPlan({
+        goal: trimmedGoal,
+        personalAgentId: agentId,
+        budgetWei,
+      })
+      setPlan(result)
+      setPlanGoal(trimmedGoal)
+      toast.success('Plan ready — review and approve')
+    } catch (e) {
+      if (isPlanOverBudgetError(e)) {
+        setPlanMismatch({ estimatedStt: e.estimatedStt, budgetStt: e.budgetStt })
+      }
+      toast.error(e instanceof Error ? e.message : 'Planning failed')
+    } finally {
+      setIsPlanning(false)
+    }
+  }
+
   async function handlePlan() {
     if (!agentId || !agent) {
       toast.error('Select an agent first')
       return
     }
     if (agent.killSwitch) {
-      toast.error('Enable the agent kill switch before planning')
-      return
-    }
-    const trimmed = goal.trim()
-    if (!trimmed) {
-      toast.error('Describe a goal for your agent')
+      toast.error('Enable your agent on the Agents page before planning')
       return
     }
     const budgetNum = Number(budgetStt)
@@ -85,23 +127,68 @@ export function ConsolePage() {
       toast.error('Enter a valid budget in STT')
       return
     }
+    const maxPerTask = Number(agent.maxPerTask)
+    if (maxPerTask > 0 && budgetNum > maxPerTask) {
+      toast.error(`Budget exceeds per-task cap (${agent.maxPerTask} STT). Lower budget or update policy.`)
+      return
+    }
+    const dailyLeft = Math.max(0, Number(agent.dailyCap) - Number(agent.dailySpent))
+    if (dailyLeft > 0 && budgetNum > dailyLeft) {
+      toast.error(`Budget exceeds daily cap remaining (${dailyLeft.toFixed(2)} STT).`)
+      return
+    }
+    if (budgetNum > Number(agent.tbaBalance)) {
+      toast.error(`6551 wallet only has ${agent.tbaBalance} STT. Fund the agent or lower budget.`)
+      return
+    }
+    const trimmed = goal.trim()
+    if (!trimmed) {
+      toast.error('Describe a goal for your agent')
+      return
+    }
 
-    setIsPlanning(true)
-    setPlan(null)
+    await runPlan(trimmed, budgetStt)
+  }
+
+  async function handleSetBudgetAndRetry(nextBudget: string) {
+    setBudgetStt(nextBudget)
+    const trimmed = goal.trim() || planGoal.trim()
+    if (!trimmed) {
+      toast.error('Enter a goal first')
+      return
+    }
+    await runPlan(trimmed, nextBudget)
+  }
+
+  async function handleRaiseCapsAndRetry(estimatedStt: number) {
+    if (!agent) return
+    const taskCap = Math.ceil(estimatedStt * 10) / 10 + 0.5
+    const dailyCap = Math.max(taskCap * 2, 5)
+    const nextBudget = taskCap.toFixed(1)
+
+    if (Number(agent.tbaBalance) < taskCap) {
+      toast.error(`Fund the 6551 wallet with at least ${taskCap.toFixed(1)} STT first (Agents page).`)
+      return
+    }
+
+    setIsRaisingCaps(true)
     try {
-      const budgetWei = parseEther(budgetStt).toString()
-      const result = await requestPlan({
-        goal: trimmed,
-        personalAgentId: agentId,
-        budgetWei,
+      await updatePolicy({
+        agentId: agent.id,
+        dailyCapStt: dailyCap.toFixed(1),
+        maxPerTaskStt: taskCap.toFixed(1),
+        maxPerTaskTrustlessWei: parseEther(agent.maxPerTaskTrustless),
+        killSwitch: agent.killSwitch,
       })
-      setPlan(result)
-      setPlanGoal(trimmed)
-      toast.success('Plan ready — review and approve')
+      toast.success(`Policy updated — ${taskCap.toFixed(1)} STT per task`)
+      await refetchAgents()
+      setBudgetStt(nextBudget)
+      const trimmed = goal.trim() || planGoal.trim()
+      if (trimmed) await runPlan(trimmed, nextBudget)
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : 'Planning failed')
+      toast.error(e instanceof Error ? e.message : 'Policy update failed')
     } finally {
-      setIsPlanning(false)
+      setIsRaisingCaps(false)
     }
   }
 
@@ -110,7 +197,7 @@ export function ConsolePage() {
     setIsApproving(true)
     try {
       const { txHash, taskId } = await submitCreateTask({
-        tbaAddress: agent.tbaAddress,
+        agent,
         orchestrator: plan.orchestrator,
         budgetWei: BigInt(plan.budgetWei),
         createTaskCalldata: plan.createTaskCalldata,
@@ -163,7 +250,13 @@ export function ConsolePage() {
             {plan || isPlanning ? (
               'Review your plan'
             ) : activeTaskId ? (
-              'Task running'
+              chainTask?.state === TaskState.Aborted ? (
+                'Task aborted'
+              ) : chainTask?.state === TaskState.Completed ? (
+                'Task complete'
+              ) : (
+                'Task running'
+              )
             ) : (
               <TextShimmer>What should your agent do?</TextShimmer>
             )}
@@ -237,12 +330,52 @@ export function ConsolePage() {
                     before approving.
                   </p>
                 )}
+                {overPerTaskCap && agent && (
+                  <p className="mt-1.5 flex items-center gap-1 text-xs text-danger">
+                    <AlertTriangle size={12} />
+                    Per-task cap is {agent.maxPerTask} STT — default policy limits each task to 1 STT.
+                  </p>
+                )}
+                {overDailyCap && agent && !overPerTaskCap && (
+                  <p className="mt-1.5 flex items-center gap-1 text-xs text-danger">
+                    <AlertTriangle size={12} />
+                    Only {dailyRemaining.toFixed(2)} STT left in today&apos;s cap ({agent.dailyCap} STT).
+                  </p>
+                )}
+                {agent?.killSwitch && (
+                  <p className="mt-1.5 flex items-center gap-1 text-xs text-danger">
+                    <AlertTriangle size={12} />
+                    Kill switch is ON — enable the agent on Agents before planning.
+                  </p>
+                )}
+                <p className="mt-1.5 text-xs text-text-faint">
+                  Default policy: 1 STT per task, 2 STT daily. Native steps need ~0.12–0.33 STT each.
+                </p>
               </label>
+
+              {planMismatch && agent && (
+                <PlanBudgetRecovery
+                  agent={agent}
+                  mismatch={planMismatch}
+                  isRaisingCaps={isRaisingCaps}
+                  onSetBudgetAndRetry={(b) => void handleSetBudgetAndRetry(b)}
+                  onRaiseCapsAndRetry={(e) => void handleRaiseCapsAndRetry(e)}
+                  onDismiss={() => setPlanMismatch(null)}
+                />
+              )}
 
               <Button
                 type="button"
                 className="w-full"
-                disabled={isPlanning || !agentId || agentsLoading}
+                disabled={
+                  isPlanning ||
+                  !agentId ||
+                  agentsLoading ||
+                  Boolean(agent?.killSwitch) ||
+                  overPerTaskCap ||
+                  overDailyCap ||
+                  lowBalance
+                }
                 onClick={() => void handlePlan()}
               >
                 {isPlanning ? (
@@ -267,10 +400,11 @@ export function ConsolePage() {
             </div>
           )}
 
-          {plan && (
+          {plan && agent && (
             <PlanApproval
               plan={plan}
               goal={planGoal}
+              agent={agent}
               onApprove={handleApprove}
               onReject={handleRejectPlan}
               isSubmitting={isApproving}
@@ -280,7 +414,12 @@ export function ConsolePage() {
           {activeTaskId && (
             <>
               <TaskResult task={chainTask} steps={chainSteps} />
-              <TaskTimeline taskId={activeTaskId} events={events} connected={connected} />
+              <TaskTimeline
+                taskId={activeTaskId}
+                events={events}
+                connected={connected}
+                taskState={chainTask?.state ?? null}
+              />
               <Button
                 type="button"
                 variant="secondary"
