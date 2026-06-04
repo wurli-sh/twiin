@@ -51,7 +51,8 @@ export function ConsolePage() {
   const { submitCreateTask } = useCreateTask()
   const { updatePolicy } = useAgentPolicy()
   const { events, connected } = useTaskStream(activeTaskId)
-  const { task: chainTask, steps: chainSteps } = useTaskDetail(activeTaskId, detailVersion)
+  const { task: chainTask, steps: chainSteps, completion: taskCompletion } =
+    useTaskDetail(activeTaskId, detailVersion)
 
   const agentId = selectedAgentId ?? agents[0]?.id.toString() ?? null
   const agent = agents.find((a) => a.id.toString() === agentId)
@@ -413,7 +414,7 @@ export function ConsolePage() {
 
           {activeTaskId && (
             <>
-              <TaskResult task={chainTask} steps={chainSteps} />
+              <TaskResult task={chainTask} steps={chainSteps} completion={taskCompletion} />
               <TaskTimeline
                 taskId={activeTaskId}
                 events={events}

@@ -13,7 +13,7 @@ import {
   taskStateVariant,
 } from '@/lib/task-state'
 import { configIdLabel } from '@/lib/config-names'
-import type { ChainTask, TaskStep } from '@/hooks/useTaskDetail'
+import type { ChainTask, TaskCompletion, TaskStep } from '@/hooks/useTaskDetail'
 
 function decodeResult(hex: string | null, configId: number): string {
   if (!hex || hex === '0x') return ''
@@ -31,9 +31,10 @@ function decodeResult(hex: string | null, configId: number): string {
 type TaskResultProps = {
   task: ChainTask | null
   steps: TaskStep[]
+  completion?: TaskCompletion | null
 }
 
-export function TaskResult({ task, steps }: TaskResultProps) {
+export function TaskResult({ task, steps, completion }: TaskResultProps) {
   if (!task) return null
 
   const isComplete = task.state === TaskState.Completed
@@ -58,6 +59,30 @@ export function TaskResult({ task, steps }: TaskResultProps) {
         <Stat label="Spent" value={`${Number(task.spent).toFixed(3)} STT`} />
         <Stat label="Steps" value={`${task.cursor}/${steps.length || '—'}`} />
       </div>
+
+      {isComplete && completion?.decoded && (
+        <div className="border-t border-border/40 px-4 py-3">
+          <p className="text-[9px] uppercase tracking-wider text-text-faint">Task output</p>
+          <p className="mt-1.5 whitespace-pre-wrap wrap-break-word rounded-lg bg-success/5 px-3 py-2 font-mono text-sm font-semibold tabular-nums text-success">
+            {completion.decoded}
+          </p>
+          <p className="mt-1.5 text-[10px] text-text-faint">
+            From on-chain <code className="text-[9px]">TaskCompleted</code> (ABI-decoded native agent
+            result)
+          </p>
+        </div>
+      )}
+
+      {isComplete && completion && !completion.decoded && (
+        <p className="border-t border-border/40 px-4 py-3 text-xs text-text-muted">
+          Task finished on-chain but the completion payload could not be decoded as text or a
+          number. Check the explorer tx{' '}
+          {completion.transactionHash ? (
+            <span className="font-mono text-[10px]">{completion.transactionHash.slice(0, 14)}…</span>
+          ) : null}
+          .
+        </p>
+      )}
 
       {steps.length > 0 && (
         <ul className="divide-y divide-border/40 border-t border-border/40">
@@ -98,10 +123,11 @@ export function TaskResult({ task, steps }: TaskResultProps) {
             <>
               Step 1 (native Somnia agent) failed or timed out.{' '}
               {Number(task.spent).toFixed(3)} STT was charged for the attempt; unused budget
-              returns to your 6551 wallet. Common causes: the API returned no data (e.g. CoinGecko
-              search with an empty result), the endpoint timed out, or the plan used a fragile
-              selector like coins.0.id. Try a new task — research goals work best with
-              analysis-bot + reporter-bot, not search APIs.
+              returns to your 6551 wallet. For CoinGecko /simple/price use a leaf selector like{' '}
+              <code className="text-[10px]">somnia.usd</code> plus{' '}
+              <code className="text-[10px]">decimals</code> — not{' '}
+              <code className="text-[10px]">somnia</code> alone. Ignore stale &quot;Succeeded&quot;
+              rows from old soak tests in the indexer list.
             </>
           ) : (
             <>

@@ -23,6 +23,13 @@ export type TaskStep = {
   score: number | null
 }
 
+export type TaskCompletion = {
+  result: string
+  decoded: string | null
+  blockNumber: string
+  transactionHash: string
+}
+
 type StepsResponse = {
   steps: {
     step_idx: number
@@ -38,6 +45,7 @@ export function useTaskDetail(taskId: string | null, version: number) {
   const publicClient = usePublicClient()
   const [task, setTask] = useState<ChainTask | null>(null)
   const [steps, setSteps] = useState<TaskStep[]>([])
+  const [completion, setCompletion] = useState<TaskCompletion | null>(null)
   const [isLoading, setIsLoading] = useState(false)
   const timer = useRef<ReturnType<typeof setInterval> | null>(null)
 
@@ -83,6 +91,21 @@ export function useTaskDetail(taskId: string | null, version: number) {
         // steps are advisory; chain task state is the source of truth
       }
 
+      if (chainTask.state === TaskState.Completed) {
+        try {
+          const res = await fetch(`/api/tasks/${taskId}/completion`)
+          if (res.ok) {
+            setCompletion((await res.json()) as TaskCompletion)
+          } else {
+            setCompletion(null)
+          }
+        } catch {
+          setCompletion(null)
+        }
+      } else {
+        setCompletion(null)
+      }
+
       return chainTask.state
     } finally {
       setIsLoading(false)
@@ -93,6 +116,7 @@ export function useTaskDetail(taskId: string | null, version: number) {
     if (!taskId) {
       setTask(null)
       setSteps([])
+      setCompletion(null)
       return
     }
 
@@ -119,5 +143,5 @@ export function useTaskDetail(taskId: string | null, version: number) {
     }
   }, [taskId, load, version])
 
-  return { task, steps, isLoading, refetch: load }
+  return { task, steps, completion, isLoading, refetch: load }
 }
