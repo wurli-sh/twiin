@@ -10,9 +10,10 @@ Somnia Agentathon (Encode Club, May 18 – Jun 11 2026). Somnia Testnet chainId 
 | ------------------- | ----------- | -------------------------------------------------------- |
 | 1 — Contracts       | ✅ Complete | 85/85 tests passing                                      |
 | 2 — Shared package  | ✅ Complete | 22/22 vitest tests; ABIs, constants, digest, 6551 helper |
-| 3 — Backend         | ✅ Complete | Hono, Claude planner, relay + rater keepers, SSE, SQLite |
-| 4 — Frontend        | ⬜ Pending  | React/Vite/wagmi, deploy flow, task flow                 |
-| 5 — TrustlessJanice | ⬜ Gated    | Feature-flagged off until T2/T3/T4 testnet pass          |
+| 3 — Backend         | ✅ Complete | Hono, Claude planner, keepers (4), SSE, SQLite           |
+| 4 — Frontend        | ✅ Complete | React/Vite/wagmi, deploy flow, task console, feeds       |
+| 5 — Discord Bot     | ✅ Complete | Hono webhook server, on-chain command registration       |
+| 6 — TrustlessJanice | ⬜ Gated    | Feature-flagged off until T2/T3/T4 testnet pass          |
 
 ## Commands
 
@@ -20,10 +21,15 @@ Somnia Agentathon (Encode Club, May 18 – Jun 11 2026). Somnia Testnet chainId 
 | -------------------- | ------------------------------------------------------------ |
 | `pnpm build`         | builds all packages with `pnpm -r run build`                 |
 | `pnpm test`          | runs `@twiin/contracts` tests (Hardhat)                      |
+| `pnpm test:shared`   | runs `@twiin/shared` tests (vitest)                          |
+| `pnpm test:backend`  | runs `@twiin/backend` tests (vitest)                         |
+| `pnpm test:all`      | runs contracts + shared + backend tests                      |
 | `pnpm compile`       | compiles `@twiin/contracts` (Hardhat)                        |
 | `pnpm deploy:local`  | deploy contracts to local Hardhat node                       |
 | `pnpm deploy:somnia` | deploy contracts to Somnia Testnet                           |
 | `pnpm dev:backend`   | `pnpm --filter @twiin/backend dev` (from `apps/backend/`)    |
+| `pnpm dev:frontend`  | `pnpm --filter @twiin/frontend dev` (from `apps/frontend/`)  |
+| `pnpm dev:all`       | concurrently runs backend + frontend dev servers             |
 | `pnpm start:backend` | `pnpm --filter @twiin/backend start` (from `apps/backend/`)  |
 
 ## Structure
@@ -35,7 +41,8 @@ twiin/
 │   └── shared/      — TypeScript shared lib (ABIs, types, constants, helpers) ✅
 ├── apps/
 │   ├── backend/     — Hono server, Claude planner, keepers, SSE, SQLite ✅
-│   └── frontend/    — React/Vite/wagmi ⬜
+│   ├── frontend/    — React/Vite/wagmi ✅
+│   └── discord-bot/ — Hono webhook, on-chain command registration ✅
 ├── .agents/         — Agent skill definitions (empty, for future use)
 ├── .codex/          — Codex metadata (empty, for future use)
 ├── pnpm-workspace.yaml
@@ -77,6 +84,32 @@ twiin/
 | `src/keepers/` | `relay.ts` (task relay keeper), `rater.ts` (Claude Haiku rating keeper), `indexer.ts` (event indexer) |
 | Top-level `src/` files | `index.ts` (entry), `clients.ts` (viem clients), `contracts.ts` (contract instances), `db.ts` (SQLite/Drizzle), `schema.ts` (DB schema), `sse.ts` (SSE helpers), `env.ts` (env vars) |
 | Config | `drizzle.config.ts`, `tsconfig.json`, `.env.example` |
+
+### `apps/frontend/` — React/Vite Frontend
+
+| Path | Purpose |
+|------|---------|
+| `src/pages/` | 5 pages: `HomePage`, `AgentsPage`, `ConsolePage`, `FeedsPage`, `MarketplacePage` |
+| `src/components/home/` | `HeroSection`, `HowItWorks`, `ConsoleSection`, `CallToAction` |
+| `src/components/agents/` | `DeployAgentPanel`, `AgentList`, `AgentRow` |
+| `src/components/console/` | `AgentSelector`, `PlanApproval`, `TaskTimeline` |
+| `src/components/feeds/` | `FeedCard`, `FeedTopicLookup` |
+| `src/components/marketplace/` | `SubAgentTable`, `SubAgentRow` |
+| `src/components/layout/` | `Navbar`, `Footer`, `MainLayout` |
+| `src/components/ui/` | `Button`, `Badge`, `Tabs`, `TextLoop`, `TextShimmer`, `ThinkingSpinner`, `TwiinAvatar` |
+| `src/hooks/` | 10 hooks: `useWallet`, `useTwiinAgents`, `useSubAgents`, `useTaskStream`, `useTaskDetail`, `useAgentTasks`, `useCreateTask`, `useOracleFeeds`, `usePageReady`, `useNetworkGuard` |
+| `src/config/` | `wagmi.ts`, `chains.ts`, `contracts.ts` |
+| `src/lib/` | `cn.ts`, `animations.ts`, `agent-name.ts`, `config-names.ts`, `plan-api.ts`, `read-contract.ts`, `sub-agent-status.ts`, `task-state.ts`, `feed-topics.ts`, `format-time.ts` |
+| Config | `vite.config.ts`, `tsconfig.json`, `eslint.config.js`, `index.html` |
+
+### `apps/discord-bot/` — Discord Bot
+
+| Path | Purpose |
+|------|---------|
+| `src/` | `app.ts` (Hono webhook), `env.ts` (env vars), `index.ts` (entry) |
+| `scripts/` | `register.ts` — on-chain command registration on Somnia |
+| `test/` | Bot test suite |
+| Config | `tsconfig.json`, `vitest.config.ts`, `.env.example` |
 
 ### `packages/contracts/src/interfaces/` — Interface Details
 
@@ -238,5 +271,6 @@ Phases 1–4: **ClaudePlan only** (Claude API plans). **TrustlessJanice** (valid
 1. **Contracts** ✅ — auth, escrow, events, ABIs, 6551 derivation, deployed addresses
 2. **Shared package** ✅ — ABIs/types, `addresses.json`, chain constants, digest helper, 6551 helper
 3. **Backend** ✅ — Hono server, viem clients, Claude Sonnet planner, relay + rater keepers, event indexer, SSE, SQLite
-4. **Frontend** ⬜ — wallet UX, deploy flow, task flow, live execution, panels
-5. **TrustlessJanice** ⬜ — feature-flagged off until T2/T3/T4 pass
+4. **Frontend** ✅ — wallet UX, deploy flow, task flow, live execution, panels
+5. **Discord Bot** ✅ — Hono webhook server, on-chain command registration
+6. **TrustlessJanice** ⬜ — feature-flagged off until T2/T3/T4 pass

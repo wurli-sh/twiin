@@ -20,21 +20,25 @@ Hono server targeting **Somnia Testnet** (chainId 50312). Claude API planner, ke
 ```
 src/
 ├── index.ts          — server entry; mounts routes, starts keepers
-├── app.ts            — Hono app factory (routes, CORS, error handler)
+├── app.ts            — Hono app factory with DI (routes, CORS, error handler)
 ├── clients.ts        — viem public/wallet clients for Somnia Testnet
-├── contracts.ts      — getContract instances (Orchestrator, Registry, TwiinAgent, OracleFeed)
+├── contracts.ts      — getContract instances + deployment manifest + boot block
 ├── db.ts             — Turso/Drizzle SQLite client + query helpers
 ├── schema.ts         — Drizzle schema: keeperCursors, tasks, steps, planRequests, submittedResults, submittedRatings
 ├── env.ts            — Zod-enforced env vars (KEEPER_PRIVATE_KEY, ANTHROPIC_API_KEY, SOMNIA_RPC_URL, TURSO_DB_URL, etc.)
 ├── sse.ts            — SSE pub/sub: subscribe(), publish(), publishAll(), makeSseStream(), heartbeat
+├── budget.ts         — shared budget validation logic
 ├── routes/
 │   ├── plan.ts       — POST /api/plan — user goal → Claude Haiku → createTask calldata
 │   ├── tasks.ts      — GET /api/tasks/:taskId, GET /api/tasks/:taskId/steps
-│   └── stream.ts     — GET /api/stream/:taskId — SSE real-time updates
+│   ├── stream.ts     — GET /api/stream/:taskId — SSE real-time updates
+│   └── agents.ts     — GET /api/agents — list registered external agents
 └── keepers/
-    ├── indexer.ts    — polls TaskCreated/StepUpdated/events → SQLite + SSE (4s interval)
-    ├── relay.ts      — watches StepUpdated(Assigned) → Claude Sonnet/HTTP → ECDSA on-chain (4s interval)
-    └── rater.ts      — watches StepUpdated(Completed) → Claude Haiku rating → rateStep (6s interval)
+    ├── indexer.ts    — polls events → SQLite + SSE; indexes external agent lifecycle (4s interval)
+    ├── relay.ts      — routes assigned steps to Claude Sonnet (native) or HTTP POST (external) (4s interval)
+    ├── rater.ts      — rates completed steps via Claude Haiku → rateStep on-chain (6s interval)
+    ├── externals.ts  — monitors ExternalAgentRequest → dispatches HTTP to registered endpoints
+    └── timeouts.ts   — monitors pending external steps → submits on-chain timeout at deadline
 ```
 
 ## Environment Variables (.env)
@@ -54,11 +58,13 @@ src/
 
 ## Keeper Details
 
-| Keeper  | File          | Poll  | Trigger                     | Action                                                         |
-| ------- | ------------- | ----- | --------------------------- | -------------------------------------------------------------- |
-| Indexer | `indexer.ts`  | 4s    | New block                   | Fetches events, upserts to SQLite, publishes SSE updates       |
-| Relay   | `relay.ts`    | 4s    | `StepUpdated(Assigned)`     | Dispatches to Claude Sonnet (native) or HTTP (external); submits ECDSA result on-chain |
-| Rater   | `rater.ts`    | 6s    | `StepUpdated(Completed)`    | Rates via Claude Haiku; submits `rateStep` if score ≥ 40       |
+| Keeper    | File           | Poll  | Trigger                           | Action                                                      |
+| --------- | -------------- | ----- | --------------------------------- | ----------------------------------------------------------- |
+| Indexer   | `indexer.ts`   | 4s    | New block                         | Fetches events (task + external agent), upserts to SQLite, publishes SSE updates |
+| Relay     | `relay.ts`     | 4s    | `StepUpdated(Assigned)`           | Routes to Claude Sonnet (native) or HTTP POST (external); submits ECDSA result on-chain |
+| Rater     | `rater.ts`     | 6s    | `StepUpdated(Completed)`          | Rates via Claude Haiku; submits `rateStep` if score ≥ 40    |
+| Externals | `externals.ts` | 4s    | `ExternalAgentRequest`            | Sends HTTP POST to registered external agent endpoints       |
+| Timeouts  | `timeouts.ts`  | 6s    | `ExternalResultPending` (expired) | Calls `timeoutExternalStep` on-chain at deadline             |
 
 ## Architecture
 

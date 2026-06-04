@@ -15,6 +15,8 @@ Part of the `twiin/` pnpm monorepo — consumed by `@twiin/shared`, `apps/backen
 | `pnpm deploy:local`  | deploy to local Hardhat node                             |
 | `pnpm deploy:somnia` | deploy to Somnia Testnet                                 |
 | `pnpm soak:somnia`   | run soak/load tests on Somnia Testnet                    |
+| `pnpm measure:submit-external-result` | gas measurement for external result submission |
+| `pnpm probe:reactivity`              | test Somnia Reactivity precompile integration |
 
 ## Source Layout
 
@@ -41,8 +43,10 @@ src/
 ├── TwiinNames.sol                  — name registry
 └── TwiinTypes.sol                  — shared enums/structs
 scripts/
-├── deploy.ts    — full deployment with manifest export, ABI gen, wiring validation
-├── soak.ts      — load/soak test runner for Somnia testnet
+├── deploy.ts                         — full deployment with manifest export, ABI gen, wiring validation
+├── soak.ts                           — load/soak test runner for Somnia testnet
+├── measure-submit-external-result.ts — gas profiling for submitExternalResult
+├── probe-reactivity.ts               — Somnia Reactivity precompile integration test
 deployments/
 ├── hardhat.json          — local deployment manifest
 ├── somniaTestnet.json    — Somnia testnet deployment manifest
