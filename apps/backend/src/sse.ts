@@ -117,10 +117,10 @@ function replayMissedEvents(
   lastEventId?: string | null,
 ): void {
   const sinceId = Number(lastEventId ?? "");
-  if (!Number.isFinite(sinceId) || sinceId <= 0) return;
   const events = history.get(taskId) ?? [];
   for (const event of events) {
-    if (event.id > sinceId) {
+    // Fresh clients (no Last-Event-ID) receive full in-memory history.
+    if (!Number.isFinite(sinceId) || sinceId <= 0 || event.id > sinceId) {
       controller.enqueue(encoder.encode(formatEvent(event)));
     }
   }

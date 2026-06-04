@@ -324,7 +324,19 @@ export function createIndexer(overrides: Partial<IndexerDeps> = {}) {
       try {
         await tick();
       } catch (e) {
-        console.error("[indexer] error:", e);
+        const msg = `${String(e)} ${String((e as { cause?: unknown }).cause ?? "")}`;
+        if (
+          msg.includes("keeper_cursors") ||
+          msg.includes("turso.io") ||
+          msg.includes("DrizzleQueryError")
+        ) {
+          console.error(
+            "[indexer] database unreachable — keepers cannot index tasks. " +
+              "For local dev set TURSO_DB_URL=file:./twiin.db in apps/backend/.env and restart.",
+          );
+        } else {
+          console.error("[indexer] error:", e);
+        }
       }
       await sleep(POLL_MS);
     }

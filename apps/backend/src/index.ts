@@ -14,6 +14,11 @@ const app = createApp();
 async function bootstrap(): Promise<void> {
   await ensureSchema();
 
+  const dbMode = env.TURSO_DB_URL.startsWith("file:")
+    ? `local (${env.TURSO_DB_URL})`
+    : "remote Turso";
+  console.log(`[twiin-backend] database: ${dbMode}`);
+
   if (!env.PLAN_SECRET) {
     console.warn(
       "[twiin-backend] WARNING: PLAN_SECRET is not set — POST /api/plan is unauthenticated. Set PLAN_SECRET in production.",

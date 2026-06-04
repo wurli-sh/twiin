@@ -148,6 +148,29 @@ describe("app routes", () => {
     const { createApp } = await loadApp();
     const res = await createApp({
       agents: {
+        readNextConfigId: vi.fn().mockResolvedValue(7n),
+        readAgent: vi.fn(async (configId: bigint) => ({
+          name: configId === 6n ? "discord-bot@twiin" : `native-${configId.toString()}`,
+          lane: configId === 6n ? 1 : 0,
+          capabilities:
+            configId === 6n
+              ? [
+                  "0xb9b830727b491d4493f6986755ce6f95e5b98aaeaadf5155bee13031e8a96670",
+                ]
+              : [],
+          costWei: 123n,
+          eloScore: 1200n,
+          isActive: true,
+          tasksCompleted: 2n,
+          tasksFailed: 1n,
+          avgLatencyMs: 45n,
+          trustTier: 1,
+          somniaAgentId: configId === 6n ? 0n : 99n,
+          registrant: "0xabc",
+          endpointHash: ("0x" + "44".repeat(32)) as `0x${string}`,
+          depositWei: 5000000000000000000n,
+          suspended: false,
+        })),
         listExternalAgents: vi.fn().mockResolvedValue([
           {
             config_id: "6",
@@ -169,12 +192,16 @@ describe("app routes", () => {
 
     expect(res.status).toBe(200);
     await expect(res.json()).resolves.toEqual({
-      agents: [
+      agents: expect.arrayContaining([
         expect.objectContaining({
-          config_id: "6",
+          configId: 6,
+          name: "discord-bot@twiin",
+          lane: "ExternalHTTP",
+          endpointUrl: "https://agent.example",
+          isVerified: true,
           capabilityNames: ["web.scrape.discord"],
         }),
-      ],
+      ]),
     });
   });
 
@@ -234,6 +261,15 @@ describe("app routes", () => {
     const res = await createApp({
       plan: {
         anthropic: { messages: { create } } as never,
+        readRequestDeposit: vi.fn().mockResolvedValue(30n),
+        readNextConfigId: vi.fn().mockResolvedValue(7n),
+        readAgent: vi.fn().mockResolvedValue({
+          lane: 1,
+          isActive: true,
+          suspended: false,
+          name: "analysis-bot@twiin",
+          costWei: 24n,
+        }),
         listExternalAgents: vi.fn().mockResolvedValue([]),
         savePlanRequest,
         addresses: {
@@ -253,7 +289,8 @@ describe("app routes", () => {
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body.steps).toHaveLength(1);
-    expect(body.estimatedCostWei).toBe("30");
+    expect(body.estimatedCostWei).toBe("24");
+    expect(body.steps[0].maxCostWei).toBe("24");
     expect(body.orchestrator).toBe("0x1234567890123456789012345678901234567890");
     expect(savePlanRequest).toHaveBeenCalledWith(
       "1",
@@ -293,6 +330,15 @@ describe("app routes", () => {
     const res = await createApp({
       plan: {
         anthropic: { messages: { create } } as never,
+        readRequestDeposit: vi.fn().mockResolvedValue(30n),
+        readNextConfigId: vi.fn().mockResolvedValue(7n),
+        readAgent: vi.fn().mockResolvedValue({
+          lane: 0,
+          isActive: true,
+          suspended: false,
+          name: "reporter-bot@twiin",
+          costWei: 50n,
+        }),
         listExternalAgents: vi.fn().mockResolvedValue([]),
         savePlanRequest: vi.fn(),
       },
@@ -309,7 +355,7 @@ describe("app routes", () => {
     expect(res.status).toBe(422);
     await expect(res.json()).resolves.toEqual({
       error: "planned step costs exceed task budget",
-      estimatedCostWei: "150",
+      estimatedCostWei: "180",
       budgetWei: "100",
     });
   });
@@ -338,6 +384,102 @@ describe("app routes", () => {
     await expect(res.json()).resolves.toEqual({ error: "planner failed" });
   });
 
+  it("rejects planner output with invalid somnia-oracle payloads before createTask", async () => {
+    const { createApp } = await loadApp();
+    const create = vi.fn().mockResolvedValue(
+      anthropicReply(
+        JSON.stringify([
+          {
+            configId: 2,
+            payload: "Daily Somnia sentiment oracle",
+            maxCostWei: "30",
+            timeoutSeconds: 90,
+          },
+        ]),
+      ),
+    );
+
+    const res = await createApp({
+      plan: {
+        anthropic: { messages: { create } } as never,
+        readRequestDeposit: vi.fn().mockResolvedValue(30n),
+        readNextConfigId: vi.fn().mockResolvedValue(7n),
+        readAgent: vi.fn().mockResolvedValue({
+          lane: 0,
+          isActive: true,
+          suspended: false,
+          name: "somnia-oracle@twiin",
+          costWei: 20n,
+        }),
+        listExternalAgents: vi.fn().mockResolvedValue([]),
+        savePlanRequest: vi.fn(),
+      },
+    }).request("/api/plan", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        goal: "daily sentiment oracle",
+        personalAgentId: "1",
+        budgetWei: "100",
+      }),
+    });
+
+    expect(res.status).toBe(422);
+    await expect(res.json()).resolves.toEqual({
+      error:
+        'somnia-oracle payload must be JSON: {"url":"https://…","selector":"dot.path"} or add "decimals":8 for prices',
+    });
+  });
+
+  it("accepts planner output with valid somnia-oracle payloads", async () => {
+    const { createApp } = await loadApp();
+    const savePlanRequest = vi.fn().mockResolvedValue(undefined);
+    const create = vi.fn().mockResolvedValue(
+      anthropicReply(
+        JSON.stringify([
+          {
+            configId: 2,
+            payload:
+              '{"url":"https://api.example.com/feed","path":"data.sentiment"}',
+            maxCostWei: "30",
+            timeoutSeconds: 90,
+          },
+        ]),
+      ),
+    );
+
+    const res = await createApp({
+      plan: {
+        anthropic: { messages: { create } } as never,
+        readRequestDeposit: vi.fn().mockResolvedValue(30n),
+        readNextConfigId: vi.fn().mockResolvedValue(7n),
+        readAgent: vi.fn().mockResolvedValue({
+          lane: 0,
+          isActive: true,
+          suspended: false,
+          name: "somnia-oracle@twiin",
+          costWei: 20n,
+        }),
+        listExternalAgents: vi.fn().mockResolvedValue([]),
+        savePlanRequest,
+      },
+    }).request("/api/plan", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        goal: "fetch sentiment feed",
+        personalAgentId: "1",
+        budgetWei: "100",
+      }),
+    });
+
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.steps).toHaveLength(1);
+    expect(body.estimatedCostWei).toBe("90");
+    expect(savePlanRequest).toHaveBeenCalledOnce();
+  });
+
   it("includes only verified external agents in planner context", async () => {
     const { createApp } = await loadApp();
     const create = vi.fn().mockResolvedValue(
@@ -356,6 +498,15 @@ describe("app routes", () => {
     const res = await createApp({
       plan: {
         anthropic: { messages: { create } } as never,
+        readRequestDeposit: vi.fn().mockResolvedValue(30n),
+        readNextConfigId: vi.fn().mockResolvedValue(7n),
+        readAgent: vi.fn(async (configId: bigint) => ({
+          lane: configId === 6n ? 1 : 0,
+          isActive: true,
+          suspended: false,
+          name: configId === 6n ? "discord-bot@twiin" : "bad-bot@twiin",
+          costWei: 30n,
+        })),
         listExternalAgents: vi.fn(async (options?: {
           activeOnly?: boolean;
           verifiedOnly?: boolean;
@@ -378,12 +529,6 @@ describe("app routes", () => {
             },
           ];
         }),
-        readAgent: vi.fn(async (configId: bigint) => ({
-          isActive: true,
-          suspended: false,
-          name: configId === 6n ? "discord-bot@twiin" : "bad-bot@twiin",
-          costWei: 30n,
-        })),
         savePlanRequest: vi.fn(),
       },
     }).request("/api/plan", {
@@ -408,6 +553,9 @@ describe("app routes", () => {
     const res = await createApp({
       plan: {
         anthropic: { messages: { create: vi.fn() } } as never,
+        readRequestDeposit: vi.fn(),
+        readNextConfigId: vi.fn(),
+        readAgent: vi.fn(),
         listExternalAgents: vi.fn().mockResolvedValue([]),
         savePlanRequest: vi.fn(),
         plannerBudgetGuard: {
@@ -449,6 +597,15 @@ describe("app routes", () => {
     const app = createApp({
       plan: {
         anthropic: { messages: { create } } as never,
+        readRequestDeposit: vi.fn().mockResolvedValue(30n),
+        readNextConfigId: vi.fn().mockResolvedValue(7n),
+        readAgent: vi.fn().mockResolvedValue({
+          lane: 1,
+          isActive: true,
+          suspended: false,
+          name: "analysis-bot@twiin",
+          costWei: 1n,
+        }),
         listExternalAgents: vi.fn().mockResolvedValue([]),
         savePlanRequest: vi.fn().mockResolvedValue(undefined),
       },
@@ -500,6 +657,15 @@ describe("app routes", () => {
     const app = createApp({
       plan: {
         anthropic: { messages: { create } } as never,
+        readRequestDeposit: vi.fn().mockResolvedValue(30n),
+        readNextConfigId: vi.fn().mockResolvedValue(7n),
+        readAgent: vi.fn().mockResolvedValue({
+          lane: 1,
+          isActive: true,
+          suspended: false,
+          name: "analysis-bot@twiin",
+          costWei: 1n,
+        }),
         listExternalAgents: vi.fn().mockResolvedValue([]),
         savePlanRequest: vi.fn().mockResolvedValue(undefined),
       },

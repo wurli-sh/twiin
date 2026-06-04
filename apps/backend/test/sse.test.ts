@@ -26,6 +26,24 @@ describe("sse", () => {
     });
   });
 
+  it("replays full history when Last-Event-ID is absent", async () => {
+    publish("88", "task_created", { taskId: "88" });
+    publish("88", "task_aborted", { taskId: "88", reason: "step failed" });
+
+    const stream = makeSseStream({} as never, "88");
+    const reader = stream.getReader();
+    let text = "";
+    for (let i = 0; i < 2; i++) {
+      const { value, done } = await reader.read();
+      if (done || !value) break;
+      text += new TextDecoder().decode(value);
+    }
+
+    expect(text).toContain("event: task_created");
+    expect(text).toContain("event: task_aborted");
+    await reader.cancel();
+  });
+
   it("replays missed events after Last-Event-ID", async () => {
     publish("77", "step_state", { taskId: "77", value: 1 });
     publish("77", "step_state", { taskId: "77", value: 2 });
