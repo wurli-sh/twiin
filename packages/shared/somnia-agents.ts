@@ -180,6 +180,14 @@ export function validateOraclePlannerPayload(
       'somnia-oracle: avoid array-index selectors like "coins.0.id" — they fail when the API returns no rows. Use a stable path on a direct endpoint, or use analysis-bot for research goals.',
     );
   }
+  if (
+    lowerUrl.includes("/simple/price") &&
+    !selector.includes(".")
+  ) {
+    throw new Error(
+      'somnia-oracle: CoinGecko /simple/price needs a leaf selector (e.g. "somnia.usd" with "decimals":8), not just "somnia" — the API returns an object, not a string.',
+    );
+  }
 }
 
 function encodeOraclePayload(parsed: Record<string, unknown>): Hex {
@@ -344,9 +352,28 @@ export function encodeStepPayload(
 }
 
 /**
+ * Parses `TaskCompleted` log data and decodes the Somnia step bytes (often ABI uint256/string).
+ * The contract emits `string(bytes)` so viem's string decode can truncate at NUL — prefer log `data`.
+ */
+export function decodeTaskCompletionFromLogData(logData: Hex): string | null {
+  const hex = logData.startsWith("0x") ? logData.slice(2) : logData;
+  if (hex.length < 128) return null;
+
+  const len = Number.parseInt(hex.slice(64, 128), 16);
+  if (!Number.isFinite(len) || len <= 0 || len > 4096) return null;
+
+  const bodyEnd = 128 + len * 2;
+  if (hex.length < bodyEnd) return null;
+
+  const body = `0x${hex.slice(128, bodyEnd)}` as Hex;
+  return decodeNativeAgentResult(body);
+}
+
+/**
  * Decodes a Somnia base-agent result (ABI-encoded string or uint256/int256).
  * Returns null when the bytes are empty or not a recognized ABI value.
  */
+
 export function decodeNativeAgentResult(resultHex: string | null | undefined): string | null {
   if (!resultHex || resultHex === "0x") return null;
 

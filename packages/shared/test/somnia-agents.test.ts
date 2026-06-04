@@ -7,6 +7,7 @@ import {
   LlmInferenceAgentAbi,
   encodeNativeAgentPayload,
   decodeNativeAgentResult,
+  decodeTaskCompletionFromLogData,
   validateOraclePlannerPayload,
 } from "../somnia-agents";
 
@@ -52,6 +53,15 @@ describe("encodeNativeAgentPayload", () => {
     ).toThrow(/search\/discovery/i);
   });
 
+  it("rejects coingecko simple/price with object-level selector", () => {
+    expect(() =>
+      encodeNativeAgentPayload(
+        NativeConfigId.ORACLE,
+        '{"url":"https://api.coingecko.com/api/v3/simple/price?ids=somnia&vs_currencies=usd","selector":"somnia"}',
+      ),
+    ).toThrow(/leaf selector/i);
+  });
+
   it("validateOraclePlannerPayload flags array-index selectors", () => {
     expect(() =>
       validateOraclePlannerPayload(
@@ -84,5 +94,17 @@ describe("decodeNativeAgentResult", () => {
 
   it("returns null for invalid bytes", () => {
     expect(decodeNativeAgentResult("0x01")).toBeNull();
+  });
+
+  it("decodes TaskCompleted log data (uint256 oracle price)", () => {
+    const logData =
+      "0x000000000000000000000000000000000000000000000000000000000000002000000000000000000000000000000000000000000000000000000000000000200000000000000000000000000000000000000000000000000000000000c512c8";
+    expect(decodeTaskCompletionFromLogData(logData)).toBe("12915400");
+  });
+
+  it("returns null when TaskCompleted log data is truncated", () => {
+    const logData =
+      "0x00000000000000000000000000000000000000000000000000000000000000200000000000000000000000000000000000000000000000000000000000000020";
+    expect(decodeTaskCompletionFromLogData(logData)).toBeNull();
   });
 });
