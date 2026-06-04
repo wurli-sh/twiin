@@ -8,6 +8,7 @@ import { HomePage } from '@/pages/HomePage'
 import { AgentsPage } from '@/pages/AgentsPage'
 import { ConsolePage } from '@/pages/ConsolePage'
 import { MarketplacePage } from '@/pages/MarketplacePage'
+import { FeedsPage } from '@/pages/FeedsPage'
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -49,6 +50,7 @@ export function App() {
               <Route path="/agents" element={<AgentsPage />} />
               <Route path="/console" element={<ConsolePage />} />
               <Route path="/marketplace" element={<MarketplacePage />} />
+              <Route path="/feeds" element={<FeedsPage />} />
               <Route path="*" element={<Navigate to="/" replace />} />
             </Route>
           </Routes>

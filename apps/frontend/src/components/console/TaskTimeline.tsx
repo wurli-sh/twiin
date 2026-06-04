@@ -1,6 +1,7 @@
 import { motion } from 'framer-motion'
 import { Activity, Radio } from 'lucide-react'
 import { streamEventLabel, type StreamEvent } from '@/hooks/useTaskStream'
+import { stepStateLabel } from '@/lib/task-state'
 import { cn } from '@/lib/cn'
 
 type TaskTimelineProps = {
@@ -11,7 +12,7 @@ type TaskTimelineProps = {
 
 function formatEventDetail(type: string, data: Record<string, unknown>): string {
   if (type === 'step_state' && data.state != null) {
-    return `step ${String(data.stepIdx ?? '?')} → state ${String(data.state)}`
+    return `step ${String(data.stepIdx ?? '?')} → ${stepStateLabel(Number(data.state))}`
   }
   if (type === 'task_completed' && data.result) {
     const r = String(data.result)

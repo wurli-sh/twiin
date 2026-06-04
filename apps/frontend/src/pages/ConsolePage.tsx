@@ -2,16 +2,19 @@ import { useState, useEffect } from 'react'
 import { motion } from 'framer-motion'
 import { Loader2, Send, Sparkles } from 'lucide-react'
 import { parseEther } from 'viem'
+import { AlertTriangle } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { AgentSelector } from '@/components/console/AgentSelector'
 import { PlanApproval } from '@/components/console/PlanApproval'
 import { TaskTimeline } from '@/components/console/TaskTimeline'
+import { TaskResult } from '@/components/console/TaskResult'
 import { TwiinAvatar } from '@/components/ui/TwiinAvatar'
 import { TextShimmer } from '@/components/ui/TextShimmer'
 import { ThinkingSpinner } from '@/components/ui/ThinkingSpinner'
 import { useTwiinAgents } from '@/hooks/useTwiinAgents'
 import { useCreateTask } from '@/hooks/useCreateTask'
 import { useTaskStream } from '@/hooks/useTaskStream'
+import { useTaskDetail } from '@/hooks/useTaskDetail'
 import { useWallet } from '@/hooks/useWallet'
 import { useUIStore } from '@/stores/ui'
 import { requestPlan, type PlanResponse } from '@/lib/plan-api'
@@ -37,12 +40,25 @@ export function ConsolePage() {
   const [isPlanning, setIsPlanning] = useState(false)
   const [isApproving, setIsApproving] = useState(false)
   const [activeTaskId, setActiveTaskId] = useState<string | null>(null)
+  const [detailVersion, setDetailVersion] = useState(0)
 
   const { submitCreateTask } = useCreateTask()
   const { events, connected } = useTaskStream(activeTaskId)
+  const { task: chainTask, steps: chainSteps } = useTaskDetail(activeTaskId, detailVersion)
 
   const agentId = selectedAgentId ?? agents[0]?.id.toString() ?? null
   const agent = agents.find((a) => a.id.toString() === agentId)
+
+  const budgetNum = Number(budgetStt)
+  const lowBalance =
+    agent && !Number.isNaN(budgetNum) && Number(agent.tbaBalance) < budgetNum
+
+  useEffect(() => {
+    const terminal = events.some(
+      (e) => e.type === 'task_completed' || e.type === 'task_aborted',
+    )
+    if (terminal) setDetailVersion((v) => v + 1)
+  }, [events])
 
   useEffect(() => {
     if (!selectedAgentId && agents[0]) {
@@ -214,6 +230,13 @@ export function ConsolePage() {
                   />
                   <span className="shrink-0 pr-3 text-xs font-semibold text-text-muted">STT</span>
                 </div>
+                {lowBalance && agent && (
+                  <p className="mt-1.5 flex items-center gap-1 text-xs text-warning">
+                    <AlertTriangle size={12} />
+                    Agent wallet holds {agent.tbaBalance} STT — fund it or lower the budget
+                    before approving.
+                  </p>
+                )}
               </label>
 
               <Button
@@ -256,6 +279,7 @@ export function ConsolePage() {
 
           {activeTaskId && (
             <>
+              <TaskResult task={chainTask} steps={chainSteps} />
               <TaskTimeline taskId={activeTaskId} events={events} connected={connected} />
               <Button
                 type="button"

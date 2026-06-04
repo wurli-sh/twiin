@@ -1,3 +1,4 @@
+import { useMemo } from 'react'
 import { motion } from 'framer-motion'
 import { Link } from 'react-router-dom'
 import { Terminal } from 'lucide-react'
@@ -5,10 +6,12 @@ import { cn } from '@/lib/cn'
 import { Tabs } from '@/components/ui/Tabs'
 import { DeployAgentPanel } from '@/components/agents/DeployAgentPanel'
 import { AgentList } from '@/components/agents/AgentList'
+import { TaskActivity } from '@/components/agents/TaskActivity'
 import { useUIStore } from '@/stores/ui'
 import { usePageReady } from '@/hooks/usePageReady'
 import { useWallet } from '@/hooks/useWallet'
 import { useTwiinAgents } from '@/hooks/useTwiinAgents'
+import { useAgentTasks } from '@/hooks/useAgentTasks'
 
 const TABS = [
   { label: 'My Agents', key: 'mine' },
@@ -46,6 +49,14 @@ export function AgentsPage() {
   const activeTab = useUIStore((s) => s.activeAgentsTab)
   const setActiveTab = useUIStore((s) => s.setActiveAgentsTab)
   const selectedAgentId = useUIStore((s) => s.selectedAgentId)
+
+  const agentIds = useMemo(() => agents.map((a) => a.id), [agents])
+  const {
+    tasks,
+    isLoading: tasksLoading,
+    error: tasksError,
+    refetchTasks,
+  } = useAgentTasks(agentIds)
 
   if (!ready) {
     return (
@@ -123,11 +134,23 @@ export function AgentsPage() {
             )}
 
             {activeTab === 'activity' && (
-              <div className="overflow-hidden rounded-xl border border-border py-16 text-center">
-                <p className="text-sm font-medium text-text-muted">
-                  Task activity feed — coming with Console
-                </p>
-              </div>
+              <>
+                {!isConnected ? (
+                  <div className="overflow-hidden rounded-xl border border-border py-16 text-center">
+                    <p className="text-sm font-medium text-text-muted">
+                      Connect wallet to view task history
+                    </p>
+                  </div>
+                ) : (
+                  <TaskActivity
+                    tasks={tasks}
+                    agents={agents}
+                    isLoading={tasksLoading}
+                    error={tasksError}
+                    onRefresh={() => void refetchTasks()}
+                  />
+                )}
+              </>
             )}
           </div>
         </motion.div>
