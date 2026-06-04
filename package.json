@@ -8,14 +8,18 @@
     "test": "pnpm --filter contracts test",
     "test:shared": "pnpm --filter @twiin/shared test",
     "test:backend": "pnpm --filter @twiin/backend test",
-    "test:all": "pnpm test && pnpm test:shared && pnpm test:backend",
+    "test:discord-bot": "pnpm --filter @twiin/discord-bot test",
+    "test:all": "pnpm test && pnpm test:shared && pnpm test:backend && pnpm test:discord-bot",
     "compile": "pnpm --filter contracts compile",
     "dev:backend": "pnpm --filter @twiin/backend dev",
+    "dev:discord-bot": "pnpm --filter @twiin/discord-bot dev",
     "dev:frontend": "pnpm --filter @twiin/frontend dev",
     "dev:all": "concurrently \"pnpm dev:backend\" \"pnpm dev:frontend\"",
     "start:backend": "pnpm --filter @twiin/backend start",
+    "start:discord-bot": "pnpm --filter @twiin/discord-bot start",
     "deploy:local": "pnpm --filter contracts deploy:local",
-    "deploy:somnia": "pnpm --filter contracts deploy:somnia"
+    "deploy:somnia": "pnpm --filter contracts deploy:somnia",
+    "register:discord-bot": "pnpm --filter @twiin/discord-bot register:somnia"
   },
   "devDependencies": {
     "concurrently": "^9.2.1"
