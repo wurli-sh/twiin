@@ -3,7 +3,7 @@
 Hardhat project targeting **Somnia Testnet** (chainId 50312) + local Hardhat node (chainId 31337).
 Part of the `twiin/` pnpm monorepo — consumed by `@twiin/shared`, `apps/backend`, and `apps/frontend`.
 
-**Status: Phase 1 complete — 85/85 tests passing.**
+**Status: Phase 1 complete — 91/91 tests passing.**
 
 ## Commands
 

@@ -28,17 +28,17 @@ src/
 ├── env.ts            — Zod-enforced env vars (KEEPER_PRIVATE_KEY, ANTHROPIC_API_KEY, SOMNIA_RPC_URL, TURSO_DB_URL, etc.)
 ├── sse.ts            — SSE pub/sub: subscribe(), publish(), publishAll(), makeSseStream(), heartbeat
 ├── budget.ts         — shared budget validation logic
-├── routes/
+├── routes/            — see src/routes/CLAUDE.md
 │   ├── plan.ts       — POST /api/plan — user goal → Claude Haiku → createTask calldata
 │   ├── tasks.ts      — GET /api/tasks/:taskId, GET /api/tasks/:taskId/steps
 │   ├── stream.ts     — GET /api/stream/:taskId — SSE real-time updates
 │   └── agents.ts     — GET /api/agents — list registered external agents
-└── keepers/
+└── keepers/           — see src/keepers/CLAUDE.md
     ├── indexer.ts    — polls events → SQLite + SSE; indexes external agent lifecycle (4s interval)
     ├── relay.ts      — routes assigned steps to Claude Sonnet (native) or HTTP POST (external) (4s interval)
     ├── rater.ts      — rates completed steps via Claude Haiku → rateStep on-chain (6s interval)
-    ├── externals.ts  — monitors ExternalAgentRequest → dispatches HTTP to registered endpoints
-    └── timeouts.ts   — monitors pending external steps → submits on-chain timeout at deadline
+    ├── externals.ts  — watches ExternalAgentRequest → dispatches HTTP to registered endpoints
+    └── timeouts.ts   — watches pending external steps → submits on-chain timeout at deadline
 ```
 
 ## Environment Variables (.env)
@@ -58,13 +58,27 @@ src/
 
 ## Keeper Details
 
-| Keeper    | File           | Poll  | Trigger                           | Action                                                      |
-| --------- | -------------- | ----- | --------------------------------- | ----------------------------------------------------------- |
-| Indexer   | `indexer.ts`   | 4s    | New block                         | Fetches events (task + external agent), upserts to SQLite, publishes SSE updates |
-| Relay     | `relay.ts`     | 4s    | `StepUpdated(Assigned)`           | Routes to Claude Sonnet (native) or HTTP POST (external); submits ECDSA result on-chain |
-| Rater     | `rater.ts`     | 6s    | `StepUpdated(Completed)`          | Rates via Claude Haiku; submits `rateStep` if score ≥ 40    |
-| Externals | `externals.ts` | 4s    | `ExternalAgentRequest`            | Sends HTTP POST to registered external agent endpoints       |
-| Timeouts  | `timeouts.ts`  | 6s    | `ExternalResultPending` (expired) | Calls `timeoutExternalStep` on-chain at deadline             |
+See `src/keepers/CLAUDE.md` for full details.
+
+| Keeper    | File           | Poll  | Trigger / Watch                                          | Action                                                      |
+| --------- | -------------- | ----- | -------------------------------------------------------- | ----------------------------------------------------------- |
+| Indexer   | `indexer.ts`   | 4s    | 10+ event types (TaskCreated, StepStateChanged, etc.)    | Upserts to SQLite, publishes SSE updates                    |
+| Relay     | `relay.ts`     | 4s    | `ExternalAgentRequest`                                   | HTTP POST (external) or Claude Sonnet (native); submits ECDSA result on-chain |
+| Rater     | `rater.ts`     | 6s    | `ExternalResultPending`                                  | Rates via Claude Haiku; submits `rateStep` if score ≥ 40    |
+| Externals | `externals.ts` | 4s    | `ExternalAgentRegistered` / `EndpointUpdated` / `Deregistered` | Syncs external agent metadata into SQLite cache       |
+| Timeouts  | `timeouts.ts`  | 5s    | Pending steps past deadline (any state)                  | Calls on-chain timeout fns (`timeoutExternalStep`, `timeoutTask`, etc.) |
+
+## Routes
+
+See `src/routes/CLAUDE.md` for full details.
+
+| Route | File | Endpoint | Method | Role |
+|-------|------|----------|--------|------|
+| Plan | `plan.ts` | `/api/plan` | POST | Claude Haiku planner → `createTask` calldata; rate-limited, optional auth |
+| Tasks | `tasks.ts` | `/api/tasks/:taskId` | GET | On-chain task state from `AgentOrchestrator.tasks()` |
+| Steps | `tasks.ts` | `/api/tasks/:taskId/steps` | GET | Indexed steps from SQLite |
+| Stream | `stream.ts` | `/api/stream/:taskId` | GET | SSE real-time updates with `Last-Event-ID` reconnection |
+| Agents | `agents.ts` | `/api/agents` | GET | Registered external agents; optional `?verified=true` filter |
 
 ## Architecture
 
@@ -75,4 +89,5 @@ User → POST /api/plan { goal, personalAgentId, budgetWei }
   → Relay keeper picks up StepUpdated(Assigned) → dispatches step
   → Rater keeper picks up StepUpdated(Completed) → rates → releases payment
   → Indexer keeps SSE streams updated for frontend
+  → Timeouts keeper catches any stalled steps past deadline
 ```

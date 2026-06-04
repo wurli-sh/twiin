@@ -8,9 +8,9 @@ Somnia Agentathon (Encode Club, May 18 – Jun 11 2026). Somnia Testnet chainId 
 
 | Phase               | Status      | Notes                                                    |
 | ------------------- | ----------- | -------------------------------------------------------- |
-| 1 — Contracts       | ✅ Complete | 85/85 tests passing                                      |
+| 1 — Contracts       | ✅ Complete | 91/91 tests passing                                      |
 | 2 — Shared package  | ✅ Complete | 22/22 vitest tests; ABIs, constants, digest, 6551 helper |
-| 3 — Backend         | ✅ Complete | Hono, Claude planner, keepers (4), SSE, SQLite           |
+| 3 — Backend         | ✅ Complete | Hono, Claude planner, keepers (5), SSE, SQLite           |
 | 4 — Frontend        | ✅ Complete | React/Vite/wagmi, deploy flow, task console, feeds       |
 | 5 — Discord Bot     | ✅ Complete | Hono webhook server, on-chain command registration       |
 | 6 — TrustlessJanice | ⬜ Gated    | Feature-flagged off until T2/T3/T4 testnet pass          |
@@ -23,14 +23,18 @@ Somnia Agentathon (Encode Club, May 18 – Jun 11 2026). Somnia Testnet chainId 
 | `pnpm test`          | runs `@twiin/contracts` tests (Hardhat)                      |
 | `pnpm test:shared`   | runs `@twiin/shared` tests (vitest)                          |
 | `pnpm test:backend`  | runs `@twiin/backend` tests (vitest)                         |
-| `pnpm test:all`      | runs contracts + shared + backend tests                      |
+| `pnpm test:discord-bot` | runs `@twiin/discord-bot` tests (vitest)                 |
+| `pnpm test:all`      | runs contracts + shared + backend + discord-bot tests        |
 | `pnpm compile`       | compiles `@twiin/contracts` (Hardhat)                        |
 | `pnpm deploy:local`  | deploy contracts to local Hardhat node                       |
 | `pnpm deploy:somnia` | deploy contracts to Somnia Testnet                           |
 | `pnpm dev:backend`   | `pnpm --filter @twiin/backend dev` (from `apps/backend/`)    |
 | `pnpm dev:frontend`  | `pnpm --filter @twiin/frontend dev` (from `apps/frontend/`)  |
+| `pnpm dev:discord-bot` | `pnpm --filter @twiin/discord-bot dev`                     |
 | `pnpm dev:all`       | concurrently runs backend + frontend dev servers             |
 | `pnpm start:backend` | `pnpm --filter @twiin/backend start` (from `apps/backend/`)  |
+| `pnpm start:discord-bot` | `pnpm --filter @twiin/discord-bot start`                 |
+| `pnpm register:discord-bot` | register demo external agent on-chain on Somnia        |
 
 ## Structure
 
@@ -45,6 +49,7 @@ twiin/
 │   └── discord-bot/ — Hono webhook, on-chain command registration ✅
 ├── .agents/         — Agent skill definitions (empty, for future use)
 ├── .codex/          — Codex metadata (empty, for future use)
+├── build-context.md — Compact project context for agent sessions
 ├── pnpm-workspace.yaml
 └── CLAUDE.md (this file)
 ```
@@ -150,12 +155,14 @@ twiin/
 | File | Role |
 |------|------|
 | `index.ts` | Entry point — Hono server, CORS, route mounting, keeper startup |
+| `app.ts` | Hono app factory with DI (routes, CORS, error handler) |
 | `clients.ts` | viem `publicClient`, `walletClient`, `keeperAccount` for Somnia Testnet |
-| `contracts.ts` | `getContract` instances for Orchestrator, Registry, TwiinAgent, OracleFeed |
+| `contracts.ts` | `getContract` instances + deployment manifest + boot block |
 | `db.ts` | Turso/Drizzle SQLite client + all query helpers |
 | `schema.ts` | Drizzle ORM schema: `keeperCursors`, `tasks`, `steps`, `planRequests`, `submittedResults`, `submittedRatings` |
 | `env.ts` | Zod-enforced env vars: `KEEPER_PRIVATE_KEY`, `ANTHROPIC_API_KEY`, `SOMNIA_RPC_URL`, `TURSO_DB_URL`, etc. |
 | `sse.ts` | SSE pub/sub — `subscribe()`, `publish()`, `publishAll()`, `makeSseStream()`, heartbeat |
+| `budget.ts` | Shared budget validation logic |
 
 ### `apps/backend/src/routes/` — Route Details
 
@@ -165,14 +172,17 @@ twiin/
 | Tasks | `tasks.ts` | `GET /api/tasks/:taskId` | Reads task state from on-chain `AgentOrchestrator.tasks()` |
 | Tasks Steps | `tasks.ts` | `GET /api/tasks/:taskId/steps` | Returns indexed steps from SQLite |
 | Stream | `stream.ts` | `GET /api/stream/:taskId` | SSE stream for real-time task execution updates |
+| Agents | `agents.ts` | `GET /api/agents` | Lists registered external agents from `AgentRegistry` |
 
 ### `apps/backend/src/keepers/` — Keeper Details
 
-| Keeper | File | Role |
-|--------|------|------|
-| Indexer | `indexer.ts` | Polls `TaskCreated`/`StepUpdated`/`TaskCompleted`/`TaskFailed` events; upserts into SQLite; publishes SSE updates; 4s poll interval |
-| Relay | `relay.ts` | Watches for `StepUpdated(Assigned)` → dispatches to Claude Sonnet for native steps or sends HTTP for external steps; submits ECDSA-signed results on-chain; 4s poll |
-| Rater | `rater.ts` | Watches for `StepUpdated(Completed)` → rates result via Claude Haiku; submits `rateStep` on-chain if score ≥ 40; 6s poll |
+| Keeper | File | Poll | Role |
+|--------|------|------|------|
+| Indexer | `indexer.ts` | 4s | Polls events (task + external agent lifecycle); upserts to SQLite; publishes SSE updates |
+| Relay | `relay.ts` | 4s | Routes `StepUpdated(Assigned)` → Claude Sonnet (native) or HTTP POST (external); submits ECDSA-signed result on-chain |
+| Rater | `rater.ts` | 6s | Rates `StepUpdated(Completed)` via Claude Haiku; submits `rateStep` on-chain if score ≥ 40 |
+| Externals | `externals.ts` | 4s | Monitors `ExternalAgentRequest` → dispatches HTTP POST to registered agent endpoints |
+| Timeouts | `timeouts.ts` | 6s | Monitors pending external steps → calls `timeoutExternalStep` on-chain at deadline |
 
 ### `packages/contracts/src/` — Contract Source Details
 
@@ -261,7 +271,7 @@ Phases 1–4: **ClaudePlan only** (Claude API plans). **TrustlessJanice** (valid
 - Solidity: 0.8.30, Cancun EVM, viaIR enabled, optimizer 200 runs
 - CEI (Checks-Effects-Interactions) pattern; `ReentrancyGuard` on all external state-mutating fns
 - All `.sol` sources under `packages/contracts/src/`
-- Contracts tests: Hardhat + chai + ethers v6 (hardhat-toolbox); 85 tests, all green
+- Contracts tests: Hardhat + chai + ethers v6 (hardhat-toolbox); 91 tests, all green
 - Shared tests: vitest 3.x; 22 parity tests, all green
 - No `dist` checked in; artifacts generated by `hardhat compile`
 - `packages/shared` is the single source of truth for ABIs, addresses, constants, digest helpers, 6551 helpers — no hand-copied fragments
