@@ -212,7 +212,7 @@ Available sub-agents (use their configId):
 - configId ${NativeConfigId.WEB_INTEL} (web-intel@twiin): Scrapes a web page and extracts data via LLM. payload=JSON {"url":"https://...","prompt":"what to extract"}.
   For a numeric field add "output":"number" (optional "min"/"max" as 0 to disable bounds). Only use when you know the exact HTTPS URL.
 - configId ${NativeConfigId.ORACLE} (somnia-oracle@twiin): Fetches a JSON API with a DIRECT endpoint (not search/discovery).
-  payload=JSON {"url":"https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd","selector":"bitcoin.usd","decimals":8} for prices.
+  payload=JSON {"url":"https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd","selector":"bitcoin.usd","decimals":8} for prices (selector MUST be a leaf path like coin.usd, never just the coin id).
   NEVER use /search? URLs or selectors like coins.0.id — they fail when the API returns empty results.
 - configId ${NativeConfigId.ANALYSIS} (analysis-bot@twiin): Analyzes text/data, produces insights. payload=plain text instruction
 - configId ${NativeConfigId.REPORTER} (reporter-bot@twiin): Writes a final report from data. payload=plain text instruction

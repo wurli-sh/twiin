@@ -92,6 +92,30 @@ describe("app routes", () => {
     });
   });
 
+  it("returns completion for completed tasks", async () => {
+    const { createApp } = await loadApp();
+    const res = await createApp({
+      tasks: {
+        readTask: vi
+          .fn()
+          .mockResolvedValue([0, 1n, 1, 750n, 120n, 0n, TaskState.Completed]),
+        fetchTaskCompletion: vi.fn().mockResolvedValue({
+          result: "\u00fd\u0012\u00fd",
+          decoded: "12915400",
+          blockNumber: "400226997",
+          transactionHash: "0x9f3cd5510d822f927aee3a9d5cfbc2dfd6b9d278b6444d98930ed6022f321f41",
+        }),
+      },
+    }).request("/api/tasks/2/completion");
+
+    expect(res.status).toBe(200);
+    await expect(res.json()).resolves.toMatchObject({
+      taskId: "2",
+      decoded: "12915400",
+      blockNumber: "400226997",
+    });
+  });
+
   it("returns 404 when task chain lookup fails", async () => {
     const { createApp } = await loadApp();
     const res = await createApp({

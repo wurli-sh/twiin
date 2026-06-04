@@ -190,6 +190,11 @@ export async function updateTaskState(
 
 // ── Steps ─────────────────────────────────────────────────────────────────────
 
+/** Drop advisory step rows when a task id is reused after redeploy (Turso survives redeploys). */
+export async function deleteStepsForTask(taskId: string): Promise<void> {
+  await db.delete(steps).where(eq(steps.taskId, taskId));
+}
+
 export async function upsertStep(
   taskId: string,
   stepIdx: number,

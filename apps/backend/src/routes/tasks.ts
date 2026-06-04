@@ -1,13 +1,21 @@
 import { Hono } from "hono";
 import { TaskState } from "@twiin/shared";
-import { orchestratorContract } from "../contracts";
+import { orchestratorContract, addresses, defaultStartBlock } from "../contracts";
+import { publicClient } from "../clients";
 import { getStepsForTask } from "../db";
+import {
+  fetchTaskCompletion,
+  type TaskCompletion,
+} from "../task-completion";
 
 export type TasksRouterDeps = {
   readTask: (taskId: bigint) => Promise<
     readonly [number, bigint, number, bigint, bigint, bigint, number]
   >;
   getStepsForTask: (taskId: string) => ReturnType<typeof getStepsForTask>;
+  fetchTaskCompletion: (
+    taskId: bigint,
+  ) => Promise<TaskCompletion | null>;
 };
 
 function bigintToStr(_: string, v: unknown) {
@@ -20,6 +28,13 @@ export function createTasksRouter(
   const deps: TasksRouterDeps = {
     readTask: (taskId) => orchestratorContract.read.tasks([taskId]),
     getStepsForTask,
+    fetchTaskCompletion: (taskId) =>
+      fetchTaskCompletion(
+        publicClient,
+        addresses.orchestrator,
+        taskId,
+        defaultStartBlock,
+      ),
     ...overrides,
   };
   const router = new Hono();
@@ -85,6 +100,36 @@ export function createTasksRouter(
 
     const steps = await deps.getStepsForTask(taskId);
     return c.json({ taskId, steps });
+  });
+
+  router.get("/:taskId/completion", async (c) => {
+    const taskId = c.req.param("taskId");
+    if (!/^[0-9]+$/.test(taskId)) {
+      return c.json({ error: "invalid taskId" }, 400);
+    }
+
+    let state: number;
+    try {
+      const raw = await deps.readTask(BigInt(taskId));
+      state = raw[6];
+    } catch (e) {
+      console.error("[tasks] chain read failed:", e);
+      return c.json({ error: "task not found" }, 404);
+    }
+
+    if (state !== TaskState.Completed) {
+      return c.json(
+        { error: "task not completed", state, stateName: TaskState[state] ?? "Unknown" },
+        404,
+      );
+    }
+
+    const completion = await deps.fetchTaskCompletion(BigInt(taskId));
+    if (!completion) {
+      return c.json({ error: "completion log not found" }, 404);
+    }
+
+    return c.json({ taskId, ...completion });
   });
 
   return router;

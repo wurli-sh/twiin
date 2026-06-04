@@ -4,6 +4,7 @@ import { publicClient } from "../clients";
 import { addresses, defaultStartBlock } from "../contracts";
 import {
   deactivateExternalAgent,
+  deleteStepsForTask,
   getExternalAgent,
   getCursor,
   setCursor,
@@ -74,6 +75,7 @@ type IndexerDeps = {
   upsertExternalAgent: typeof upsertExternalAgent;
   deactivateExternalAgent: typeof deactivateExternalAgent;
   upsertTask: typeof upsertTask;
+  deleteStepsForTask: typeof deleteStepsForTask;
   upsertStep: typeof upsertStep;
   updateTaskState: typeof updateTaskState;
   publish: typeof publish;
@@ -97,6 +99,7 @@ export function createIndexer(overrides: Partial<IndexerDeps> = {}) {
     upsertExternalAgent,
     deactivateExternalAgent,
     upsertTask,
+    deleteStepsForTask,
     upsertStep,
     updateTaskState,
     publish,
@@ -123,6 +126,7 @@ export function createIndexer(overrides: Partial<IndexerDeps> = {}) {
     for (const log of await load(taskCreatedEvent)) {
       const { taskId, personalAgentId, mode, budgetWei } = log.args;
       if (taskId == null || personalAgentId == null) continue;
+      await deps.deleteStepsForTask(taskId.toString());
       await deps.upsertTask(
         taskId.toString(),
         personalAgentId.toString(),
