@@ -1,0 +1,211 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Onest", "Outfit", sans-serif;
+
+  --color-primary: #9683ff;
+  --color-primary-hover: #7b65ff;
+  --color-secondary: #121214;
+  --color-accent: #00f2fe;
+  --color-bg: #0b0b0d;
+  --color-surface: #141417;
+  --color-surface-alt: #1a1a1f;
+  --color-surface-hover: #222228;
+  --color-text: #f3f4f6;
+  --color-text-muted: rgba(243, 244, 246, 0.6);
+  --color-text-faint: rgba(243, 244, 246, 0.35);
+  --color-border: rgba(243, 244, 246, 0.08);
+  --color-border-strong: rgba(243, 244, 246, 0.15);
+  --color-success: #10b981;
+  --color-danger: #ef4444;
+  --color-warning: #f59e0b;
+  --color-rank-gold: #fbbf24;
+  --color-rank-silver: #9ca3af;
+  --color-rank-bronze: #d97706;
+}
+
+body {
+  font-family: var(--font-sans);
+  background-color: var(--color-bg);
+  color: var(--color-text);
+  margin: 0;
+  overflow-x: hidden;
+}
+
+/* Page scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--color-border-strong);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-text-faint);
+}
+
+html {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-border-strong) transparent;
+}
+
+@keyframes shimmer {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+/* ── Chat animation keyframes ── */
+@keyframes pulse-opacity {
+  0%,
+  100% {
+    opacity: 0.4;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+@keyframes pulse-opacity-dim {
+  0%,
+  100% {
+    opacity: 0.15;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+@keyframes text-shimmer-sweep {
+  0% {
+    background-position: 100% center;
+  }
+  100% {
+    background-position: -100% center;
+  }
+}
+
+/* ── TextShimmer styling ── */
+[data-component="text-shimmer"] {
+  position: relative;
+  display: inline-block;
+}
+
+[data-slot="text-shimmer-char"] {
+  position: relative;
+  display: inline-grid;
+}
+
+[data-slot="text-shimmer-char"] > * {
+  grid-area: 1 / 1;
+}
+
+[data-slot="text-shimmer-char-base"] {
+  opacity: 1;
+  transition: opacity var(--text-shimmer-swap, 220ms) ease;
+}
+
+[data-active="true"] [data-slot="text-shimmer-char-base"] {
+  opacity: 0.4;
+}
+
+[data-slot="text-shimmer-char-shimmer"] {
+  opacity: 0;
+  transition: opacity var(--text-shimmer-swap, 220ms) ease;
+  background: linear-gradient(
+    90deg,
+    currentColor 0%,
+    var(--color-primary) 50%,
+    currentColor 100%
+  );
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+[data-slot="text-shimmer-char-shimmer"][data-run="true"] {
+  opacity: 1;
+  animation: text-shimmer-sweep 1.2s ease-in-out infinite;
+}
+
+/* ── ThinkingSpinner size ── */
+[data-component="spinner"] {
+  width: 1em;
+  height: 1em;
+}
+
+/* ── Chat scrollbar ── */
+.scrollbar-custom::-webkit-scrollbar {
+  display: block;
+  width: 4px;
+}
+
+.scrollbar-custom::-webkit-scrollbar-thumb {
+  background: var(--color-border-strong);
+  border-radius: 2px;
+}
+
+.scrollbar-custom {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-border-strong) transparent;
+}
+
+/* ── Chat markdown ── */
+.chat-markdown p {
+  margin: 0.25em 0;
+}
+.chat-markdown p:first-child {
+  margin-top: 0;
+}
+.chat-markdown p:last-child {
+  margin-bottom: 0;
+}
+.chat-markdown ul,
+.chat-markdown ol {
+  margin: 0.5em 0;
+  padding-left: 1.25em;
+}
+.chat-markdown li {
+  margin: 0.15em 0;
+}
+.chat-markdown strong {
+  font-weight: 600;
+}
+.chat-markdown code {
+  background: var(--color-surface-alt);
+  padding: 0.1em 0.35em;
+  border-radius: 3px;
+  font-size: 0.875em;
+}
+.chat-markdown pre {
+  background: var(--color-surface-alt);
+  padding: 0.75em 1em;
+  border-radius: 6px;
+  overflow-x: auto;
+  margin: 0.5em 0;
+}
+.chat-markdown table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 0.5em 0;
+  font-size: 0.875em;
+}
+.chat-markdown th,
+.chat-markdown td {
+  padding: 0.35em 0.5em;
+  border-bottom: 1px solid var(--color-border-strong);
+  text-align: left;
+}
+.chat-markdown th {
+  font-weight: 600;
+}
