@@ -13,10 +13,12 @@ import { addresses, defaultStartBlock } from "../contracts";
 import {
   deactivateExternalAgent,
   deleteStepsForTask,
+  deleteTaskArtifactsForTask,
   finalizeTaskSteps,
   getExternalAgent,
   getCursor,
   getStep,
+  getStepsForTask,
   patchTrustlessTask,
   setCursor,
   updateTaskState,
@@ -125,10 +127,12 @@ type IndexerDeps = {
   setCursor: (name: string, block: bigint) => Promise<void>;
   getExternalAgent: typeof getExternalAgent;
   getStep: typeof getStep;
+  getStepsForTask: typeof getStepsForTask;
   upsertExternalAgent: typeof upsertExternalAgent;
   deactivateExternalAgent: typeof deactivateExternalAgent;
   upsertTask: typeof upsertTask;
   deleteStepsForTask: typeof deleteStepsForTask;
+  deleteTaskArtifactsForTask: typeof deleteTaskArtifactsForTask;
   finalizeTaskSteps: typeof finalizeTaskSteps;
   upsertStep: typeof upsertStep;
   updateTaskState: typeof updateTaskState;
@@ -161,10 +165,12 @@ export function createIndexer(overrides: Partial<IndexerDeps> = {}) {
     setCursor,
     getExternalAgent,
     getStep,
+    getStepsForTask,
     upsertExternalAgent,
     deactivateExternalAgent,
     upsertTask,
     deleteStepsForTask,
+    deleteTaskArtifactsForTask,
     finalizeTaskSteps,
     upsertStep,
     updateTaskState,
@@ -233,7 +239,7 @@ export function createIndexer(overrides: Partial<IndexerDeps> = {}) {
     for (const log of taskCreatedLogs) {
       const { taskId, personalAgentId, mode, budgetWei } = log.args;
       if (taskId == null || personalAgentId == null) continue;
-      await deps.deleteStepsForTask(taskId.toString());
+      await deps.deleteTaskArtifactsForTask(taskId.toString());
       await deps.upsertTask(
         taskId.toString(),
         personalAgentId.toString(),
@@ -289,6 +295,11 @@ export function createIndexer(overrides: Partial<IndexerDeps> = {}) {
         taskId: taskId.toString(),
         goal,
         maxIterations,
+      });
+      logTaskTimeline("trustless_janice_pending", {
+        taskId: taskId.toString(),
+        maxIterations: Number(maxIterations ?? 0),
+        note: "First Janice inferToolsChat round submitted; awaiting Somnia Agents API callback",
       });
     }
 
@@ -467,6 +478,9 @@ export function createIndexer(overrides: Partial<IndexerDeps> = {}) {
       if (taskId == null) continue;
       await deps.updateTaskState(taskId.toString(), TaskState.Completed);
       await deps.finalizeTaskSteps(taskId.toString(), StepState.Succeeded);
+      await deps.patchTrustlessTask(taskId.toString(), {
+        awaiting: TrustlessAwaiting.Done,
+      });
       const resultText = typeof result === "string" ? result : undefined;
       const decodedResult =
         (log.data ? decodeTaskCompletionFromLogData(log.data as `0x${string}`) : null) ??
@@ -488,6 +502,9 @@ export function createIndexer(overrides: Partial<IndexerDeps> = {}) {
         taskId.toString(),
         abortReasonToStepState(reason),
       );
+      await deps.patchTrustlessTask(taskId.toString(), {
+        awaiting: TrustlessAwaiting.Done,
+      });
       deps.publish(taskId.toString(), "task_aborted", {
         taskId: taskId.toString(),
         reason,
@@ -513,14 +530,18 @@ export function createIndexer(overrides: Partial<IndexerDeps> = {}) {
         finishReason:
           typeof finishReason === "string" ? finishReason : decoded?.finishReason ?? "error",
         assistantMessage: decoded?.assistantMessage ?? "",
-        toolCallsJson: JSON.stringify(decoded?.toolCalls ?? []),
+        toolCallsJson: JSON.stringify({
+          toolCalls: decoded?.toolCalls ?? [],
+          updatedRoles: decoded?.updatedRoles ?? [],
+          updatedMessages: decoded?.updatedMessages ?? [],
+          pendingToolCallIds: decoded?.pendingToolCallIds ?? [],
+        }),
         rawResultHex: callback?.resultHex ?? null,
         transcriptHash: transcriptHash?.toString() ?? null,
       });
       await deps.patchTrustlessTask(taskId.toString(), {
         iterations: Number(iteration),
         janiceRequestId: requestId.toString(),
-        awaiting: TrustlessAwaiting.Janice,
       });
       deps.publish(taskId.toString(), "janice_iteration", {
         taskId: taskId.toString(),
@@ -551,10 +572,38 @@ export function createIndexer(overrides: Partial<IndexerDeps> = {}) {
     for (const log of janiceResumeQueuedLogs) {
       const { taskId, nextIteration, reason } = log.args;
       if (taskId == null || nextIteration == null) continue;
+      const resumeReason = typeof reason === "string" ? reason : null;
       await deps.patchTrustlessTask(taskId.toString(), {
         awaiting: TrustlessAwaiting.Resume,
-        lastResumeReason: typeof reason === "string" ? reason : null,
+        lastResumeReason: resumeReason,
       });
+      if (resumeReason === "step_succeeded" || resumeReason === "step_failed") {
+        const taskIdStr = taskId.toString();
+        const steps = await deps.getStepsForTask(taskIdStr);
+        const settledStep = [...steps]
+          .filter(
+            (step) =>
+              step.state === StepState.RunningNative ||
+              step.state === StepState.Pending,
+          )
+          .sort((a, b) => b.step_idx - a.step_idx)[0];
+        if (settledStep) {
+          await deps.upsertStep(
+            taskIdStr,
+            settledStep.step_idx,
+            settledStep.config_id,
+            settledStep.timeout_seconds,
+            resumeReason === "step_succeeded"
+              ? StepState.Succeeded
+              : StepState.Failed,
+            settledStep.payload,
+            settledStep.req_id,
+            settledStep.result_hex,
+            settledStep.score,
+            settledStep.deadline,
+          );
+        }
+      }
       deps.publish(taskId.toString(), "janice_resume_queued", {
         taskId: taskId.toString(),
         nextIteration,
@@ -778,6 +827,19 @@ async function loadTaskStepsFromTransaction(
   }
 }
 
+const AgentsApiFulfillAbi = [
+  {
+    type: "function",
+    name: "fulfill",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "reqId", type: "uint256" },
+      { name: "result", type: "bytes" },
+    ],
+    outputs: [],
+  },
+] as const;
+
 async function loadTrustlessCallbackFromTransaction(
   deps: Pick<IndexerDeps, "getTransaction">,
   hash: `0x${string}` | null,
@@ -785,6 +847,18 @@ async function loadTrustlessCallbackFromTransaction(
   if (!hash) return null;
   try {
     const tx = await deps.getTransaction(hash);
+    try {
+      const fulfill = decodeFunctionData({
+        abi: AgentsApiFulfillAbi,
+        data: tx.input,
+      });
+      if (fulfill.functionName === "fulfill" && fulfill.args?.[1]) {
+        return { resultHex: fulfill.args[1] as `0x${string}` };
+      }
+    } catch {
+      /* try orchestrator callback shape */
+    }
+
     const decoded = decodeFunctionData({
       abi: AgentOrchestratorAbi,
       data: tx.input,

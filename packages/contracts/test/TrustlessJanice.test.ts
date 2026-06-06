@@ -1,7 +1,6 @@
 import { expect } from "chai";
 import { ethers } from "hardhat";
 import { deployAll, deriveTwiinAccount } from "./helpers";
-import type { TwiinAccount } from "../typechain-types";
 
 async function setupAgent() {
   const d = await deployAll({ useMockApi: true });
@@ -21,42 +20,50 @@ async function setupAgent() {
   return { d, user, agentId, acct };
 }
 
+const toolIface = ethers.Interface.from([
+  "function hireSubAgent(uint256,bytes,uint256,uint32)",
+  "function completeTrustlessTask(string)",
+]);
+
 function encodeTrustlessResult(
   finishReason: string,
-  toolNames: string[] = [],
-  toolArgs: string[] = [],
-  assistantMessage = "",
+  pendingToolCalls: string[] = [],
+  response = "",
 ) {
   return ethers.AbiCoder.defaultAbiCoder().encode(
-    ["string", "string[]", "bytes[]", "string"],
-    [finishReason, toolNames, toolArgs, assistantMessage],
+    ["string", "string", "string[]", "string[]", "string[]", "bytes[]"],
+    [finishReason, response, [], [], [], pendingToolCalls],
   );
 }
 
-function encodeHireSubAgent(
+function encodeHireSubAgentCalldata(
   configId: bigint,
   payload = "0x",
   maxCostWei = ethers.parseEther("0.5"),
   timeoutSeconds = 900,
 ) {
-  return ethers.AbiCoder.defaultAbiCoder().encode(
-    ["uint256", "bytes", "uint256", "uint32"],
-    [configId, payload, maxCostWei, timeoutSeconds],
-  );
+  return toolIface.encodeFunctionData("hireSubAgent", [
+    configId,
+    payload,
+    maxCostWei,
+    timeoutSeconds,
+  ]);
 }
 
-function encodeComplete(result: string) {
-  return ethers.AbiCoder.defaultAbiCoder().encode(["string"], [result]);
+function encodeCompleteCalldata(result: string) {
+  return toolIface.encodeFunctionData("completeTrustlessTask", [result]);
 }
 
 function encodeInferToolsChatPayload() {
   return ethers.Interface.from([
-    "function inferToolsChat(string,string,string,uint8)",
+    "function inferToolsChat(string[],string[],string[],(string,string)[],uint256,bool)",
   ]).encodeFunctionData("inferToolsChat", [
-    "You are Janice.",
-    '[{"role":"user","content":"resume"}]',
-    '[{"name":"completeTrustlessTask"}]',
+    ["system", "user"],
+    ["You are Janice.", "resume"],
+    [],
+    [[ "completeTrustlessTask(string)", "Finish task" ]],
     8,
+    false,
   ]);
 }
 
@@ -82,7 +89,7 @@ describe("AgentOrchestrator — TrustlessJanice", () => {
     expect(trustless.janiceRequestId).to.equal(1n);
   });
 
-  it("escapes quotes and newlines in the initial janice message payload", async () => {
+  it("encodes the initial janice payload with Somnia inferToolsChat ABI", async () => {
     const { d, user, agentId, acct } = await setupAgent();
     const budget = ethers.parseEther("1");
     const orchAddr = await d.orchestrator.getAddress();
@@ -104,13 +111,14 @@ describe("AgentOrchestrator — TrustlessJanice", () => {
       data: reqLog!.data,
     });
     const payload = decoded!.args.payload as string;
-    const selector = payload.slice(0, 10);
     const iface = ethers.Interface.from([
-      "function inferToolsChat(string,string,string,uint8)",
+      "function inferToolsChat(string[],string[],string[],(string,string)[],uint256,bool)",
     ]);
     const decodedCall = iface.decodeFunctionData("inferToolsChat", payload);
-    expect(selector).to.equal(iface.getFunction("inferToolsChat")!.selector);
-    expect(decodedCall[1]).to.equal('[{"role":"user","content":"say \\"gm\\"\\nthen continue"}]');
+    expect(decodedCall[0]).to.deep.equal(["system", "user"]);
+    expect(decodedCall[1][1]).to.equal(goal);
+    expect(decodedCall[4]).to.equal(8n);
+    expect(decodedCall[5]).to.equal(false);
   });
 
   it("runs janice -> hireSubAgent -> resume -> complete", async () => {
@@ -127,11 +135,7 @@ describe("AgentOrchestrator — TrustlessJanice", () => {
 
     await mockApi.fulfill(
       1n,
-      encodeTrustlessResult(
-        "tool_calls",
-        ["hireSubAgent"],
-        [encodeHireSubAgent(2n, "0x", ethers.parseEther("0.5"), 900)],
-      ),
+      encodeTrustlessResult("tool_calls", [encodeHireSubAgentCalldata(2n)]),
     );
 
     let trustless = await d.orchestrator.trustlessCtx(1n);
@@ -155,11 +159,7 @@ describe("AgentOrchestrator — TrustlessJanice", () => {
 
     await mockApi.fulfill(
       3n,
-      encodeTrustlessResult(
-        "tool_calls",
-        ["completeTrustlessTask"],
-        [encodeComplete("trustless-done")],
-      ),
+      encodeTrustlessResult("tool_calls", [encodeCompleteCalldata("trustless-done")]),
     );
 
     const task = await d.orchestrator.tasks(1n);
@@ -189,6 +189,39 @@ describe("AgentOrchestrator — TrustlessJanice", () => {
     expect(task.state).to.equal(3n);
   });
 
+  it("allows stop on the eighth callback instead of aborting immediately", async () => {
+    const { d, user, acct, agentId } = await setupAgent();
+    const budget = ethers.parseEther("2");
+    const orchAddr = await d.orchestrator.getAddress();
+    const janice = await d.agentRegistry.get(0);
+    const janiceCost =
+      (await d.mockApi!.getRequestDeposit()) + janice.costWei * 3n;
+
+    const calldata = d.orchestrator.interface.encodeFunctionData(
+      "createTrustlessTask",
+      [agentId, ethers.AbiCoder.defaultAbiCoder().encode(["string"], ["finish on last round"]), budget],
+    );
+    await acct.connect(user).execute(orchAddr, budget, calldata, 0);
+
+    let reqId = 1n;
+    for (let round = 0; round < 7; round++) {
+      await d.mockApi!.fulfill(reqId, encodeTrustlessResult("tool_calls", []));
+      const ctx = await d.orchestrator.trustlessCtx(1n);
+      expect(ctx.awaiting).to.equal(2n);
+      await d.orchestrator.connect(d.keeper).resumeTrustlessTask(
+        1n,
+        encodeInferToolsChatPayload(),
+        janiceCost,
+      );
+      reqId += 1n;
+    }
+
+    await d.mockApi!.fulfill(reqId, encodeTrustlessResult("stop", [], "final trustless result"));
+
+    const task = await d.orchestrator.tasks(1n);
+    expect(task.state).to.equal(2n);
+  });
+
   it("aborts instead of silently dropping tools after a pause-producing tool", async () => {
     const { d, user, acct, agentId } = await setupAgent();
     const budget = ethers.parseEther("1");
@@ -202,14 +235,10 @@ describe("AgentOrchestrator — TrustlessJanice", () => {
 
     await d.mockApi!.fulfill(
       1n,
-      encodeTrustlessResult(
-        "tool_calls",
-        ["hireSubAgent", "completeTrustlessTask"],
-        [
-          encodeHireSubAgent(2n, "0x", ethers.parseEther("0.5"), 900),
-          encodeComplete("should-never-run"),
-        ],
-      ),
+      encodeTrustlessResult("tool_calls", [
+        encodeHireSubAgentCalldata(2n),
+        encodeCompleteCalldata("should-never-run"),
+      ]),
     );
 
     const task = await d.orchestrator.tasks(1n);

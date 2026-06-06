@@ -1,6 +1,7 @@
 import { StepState, TaskState } from "@twiin/shared";
 import { orchestratorContract } from "../contracts";
 import {
+  clearStepDeadline,
   getTimedOutSteps,
   listRunningTaskIds,
 } from "../db";
@@ -9,6 +10,7 @@ import { logTaskTimeline } from "../task-log";
 const POLL_MS = 5_000;
 
 type TimeoutDeps = {
+  clearStepDeadline: typeof clearStepDeadline;
   getTimedOutSteps: typeof getTimedOutSteps;
   readNextTaskId: () => Promise<bigint>;
   readTask: (
@@ -24,6 +26,7 @@ type TimeoutDeps = {
 
 export function createTimeoutKeeper(overrides: Partial<TimeoutDeps> = {}) {
   const deps: TimeoutDeps = {
+    clearStepDeadline,
     getTimedOutSteps,
     readNextTaskId: () => orchestratorContract.read.nextTaskId(),
     readTask: (taskId) => orchestratorContract.read.tasks([taskId]),
@@ -58,6 +61,9 @@ export function createTimeoutKeeper(overrides: Partial<TimeoutDeps> = {}) {
           await deps.timeoutNativeStep([taskId, step.step_idx]);
         }
       } catch (error) {
+        if (isNotTimedOutError(error)) {
+          await deps.clearStepDeadline(step.task_id, step.step_idx);
+        }
         deps.logger.warn(
           `[timeouts] step timeout skipped task=${step.task_id} step=${step.step_idx}: ${String(error)}`,
         );
@@ -109,6 +115,10 @@ export function createTimeoutKeeper(overrides: Partial<TimeoutDeps> = {}) {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isNotTimedOutError(error: unknown): boolean {
+  return String(error).includes("NotTimedOut()");
 }
 
 const defaultTimeoutKeeper = createTimeoutKeeper();

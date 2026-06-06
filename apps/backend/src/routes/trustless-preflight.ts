@@ -1,11 +1,22 @@
 import { Hono } from "hono";
 import { formatEther } from "viem";
 import { z } from "zod";
-import { NativeConfigId, encodeCreateTrustlessTask } from "@twiin/shared";
-import { addresses, agentRegistryContract, deployment } from "../contracts";
+import { MAX_JANICE_ITERATIONS, NativeConfigId, encodeCreateTrustlessTask } from "@twiin/shared";
+import {
+  addresses,
+  agentRegistryContract,
+  capabilityNameById,
+  deployment,
+} from "../contracts";
 import { publicClient } from "../clients";
+import { listExternalAgents } from "../db";
 import { env, type Env } from "../env";
-import { computeJaniceCostWei, minimumTrustlessBudgetWei } from "../trustless";
+import {
+  buildTrustlessAgentContext,
+  computeJaniceCostWei,
+  estimateTrustlessBudget,
+  exactNativeStepCostWei,
+} from "../trustless";
 
 const TrustlessPreflightSchema = z.object({
   goal: z.string().min(1).max(2000),
@@ -27,7 +38,15 @@ export type TrustlessPreflightDeps = {
   env: Env;
   orchestrator: `0x${string}`;
   readJaniceAgent: () => Promise<{ isActive: boolean; suspended: boolean; costWei: bigint }>;
+  readAgent: (configId: bigint) => Promise<{
+    name: string;
+    costWei: bigint;
+    isActive: boolean;
+    suspended: boolean;
+  }>;
   readRequestDeposit: () => Promise<bigint>;
+  listExternalAgents: typeof listExternalAgents;
+  capabilityNameById: Map<string, string>;
 };
 
 export function createTrustlessPreflightRouter(
@@ -44,12 +63,15 @@ export function createTrustlessPreflightRouter(
         costWei: raw.costWei,
       };
     },
+    readAgent: (configId) => agentRegistryContract.read.get([configId]),
     readRequestDeposit: () =>
       publicClient.readContract({
         address: deployment.agentsApi as `0x${string}`,
         abi: AgentsApiAbi,
         functionName: "getRequestDeposit",
       }),
+    listExternalAgents,
+    capabilityNameById,
     ...overrides,
   };
 
@@ -74,17 +96,54 @@ export function createTrustlessPreflightRouter(
 
     const requestDepositWei = await deps.readRequestDeposit();
     const janiceCostWei = computeJaniceCostWei(requestDepositWei, janiceAgent.costWei);
-    const minBudgetWei = minimumTrustlessBudgetWei(janiceCostWei);
+    const nativeAgentCostsByConfigId = new Map<number, bigint>();
+    for (const configId of [NativeConfigId.ORACLE, NativeConfigId.ANALYSIS, NativeConfigId.REPORTER]) {
+      try {
+        const agent = await deps.readAgent(BigInt(configId));
+        if (!agent.isActive || agent.suspended) continue;
+        nativeAgentCostsByConfigId.set(
+          configId,
+          exactNativeStepCostWei(requestDepositWei, agent.costWei),
+        );
+      } catch {
+        // Helpful for budgeting, but do not fail preflight if a native config read is unavailable.
+      }
+    }
+    const budgetEstimate = estimateTrustlessBudget({
+      goal,
+      janiceCostWei,
+      nativeAgentCostsByConfigId,
+    });
+    const minBudgetWei = budgetEstimate.minBudgetWei;
     if (budget < minBudgetWei) {
       return c.json(
         {
           error: "trustless budget below minimum",
           budgetWei,
           minBudgetWei: minBudgetWei.toString(),
+          recommendedBudgetWei: budgetEstimate.recommendedBudgetWei.toString(),
           janiceCostWei: janiceCostWei.toString(),
+          reason: budgetEstimate.reason,
         },
         422,
       );
+    }
+
+    let contextMessage = "";
+    try {
+      const externalAgents = (await deps.listExternalAgents({
+        activeOnly: true,
+        verifiedOnly: true,
+      }))
+        .sort((a, b) => Number(a.config_id) - Number(b.config_id))
+        .slice(0, 20);
+      contextMessage = await buildTrustlessAgentContext(
+        externalAgents,
+        deps.capabilityNameById,
+        deps.readAgent,
+      );
+    } catch {
+      // Registry context is helpful but non-fatal.
     }
 
     return c.json({
@@ -92,15 +151,18 @@ export function createTrustlessPreflightRouter(
       createTaskCalldata: encodeCreateTrustlessTask({
         personalAgentId: BigInt(personalAgentId),
         goal,
+        contextMessage,
         budgetWei: budget,
       }),
       budgetWei,
       minBudgetWei: minBudgetWei.toString(),
+      recommendedBudgetWei: budgetEstimate.recommendedBudgetWei.toString(),
       janiceCostWei: janiceCostWei.toString(),
-      maxIterations: 8,
+      maxIterations: MAX_JANICE_ITERATIONS,
       warnings: [
         `Trustless mode can spend up to ${formatEther(budget)} STT from the task escrow.`,
         `Each Janice round currently costs about ${formatEther(janiceCostWei)} STT.`,
+        budgetEstimate.reason,
       ],
     });
   });

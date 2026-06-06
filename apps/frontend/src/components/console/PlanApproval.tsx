@@ -6,6 +6,8 @@ import { PlanStepList } from './PlanStepList'
 import type { PlanResponse } from '@/lib/plan-api'
 import type { TwiinAgentInfo } from '@/hooks/useTwiinAgents'
 import type { PlanStatus } from '@/lib/console-session'
+import type { ExecutionMode } from '@/config/features'
+import { executionModeTheme } from '@/lib/execution-mode-theme'
 import { cn } from '@/lib/cn'
 
 const APPROVAL_SECONDS = 60
@@ -15,6 +17,7 @@ type PlanApprovalProps = {
   goal: string
   agent: TwiinAgentInfo
   status?: PlanStatus
+  executionMode?: ExecutionMode
   onApprove: () => Promise<void>
   onReject: (reason: 'user' | 'expired') => void
   isSubmitting: boolean
@@ -25,10 +28,12 @@ export function PlanApproval({
   goal,
   agent,
   status = 'pending',
+  executionMode = 'claude',
   onApprove,
   onReject,
   isSubmitting,
 }: PlanApprovalProps) {
+  const modeTheme = executionModeTheme(executionMode)
   const [secondsLeft, setSecondsLeft] = useState(APPROVAL_SECONDS)
   const expiredRef = useRef(false)
 
@@ -76,7 +81,7 @@ export function PlanApproval({
 
   if (status === 'approved') {
     return (
-      <div className="border border-primary/30 border-l-4 border-l-primary bg-success-soft/60 px-3 py-2.5 text-sm text-primary">
+      <div className={cn('px-3 py-2.5 text-sm', modeTheme.statusBar)}>
         Plan approved · {plan.steps.length} steps · {estStt} STT est.
       </div>
     )
@@ -91,7 +96,7 @@ export function PlanApproval({
   }
 
   return (
-    <div className="max-w-[92%] overflow-hidden border border-border-strong bg-card">
+    <div className={cn('max-w-[92%] overflow-hidden', modeTheme.agentCard)}>
       <div className="flex items-center justify-between gap-2 border-b border-border px-3 py-2.5">
         <div className="min-w-0">
           <p className="text-sm font-semibold text-foreground">Ready to execute</p>
@@ -102,7 +107,7 @@ export function PlanApproval({
             'flex shrink-0 items-center gap-1 px-2 py-0.5 text-xs font-bold tabular-nums',
             secondsLeft <= 10
               ? 'bg-destructive/15 text-destructive'
-              : 'bg-primary-bright/30 text-primary',
+              : cn(modeTheme.badge, 'font-bold'),
           )}
         >
           <Clock size={12} />
@@ -114,7 +119,11 @@ export function PlanApproval({
         <div
           className={cn(
             'h-full transition-all duration-1000 ease-linear',
-            secondsLeft <= 10 ? 'bg-destructive' : 'bg-primary',
+            secondsLeft <= 10
+              ? 'bg-destructive'
+              : executionMode === 'trustless'
+                ? 'bg-[var(--mode-trustless-accent)]'
+                : 'bg-[var(--mode-claude)]',
           )}
           style={{ width: `${pct}%` }}
         />
@@ -124,7 +133,7 @@ export function PlanApproval({
         <p className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
           Planned steps
         </p>
-        <PlanStepList steps={plan.steps} compact />
+        <PlanStepList steps={plan.steps} executionMode={executionMode} compact />
       </div>
 
       <div className="flex gap-2 border-t border-border px-3 py-2 text-sm text-muted-foreground">

@@ -19,7 +19,7 @@ export function MainLayout() {
             <Outlet />
           </div>
         ) : (
-          <div className="mx-auto h-full w-full max-w-7xl px-4 py-8 pt-6 sm:px-6">
+          <div className="mx-auto h-full w-full max-w-5xl px-4 py-8 pt-6 sm:px-6">
             <Outlet />
           </div>
         )}

@@ -65,6 +65,7 @@ contract AgentOrchestrator is
     uint256 public constant MAX_EXTERNAL_RESULT_SIZE = 16_384; // 16 KB
     uint256 public constant SUBCOMMITTEE_SIZE        = 3;
     uint8   public constant MAX_JANICE_ITERATIONS    = 8;
+    uint8   public constant INFER_TOOLS_CHAT_MAX_ITERATIONS = 8;
     uint256 public constant JANICE_CONFIG_ID         = 0;
 
     bytes32 public constant CAP_ONCHAIN_EXECUTE = keccak256("onchain.execute");
@@ -163,6 +164,20 @@ contract AgentOrchestrator is
         uint64 deadline;
         bytes32 intentHash;
     }
+
+    struct OnchainTool {
+        string signature;
+        string description;
+    }
+
+    bytes4 private constant SEL_HIRE_SUB_AGENT =
+        bytes4(keccak256("hireSubAgent(uint256,bytes,uint256,uint32)"));
+    bytes4 private constant SEL_COMPLETE_TRUSTLESS =
+        bytes4(keccak256("completeTrustlessTask(string)"));
+    bytes4 private constant SEL_PUBLISH_ORACLE =
+        bytes4(keccak256("publishOracle(uint256,string,string,uint8,uint256,uint256,bytes32)"));
+    bytes4 private constant SEL_RATE_SUB_AGENT =
+        bytes4(keccak256("rateSubAgent(uint256,uint32,uint8)"));
 
     mapping(uint256 => uint256) public taskLock;   // personalAgentId → activeTaskId; 0 = free
     mapping(uint256 => Task)    public tasks;
@@ -301,12 +316,7 @@ contract AgentOrchestrator is
         emit TaskCreated(taskId, personalAgentId, PlanMode.TrustlessJanice, budgetWei);
         emit TrustlessTaskIntent(taskId, goal, intentHash, ctx.maxIterations);
 
-        bytes memory payload = _encodeJanicePayload(
-            _trustlessSystemPrompt(),
-            _buildInitialMessagesJson(goal),
-            _trustlessOnchainToolsJson(),
-            ctx.maxIterations
-        );
+        bytes memory payload = _buildInitialJanicePayload(goal, ctx.maxIterations);
         _startJaniceRequest(taskId, payload);
     }
 
@@ -423,6 +433,7 @@ contract AgentOrchestrator is
         bytes memory result = success ? responses[0].result : bytes("");
         rt.state      = success ? StepState.Succeeded : StepState.Failed;
         rt.resultData = result;
+        emit StepStateChanged(ref.taskId, ref.stepIdx, rt.state);
 
         uint256 cfg = tasks[ref.taskId].steps[ref.stepIdx].subAgentConfigId;
         if (success) agentRegistry.recordSuccess(cfg, 0, 100);
@@ -452,16 +463,21 @@ contract AgentOrchestrator is
 
         (
             string memory finishReason,
-            string[] memory toolNames,
-            bytes[] memory toolArgs,
-            string memory assistantMessage
-        ) = abi.decode(responses[0].result, (string, string[], bytes[], string));
+            string memory assistantMessage,
+            ,
+            ,
+            ,
+            bytes[] memory pendingToolCalls
+        ) = abi.decode(
+            responses[0].result,
+            (string, string, string[], string[], string[], bytes[])
+        );
 
         ctx.iterations++;
         bytes32 transcriptHash = keccak256(responses[0].result);
         emit JaniceIteration(taskId, ctx.iterations, requestId, finishReason, transcriptHash);
 
-        if (_eq(finishReason, "max_iterations") || ctx.iterations >= ctx.maxIterations) {
+        if (_eq(finishReason, "max_iterations")) {
             _abortTask(taskId, "max iterations");
             return;
         }
@@ -476,19 +492,36 @@ contract AgentOrchestrator is
             return;
         }
 
-        if (toolNames.length != toolArgs.length) revert BadToolPayload();
         bool paused = false;
-        for (uint256 i = 0; i < toolNames.length; i++) {
+        for (uint256 i = 0; i < pendingToolCalls.length; i++) {
+            bytes memory toolCalldata = pendingToolCalls[i];
+            string memory toolName = _toolNameFromCalldata(toolCalldata);
+            bytes memory toolArgs = _toolArgsFromCalldata(toolCalldata);
             if (paused) {
+                if (
+                    _eq(toolName, "rateSubAgent") ||
+                    _eq(toolName, "publishOracle")
+                ) {
+                    bool postOk = _executeTrustlessTool(taskId, toolName, toolArgs, assistantMessage);
+                    emit JaniceToolExecuted(
+                        taskId,
+                        ctx.iterations,
+                        toolName,
+                        keccak256(toolArgs),
+                        postOk
+                    );
+                    if (!postOk || t.state != TaskState.Running) return;
+                    continue;
+                }
                 _abortTask(taskId, "unsupported post-pause tool");
                 return;
             }
-            bool ok = _executeTrustlessTool(taskId, toolNames[i], toolArgs[i], assistantMessage);
+            bool ok = _executeTrustlessTool(taskId, toolName, toolArgs, assistantMessage);
             emit JaniceToolExecuted(
                 taskId,
                 ctx.iterations,
-                toolNames[i],
-                keccak256(toolArgs[i]),
+                toolName,
+                keccak256(toolArgs),
                 ok
             );
             if (!ok || t.state != TaskState.Running) return;
@@ -500,6 +533,10 @@ contract AgentOrchestrator is
         if (paused) return;
 
         if (t.state == TaskState.Running && ctx.awaiting == TrustlessAwaiting.Janice) {
+            if (ctx.iterations >= ctx.maxIterations) {
+                _abortTask(taskId, "max iterations");
+                return;
+            }
             ctx.awaiting = TrustlessAwaiting.Resume;
             emit JaniceResumeQueued(taskId, ctx.iterations + 1, transcriptHash, "tool_batch_complete");
         }
@@ -876,6 +913,7 @@ contract AgentOrchestrator is
             t.runtime.push();
             uint8 stepIdx = uint8(t.steps.length - 1);
             emit TrustlessStepAppended(taskId, stepIdx, configId, payload, maxCostWei, timeoutSeconds);
+            t.cursor = stepIdx;
             ctx.awaiting = TrustlessAwaiting.Step;
             _dispatchStep(taskId);
             return true;
@@ -934,86 +972,72 @@ contract AgentOrchestrator is
     }
 
     function _trustlessSystemPrompt() internal pure returns (string memory) {
-        return "You are Janice, a trustless planner. Use on-chain tools or complete the task.";
+        return "You are Janice, a trustless planner on Twiin. Use the provided on-chain tools to hire sub-agents, publish oracle data, rate agents, or complete the task with a final result.";
     }
 
-    function _buildInitialMessagesJson(string memory goal) internal pure returns (string memory) {
-        return string(
-            abi.encodePacked(
-                '[{"role":"user","content":"',
-                _escapeJson(goal),
-                '"}]'
-            )
-        );
+    function _trustlessOnchainTools() internal pure returns (OnchainTool[] memory tools) {
+        tools = new OnchainTool[](4);
+        tools[0].signature = "hireSubAgent(uint256,bytes,uint256,uint32)";
+        tools[1].signature = "completeTrustlessTask(string)";
+        tools[2].signature = "publishOracle(uint256,string,string,uint8,uint256,uint256,bytes32)";
+        tools[3].signature = "rateSubAgent(uint256,uint32,uint8)";
+        tools[0].description = "Hire a registered sub-agent. Args: configId, ABI-encoded step payload, maxCostWei, timeoutSeconds.";
+        tools[1].description = "Finish the trustless task with a concise final user-facing result.";
+        tools[2].description = "Publish oracle feed data. Args: personalAgentId, topic, value, confidence, maxAgeSeconds, refreshInterval, templateHash.";
+        tools[3].description = "Rate a sub-agent. Args: configId, latencyMs, score (0-100).";
     }
 
-    function _trustlessOnchainToolsJson() internal pure returns (string memory) {
-        return '[{"name":"hireSubAgent"},{"name":"publishOracle"},{"name":"rateSubAgent"},{"name":"completeTrustlessTask"}]';
+    function _buildInitialJanicePayload(
+        string memory goal,
+        uint8 /* maxIterations */
+    ) internal pure returns (bytes memory) {
+        string[] memory roles = new string[](2);
+        roles[0] = "system";
+        roles[1] = "user";
+        string[] memory messages = new string[](2);
+        messages[0] = _trustlessSystemPrompt();
+        messages[1] = goal;
+        return _encodeJanicePayload(roles, messages);
     }
 
     function _encodeJanicePayload(
-        string memory systemPrompt,
-        string memory messagesJson,
-        string memory onchainToolsJson,
-        uint8 maxIterations
+        string[] memory roles,
+        string[] memory messages
     ) internal pure returns (bytes memory) {
+        string[] memory mcpUrls = new string[](0);
         return abi.encodeWithSignature(
-            "inferToolsChat(string,string,string,uint8)",
-            systemPrompt,
-            messagesJson,
-            onchainToolsJson,
-            maxIterations
+            "inferToolsChat(string[],string[],string[],(string,string)[],uint256,bool)",
+            roles,
+            messages,
+            mcpUrls,
+            _trustlessOnchainTools(),
+            uint256(INFER_TOOLS_CHAT_MAX_ITERATIONS),
+            false
         );
+    }
+
+    function _toolArgsFromCalldata(bytes memory toolCalldata) internal pure returns (bytes memory args) {
+        if (toolCalldata.length <= 4) return "";
+        args = new bytes(toolCalldata.length - 4);
+        for (uint256 i = 0; i < args.length; i++) {
+            args[i] = toolCalldata[i + 4];
+        }
+    }
+
+    function _toolNameFromCalldata(bytes memory toolCalldata) internal pure returns (string memory) {
+        if (toolCalldata.length < 4) return "unknown";
+        bytes4 sel;
+        assembly {
+            sel := mload(add(toolCalldata, 32))
+        }
+        if (sel == SEL_HIRE_SUB_AGENT) return "hireSubAgent";
+        if (sel == SEL_COMPLETE_TRUSTLESS) return "completeTrustlessTask";
+        if (sel == SEL_PUBLISH_ORACLE) return "publishOracle";
+        if (sel == SEL_RATE_SUB_AGENT) return "rateSubAgent";
+        return "unknown";
     }
 
     function _eq(string memory a, string memory b) internal pure returns (bool) {
         return keccak256(bytes(a)) == keccak256(bytes(b));
-    }
-
-    function _escapeJson(string memory value) internal pure returns (string memory) {
-        bytes memory src = bytes(value);
-        bytes memory out = new bytes(src.length * 6);
-        uint256 j = 0;
-
-        for (uint256 i = 0; i < src.length; i++) {
-            bytes1 c = src[i];
-            if (c == 0x22) {
-                out[j++] = 0x5c;
-                out[j++] = 0x22;
-            } else if (c == 0x5c) {
-                out[j++] = 0x5c;
-                out[j++] = 0x5c;
-            } else if (c == 0x08) {
-                out[j++] = 0x5c;
-                out[j++] = 0x62;
-            } else if (c == 0x0c) {
-                out[j++] = 0x5c;
-                out[j++] = 0x66;
-            } else if (c == 0x0a) {
-                out[j++] = 0x5c;
-                out[j++] = 0x6e;
-            } else if (c == 0x0d) {
-                out[j++] = 0x5c;
-                out[j++] = 0x72;
-            } else if (c == 0x09) {
-                out[j++] = 0x5c;
-                out[j++] = 0x74;
-            } else if (uint8(c) < 0x20) {
-                out[j++] = 0x5c;
-                out[j++] = 0x75;
-                out[j++] = 0x30;
-                out[j++] = 0x30;
-                uint8 hi = uint8(c) / 16;
-                uint8 lo = uint8(c) % 16;
-                out[j++] = hi < 10 ? bytes1(hi + 0x30) : bytes1(hi + 0x57);
-                out[j++] = lo < 10 ? bytes1(lo + 0x30) : bytes1(lo + 0x57);
-            } else {
-                out[j++] = c;
-            }
-        }
-
-        bytes memory trimmed = new bytes(j);
-        for (uint256 i = 0; i < j; i++) trimmed[i] = out[i];
-        return string(trimmed);
     }
 }

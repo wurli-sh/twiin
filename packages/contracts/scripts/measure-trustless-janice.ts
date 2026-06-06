@@ -55,19 +55,21 @@ type GateResults = {
 
 function encodeInferToolsChat(maxIterations: number): string {
   return ethers.Interface.from([
-    "function inferToolsChat(string,string,string,uint8)",
+    "function inferToolsChat(string[],string[],string[],(string,string)[],uint256,bool)",
   ]).encodeFunctionData("inferToolsChat", [
-    "Gate 0 probe",
-    '[{"role":"user","content":"ping"}]',
-    '[{"name":"completeTrustlessTask"}]',
+    ["system", "user"],
+    ["Gate 0 probe", "ping"],
+    [],
+    [["completeTrustlessTask(string)", "Finish task"]],
     maxIterations,
+    false,
   ]);
 }
 
 function encodeTrustlessResult(finishReason: string) {
   return ethers.AbiCoder.defaultAbiCoder().encode(
-    ["string", "string[]", "bytes[]", "string"],
-    [finishReason, [], [], ""],
+    ["string", "string", "string[]", "string[]", "string[]", "bytes[]"],
+    [finishReason, "", [], [], [], []],
   );
 }
 
@@ -78,14 +80,24 @@ function encodeHireSubAgent() {
   );
 }
 
+function encodeHireSubAgentCalldata(
+  configId: bigint,
+  payload = "0x",
+  maxCostWei = ethers.parseEther("0.5"),
+  timeoutSeconds = 900,
+) {
+  return ethers.Interface.from([
+    "function hireSubAgent(uint256,bytes,uint256,uint32)",
+  ]).encodeFunctionData("hireSubAgent", [configId, payload, maxCostWei, timeoutSeconds]);
+}
+
 function encodeTrustlessToolResult(
   finishReason: string,
-  toolNames: string[],
-  toolArgs: string[],
+  pendingToolCalls: string[],
 ) {
   return ethers.AbiCoder.defaultAbiCoder().encode(
-    ["string", "string[]", "bytes[]", "string"],
-    [finishReason, toolNames, toolArgs, ""],
+    ["string", "string", "string[]", "string[]", "string[]", "bytes[]"],
+    [finishReason, "", [], [], [], pendingToolCalls],
   );
 }
 
@@ -129,16 +141,7 @@ async function measureLocalGas(): Promise<GateResults["t3"]> {
 
   const janiceCallbackTx = await mockApi.fulfill(
     1n,
-    encodeTrustlessToolResult(
-      "tool_calls",
-      ["hireSubAgent"],
-      [
-        ethers.AbiCoder.defaultAbiCoder().encode(
-          ["uint256", "bytes", "uint256", "uint32"],
-          [2n, "0x", ethers.parseEther("0.5"), 900],
-        ),
-      ],
-    ),
+    encodeTrustlessToolResult("tool_calls", [encodeHireSubAgentCalldata(2n)]),
   );
   const janiceCallbackReceipt = await janiceCallbackTx.wait();
 

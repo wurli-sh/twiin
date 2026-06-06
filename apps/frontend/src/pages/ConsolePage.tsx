@@ -1,12 +1,10 @@
 import { useState, useEffect, useCallback } from 'react'
 import { motion } from 'framer-motion'
-import { SquarePen } from 'lucide-react'
 import { formatEther, parseEther } from 'viem'
 import { TranscriptPanel } from '@/components/console/TranscriptPanel'
 import { CommandBar } from '@/components/console/CommandBar'
-import { BudgetWarningsBar } from '@/components/console/BudgetWarningsBar'
+import { ConsoleTopBar } from '@/components/console/ConsoleTopBar'
 import { SuggestedPrompts } from '@/components/console/SuggestedPrompts'
-import { AgentSelector } from '@/components/console/AgentSelector'
 import { TwiinAvatar } from '@/components/ui/TwiinAvatar'
 import { TextLoop } from '@/components/ui/TextLoop'
 import { useTwiinAgents } from '@/hooks/useTwiinAgents'
@@ -25,6 +23,8 @@ import {
 } from '@/lib/trustless-api'
 import { maxTaskBudgetStt, perTaskCapStt } from '@/lib/agent-budget'
 import { ENABLE_TRUSTLESS_JANICE, type ExecutionMode } from '@/config/features'
+import { executionModeTheme } from '@/lib/execution-mode-theme'
+import { cn } from '@/lib/cn'
 import { type AgentStatusPhase } from '@/lib/agent-status-copy'
 import {
   createEntryId,
@@ -98,7 +98,9 @@ function appendResultForTask(
           chainSteps,
           planEntry?.kind === 'plan' ? planEntry.plan.steps : undefined,
         )
-      : null
+      : chainTask.state === TaskState.Completed
+        ? 'Task completed.'
+        : null
 
   if (!displayText) return entries
 
@@ -187,6 +189,8 @@ export function ConsolePage() {
   const submitDisabled = composerLocked || hasBudgetIssue
 
   const hasActivity = sessionEntries.length > 0
+  const modeTheme = executionModeTheme(executionMode)
+  const modeToggleDisabled = isPlanning || isApproving || hasActivity
 
   const appendEntry = useCallback((entry: SessionEntry) => {
     setSessionEntries((prev) => [...prev, entry])
@@ -525,14 +529,19 @@ export function ConsolePage() {
 
     setIsRaisingCaps(true)
     try {
+      const trustlessCap = executionMode === 'trustless' ? taskCap : Number(agent.maxPerTaskTrustless)
       await updatePolicy({
         agentId: agent.id,
         dailyCapStt: dailyCap.toFixed(1),
-        maxPerTaskStt: taskCap.toFixed(1),
-        maxPerTaskTrustlessWei: parseEther(agent.maxPerTaskTrustless),
+        maxPerTaskStt: executionMode === 'trustless' ? agent.maxPerTask : taskCap.toFixed(1),
+        maxPerTaskTrustlessWei: parseEther(trustlessCap.toFixed(1)),
         killSwitch: agent.killSwitch,
       })
-      toast.success(`Policy updated — ${taskCap.toFixed(1)} STT per task`)
+      toast.success(
+        executionMode === 'trustless'
+          ? `Policy updated — ${taskCap.toFixed(1)} STT per trustless task`
+          : `Policy updated — ${taskCap.toFixed(1)} STT per task`,
+      )
       await refetchAgents()
       setBudgetStt(nextBudget)
       const lastUser = [...sessionEntries].reverse().find((e) => e.kind === 'user')
@@ -618,7 +627,26 @@ export function ConsolePage() {
 
   return (
     <div className="flex h-full flex-col overflow-hidden">
-      <div className="mx-auto flex h-full w-full max-w-5xl flex-col px-4 sm:px-6">
+      <div className="mx-auto flex h-full w-full max-w-5xl flex-col">
+        <ConsoleTopBar
+          hasActivity={hasActivity}
+          executionMode={executionMode}
+          onExecutionModeChange={setExecutionMode}
+          agents={agents}
+          agentId={agentId}
+          agent={agent}
+          agentsLoading={agentsLoading}
+          onSelectAgent={setSelectedAgentId}
+          onNewSession={hasActivity ? handleNewTask : undefined}
+          lowBalance={Boolean(lowBalance)}
+          overPerTaskCap={Boolean(overPerTaskCap)}
+          overDailyCap={Boolean(overDailyCap)}
+          dailyRemaining={dailyRemaining}
+          maxPerTaskNum={maxPerTaskNum}
+          modeToggleDisabled={modeToggleDisabled}
+          agentSelectorDisabled={isPlanning || isApproving}
+        />
+
         {!hasActivity ? (
           <div className="flex flex-1 flex-col items-center justify-center px-4">
             <motion.div
@@ -627,51 +655,14 @@ export function ConsolePage() {
               transition={{ duration: 0.4, ease: [0.23, 1, 0.32, 1] }}
               className="mb-6 w-full text-center"
             >
-              <div className="mb-4 flex justify-center">
-                <AgentSelector
-                  agents={agents}
-                  selectedId={agentId}
-                  onSelect={setSelectedAgentId}
-                  loading={agentsLoading}
-                  disabled={isPlanning || isApproving}
-                />
-              </div>
-              {ENABLE_TRUSTLESS_JANICE && (
-                <div className="mb-4 flex justify-center">
-                  <div className="inline-flex overflow-hidden rounded-md border border-border-strong bg-card text-xs font-medium">
-                    <button
-                      type="button"
-                      className={`px-3 py-1.5 ${executionMode === 'claude' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground'}`}
-                      onClick={() => setExecutionMode('claude')}
-                      disabled={isPlanning || isApproving}
-                    >
-                      Claude Plan
-                    </button>
-                    <button
-                      type="button"
-                      className={`px-3 py-1.5 ${executionMode === 'trustless' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground'}`}
-                      onClick={() => setExecutionMode('trustless')}
-                      disabled={isPlanning || isApproving}
-                    >
-                      Trustless Janice
-                    </button>
-                  </div>
-                </div>
-              )}
-              <BudgetWarningsBar
-                agent={agent}
-                lowBalance={Boolean(lowBalance)}
-                overPerTaskCap={Boolean(overPerTaskCap)}
-                overDailyCap={Boolean(overDailyCap)}
-                dailyRemaining={dailyRemaining}
-                perTaskCapStt={maxPerTaskNum > 0 ? maxPerTaskNum.toFixed(2) : undefined}
-                className="mb-4"
-              />
               <h2 className="text-xl font-bold tracking-normal text-foreground sm:text-2xl">
                 Hey! What are we{' '}
                 <TextLoop
                   interval={2.5}
-                  className="rounded-md bg-primary-bright/30 px-2 py-0.5 font-mono text-primary tabular-nums"
+                  className={cn(
+                    'rounded-md px-2 py-0.5 font-mono tabular-nums',
+                    modeTheme.badge,
+                  )}
                 >
                   <span>oracling-now</span>
                   <span>speedrunning</span>
@@ -699,10 +690,10 @@ export function ConsolePage() {
                 </TextLoop>
                 {' '}today?
               </h2>
-              <p className="mt-1.5 text-sm text-muted-foreground">
+              <p className={cn('mt-1.5 text-sm', modeTheme.subtitle)}>
                 {executionMode === 'trustless'
                   ? 'Trustless mode submits directly after preflight and bypasses plan approval.'
-                  : 'Twiin — your autonomous agent on Somnia'}
+                  : 'Claude plans your steps — you approve, then keepers execute on Somnia.'}
               </p>
             </motion.div>
 
@@ -730,75 +721,6 @@ export function ConsolePage() {
           </div>
         ) : (
           <>
-            <div className="shrink-0 pt-2.5 pb-1">
-              <div className="flex items-center justify-between gap-2">
-                <button
-                  type="button"
-                  onClick={handleNewTask}
-                  className="flex cursor-pointer items-center gap-1.5 rounded-md border border-border-strong px-3 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:border-primary hover:bg-primary-bright/10 hover:text-primary"
-                >
-                  <SquarePen size={12} />
-                  New Session
-                </button>
-
-                <div className="flex items-center gap-2">
-                  {ENABLE_TRUSTLESS_JANICE && (
-                    <div className="inline-flex overflow-hidden rounded-md border border-border-strong bg-card text-xs font-medium">
-                      <button
-                        type="button"
-                        className={`px-2.5 py-1 ${executionMode === 'claude' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground'}`}
-                        onClick={() => setExecutionMode('claude')}
-                        disabled={isPlanning || isApproving || Boolean(activeTaskId && taskRunning)}
-                      >
-                        Claude
-                      </button>
-                      <button
-                        type="button"
-                        className={`px-2.5 py-1 ${executionMode === 'trustless' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground'}`}
-                        onClick={() => setExecutionMode('trustless')}
-                        disabled={isPlanning || isApproving || Boolean(activeTaskId && taskRunning)}
-                      >
-                        Trustless
-                      </button>
-                    </div>
-                  )}
-                  {agent && (
-                    <div className="hidden items-center gap-2 rounded-md border border-border-strong px-3 py-1.5 text-xs sm:flex">
-                      <div className="flex items-center gap-1.5">
-                        <div
-                          className={`size-1.5 rounded-full ${Number(agent.tbaBalance) > 0 ? 'bg-success' : 'bg-destructive'}`}
-                        />
-                        <span className="font-medium tabular-nums text-foreground">
-                          {agent.tbaBalance} STT
-                        </span>
-                      </div>
-                      <div className="h-3 w-px bg-border-strong" />
-                      <span className="text-muted-foreground">
-                        {dailyRemaining.toFixed(2)} STT daily left
-                      </span>
-                    </div>
-                  )}
-                  <AgentSelector
-                    agents={agents}
-                    selectedId={agentId}
-                    onSelect={setSelectedAgentId}
-                    loading={agentsLoading}
-                    disabled={isPlanning || isApproving}
-                    compact
-                  />
-                </div>
-              </div>
-              <BudgetWarningsBar
-                agent={agent}
-                lowBalance={Boolean(lowBalance)}
-                overPerTaskCap={Boolean(overPerTaskCap)}
-                overDailyCap={Boolean(overDailyCap)}
-                dailyRemaining={dailyRemaining}
-                perTaskCapStt={maxPerTaskNum > 0 ? maxPerTaskNum.toFixed(2) : undefined}
-                className="mt-2"
-              />
-            </div>
-
             <TranscriptPanel
               sessionEntries={sessionEntries}
               agent={agent}

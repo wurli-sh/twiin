@@ -9,6 +9,8 @@ import { TrustlessPreflightCard } from './TrustlessPreflightCard'
 import { TrustlessEventLine } from './TrustlessEventLine'
 import { isTrustlessStreamEvent } from '@/hooks/useTaskStream'
 import type { ExecutionMode } from '@/config/features'
+import { executionModeTheme } from '@/lib/execution-mode-theme'
+import { cn } from '@/lib/cn'
 import { TaskState } from '@/config/contracts'
 import {
   type SessionEntry,
@@ -39,7 +41,7 @@ type Props = {
   executionMode?: ExecutionMode
 }
 
-function UserBubble({ children }: { children: React.ReactNode }) {
+function UserBubble({ text, budgetStt }: { text: string; budgetStt: string }) {
   return (
     <motion.div
       initial={{ opacity: 0, y: 4 }}
@@ -48,7 +50,8 @@ function UserBubble({ children }: { children: React.ReactNode }) {
       className="mb-3 flex justify-end"
     >
       <div className="max-w-[82%] rounded-lg rounded-br-sm bg-charcoal px-3 py-2 text-sm leading-relaxed text-white">
-        {children}
+        <p className="whitespace-pre-wrap">{text}</p>
+        <p className="mt-0.5 text-xs text-white/45">{budgetStt} STT</p>
       </div>
     </motion.div>
   )
@@ -85,6 +88,7 @@ export function TranscriptPanel({
   onDismissMismatch,
   executionMode = 'claude',
 }: Props) {
+  const modeTheme = executionModeTheme(executionMode)
   const bottomRef = useRef<HTMLDivElement>(null)
   const activeExecutionId = sessionEntries.findLast((e) => e.kind === 'execution')?.id
   const currentTurnExecution = getCurrentTurnExecution(sessionEntries)
@@ -97,7 +101,7 @@ export function TranscriptPanel({
   }, [sessionEntries.length, activeTaskId, events.length, isApproving])
 
   return (
-    <div className="flex-1 overflow-y-auto scrollbar-custom">
+    <div className={cn('flex-1 overflow-y-auto scrollbar-custom', modeTheme.transcript)}>
       {sessionEntries.length > 0 && (
         <TaskProgressBar
           entries={sessionEntries}
@@ -105,7 +109,7 @@ export function TranscriptPanel({
           chainTaskState={chainTask?.state}
           activeExecutionTaskId={currentTurnExecution?.taskId}
           hookTaskId={activeTaskId}
-          trustless={executionMode === 'trustless'}
+          executionMode={executionMode}
         />
       )}
 
@@ -126,10 +130,7 @@ export function TranscriptPanel({
                     <div className="h-px flex-1 bg-border" />
                   </div>
                 )}
-                <UserBubble>
-                  <p className="whitespace-pre-wrap">{entry.text}</p>
-                  <p className="mt-0.5 text-xs text-white/45">{entry.budgetStt} STT</p>
-                </UserBubble>
+                <UserBubble text={entry.text} budgetStt={entry.budgetStt} />
               </div>
             )
           }
@@ -142,7 +143,11 @@ export function TranscriptPanel({
                 animate={{ opacity: 1 }}
                 className="mb-3"
               >
-                <AgentStatusLine phase={entry.phase} />
+                <AgentStatusLine
+                  phase={entry.phase}
+                  accentClass={modeTheme.statusSpinner}
+                  shimmerClass={modeTheme.text}
+                />
               </motion.div>
             )
           }
@@ -155,6 +160,7 @@ export function TranscriptPanel({
                   goal={entry.goal}
                   agent={agent}
                   status={entry.status}
+                  executionMode={executionMode}
                   onApprove={() => onApprove(entry.id)}
                   onReject={(reason) => onReject(entry.id, reason)}
                   isSubmitting={isApproving && entry.status === 'pending'}
@@ -183,12 +189,26 @@ export function TranscriptPanel({
             if (!isActive || chainTask?.state === TaskState.Completed) return null
 
             const planEntry = getPlanForExecution(sessionEntries, entry.taskId)
+            const trustless = executionMode === 'trustless'
+            const hasTrustlessIntent = events.some(
+              (event) => event.type === 'trustless_intent',
+            )
+            const hasJaniceIteration = events.some(
+              (event) => event.type === 'janice_iteration',
+            )
+            const hasJaniceActivity = events.some((event) =>
+              isTrustlessStreamEvent(event.type),
+            )
             const phase = resolveExecutionPhase({
               isApproving,
               connected,
               eventsCount: events.length,
               chainSteps,
               chainTaskState: chainTask?.state,
+              trustless,
+              hasJaniceActivity,
+              hasTrustlessIntent,
+              hasJaniceIteration,
             })
 
             return (
@@ -199,6 +219,9 @@ export function TranscriptPanel({
                   chainSteps={chainSteps}
                   taskId={entry.taskId}
                   showTaskId
+                  trustless={trustless}
+                  accentClass={modeTheme.statusSpinner}
+                  shimmerClass={modeTheme.text}
                 />
               </AgentBlock>
             )
@@ -213,6 +236,7 @@ export function TranscriptPanel({
                   budget={entry.budget}
                   aborted={entry.aborted}
                   taskId={entry.taskId}
+                  executionMode={executionMode}
                 />
               </AgentBlock>
             )
@@ -239,7 +263,11 @@ export function TranscriptPanel({
 
         {isApproving && !sessionEntries.some((e) => e.kind === 'execution') && (
           <AgentBlock>
-            <AgentStatusLine phase="signing" />
+            <AgentStatusLine
+              phase="signing"
+              accentClass={modeTheme.statusSpinner}
+              shimmerClass={modeTheme.text}
+            />
           </AgentBlock>
         )}
 

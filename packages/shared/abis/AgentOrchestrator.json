@@ -706,6 +706,19 @@
   },
   {
     "inputs": [],
+    "name": "INFER_TOOLS_CHAT_MAX_ITERATIONS",
+    "outputs": [
+      {
+        "internalType": "uint8",
+        "name": "",
+        "type": "uint8"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
     "name": "JANICE_CONFIG_ID",
     "outputs": [
       {

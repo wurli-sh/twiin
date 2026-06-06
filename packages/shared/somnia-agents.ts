@@ -2,6 +2,7 @@ import {
   decodeAbiParameters,
   encodeFunctionData,
   formatEther,
+  hexToString,
   stringToHex,
   type Hex,
 } from "viem";
@@ -366,7 +367,10 @@ export function decodeTaskCompletionFromLogData(logData: Hex): string | null {
   if (hex.length < bodyEnd) return null;
 
   const body = `0x${hex.slice(128, bodyEnd)}` as Hex;
-  return normalizeDisplayText(decodeNativeAgentResult(body));
+  return (
+    normalizeDisplayText(decodeNativeAgentResult(body)) ??
+    normalizeDisplayText(hexToString(body))
+  );
 }
 
 /**
@@ -384,19 +388,24 @@ export function decodeNativeAgentResult(resultHex: string | null | undefined): s
     /* not a string */
   }
 
-  try {
-    const [n] = decodeAbiParameters([{ type: "uint256" }], resultHex as Hex);
-    return n.toString();
-  } catch {
-    /* not uint256 */
+  const byteLength = (resultHex.length - 2) / 2;
+  if (byteLength === 32) {
+    try {
+      const [n] = decodeAbiParameters([{ type: "uint256" }], resultHex as Hex);
+      return n.toString();
+    } catch {
+      /* not uint256 */
+    }
+
+    try {
+      const [n] = decodeAbiParameters([{ type: "int256" }], resultHex as Hex);
+      return n.toString();
+    } catch {
+      return null;
+    }
   }
 
-  try {
-    const [n] = decodeAbiParameters([{ type: "int256" }], resultHex as Hex);
-    return n.toString();
-  } catch {
-    return null;
-  }
+  return null;
 }
 
 /**

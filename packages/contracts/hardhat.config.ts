@@ -18,6 +18,7 @@ const config: HardhatUserConfig = {
   networks: {
     hardhat: {
       chainId: 31337,
+      allowUnlimitedContractSize: true,
     },
     somniaTestnet: {
       url: process.env.SOMNIA_RPC_URL || "https://dream-rpc.somnia.network/",

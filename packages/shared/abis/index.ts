@@ -2965,6 +2965,25 @@ export const AgentPolicyAbi = [
         "type": "uint256"
       }
     ],
+    "name": "getAllowedContracts",
+    "outputs": [
+      {
+        "internalType": "address[]",
+        "name": "",
+        "type": "address[]"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint256",
+        "name": "personalAgentId",
+        "type": "uint256"
+      }
+    ],
     "name": "isKilled",
     "outputs": [
       {
@@ -3916,6 +3935,19 @@ export const AgentOrchestratorAbi = [
         "internalType": "bytes32",
         "name": "",
         "type": "bytes32"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "INFER_TOOLS_CHAT_MAX_ITERATIONS",
+    "outputs": [
+      {
+        "internalType": "uint8",
+        "name": "",
+        "type": "uint8"
       }
     ],
     "stateMutability": "view",

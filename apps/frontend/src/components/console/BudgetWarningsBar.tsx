@@ -25,8 +25,9 @@ export function BudgetWarningsBar({
   perTaskCapStt,
   className,
 }: Props) {
-  const capLabel = perTaskCapStt ?? agent.maxPerTask
   if (!agent) return null
+
+  const capLabel = perTaskCapStt ?? agent.maxPerTask
 
   const items: WarningItem[] = []
 

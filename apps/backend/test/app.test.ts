@@ -321,6 +321,42 @@ describe("app routes", () => {
     expect(decoded.args?.[2]).toBe(2000n);
   });
 
+  it("rejects underfunded Somnia stats trustless goals using the oracle-flow estimate", async () => {
+    const { createApp } = await loadApp({ ENABLE_TRUSTLESS_JANICE: "true" });
+    const res = await createApp({
+      trustlessPreflight: {
+        readJaniceAgent: vi.fn().mockResolvedValue({
+          isActive: true,
+          suspended: false,
+          costWei: 70n,
+        }),
+        readAgent: vi.fn(async (configId: bigint) => ({
+          name: configId === 2n ? "somnia-oracle@twiin" : "unused",
+          costWei: configId === 2n ? 30n : 0n,
+          isActive: true,
+          suspended: false,
+        })),
+        readRequestDeposit: vi.fn().mockResolvedValue(30n),
+      },
+    }).request("/api/trustless-preflight", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        goal: "Fetch Somnia ecosystem stats: price, 24h change, market cap, and 24h volume",
+        personalAgentId: "1",
+        budgetWei: "1000",
+      }),
+    });
+
+    expect(res.status).toBe(422);
+    await expect(res.json()).resolves.toMatchObject({
+      error: "trustless budget below minimum",
+      minBudgetWei: "1680",
+      recommendedBudgetWei: "1680",
+      janiceCostWei: "240",
+    });
+  });
+
   it("returns planned calldata for a valid planner response", async () => {
     const { createApp } = await loadApp();
     const savePlanRequest = vi.fn().mockResolvedValue(undefined);

@@ -1,6 +1,6 @@
 import { drizzle } from "drizzle-orm/libsql";
 import { and, eq, inArray, sql } from "drizzle-orm";
-import { StepState, TaskState } from "@twiin/shared";
+import { StepState, TaskState, TrustlessAwaiting } from "@twiin/shared";
 import * as schema from "./schema";
 import {
   externalAgents,
@@ -255,11 +255,33 @@ export async function finalizeTaskSteps(
     );
 }
 
+export async function clearStepDeadline(
+  taskId: string,
+  stepIdx: number,
+): Promise<void> {
+  await db
+    .update(steps)
+    .set({
+      deadline: null,
+      updatedAt: Math.floor(Date.now() / 1000),
+    })
+    .where(and(eq(steps.taskId, taskId), eq(steps.stepIdx, stepIdx)));
+}
+
 // ── Steps ─────────────────────────────────────────────────────────────────────
 
 /** Drop advisory step rows when a task id is reused after redeploy (Turso survives redeploys). */
 export async function deleteStepsForTask(taskId: string): Promise<void> {
   await db.delete(steps).where(eq(steps.taskId, taskId));
+}
+
+/** Clear all task-scoped advisory/cache rows when a task id is reused after redeploy. */
+export async function deleteTaskArtifactsForTask(taskId: string): Promise<void> {
+  await db.delete(submittedRatings).where(eq(submittedRatings.taskId, taskId));
+  await db.delete(submittedResults).where(eq(submittedResults.taskId, taskId));
+  await db.delete(trustlessTurns).where(eq(trustlessTurns.taskId, taskId));
+  await db.delete(trustlessTasks).where(eq(trustlessTasks.taskId, taskId));
+  await deleteStepsForTask(taskId);
 }
 
 export async function upsertStep(
@@ -616,7 +638,7 @@ export async function listTrustlessTasksAwaitingResume(): Promise<
       awaiting: trustlessTasks.awaiting,
     })
     .from(trustlessTasks)
-    .where(eq(trustlessTasks.awaiting, 2));
+    .where(eq(trustlessTasks.awaiting, TrustlessAwaiting.Resume));
 }
 
 export async function upsertTrustlessTurn(input: {

@@ -11,6 +11,8 @@ import {
   Sparkles,
   TrendingUp,
 } from 'lucide-react'
+import type { ExecutionMode } from '@/config/features'
+import { executionModeTheme } from '@/lib/execution-mode-theme'
 import { cn } from '@/lib/cn'
 import {
   budgetUsagePercent,
@@ -24,6 +26,7 @@ type Props = {
   budget?: string
   aborted?: boolean
   taskId?: string
+  executionMode?: ExecutionMode
 }
 
 const markdownComponents: Components = {
@@ -165,7 +168,16 @@ function BudgetFooter({ spent, budget }: { spent: string; budget: string }) {
   )
 }
 
-export function TaskResultCard({ text, spent, budget, aborted, taskId }: Props) {
+export function TaskResultCard({
+  text,
+  spent,
+  budget,
+  aborted,
+  taskId,
+  executionMode = 'claude',
+}: Props) {
+  const modeTheme = executionModeTheme(executionMode)
+
   if (aborted) {
     return (
       <div className="max-w-[92%] overflow-hidden rounded-lg border border-destructive/30 bg-destructive/5 shadow-soft">
@@ -188,15 +200,25 @@ export function TaskResultCard({ text, spent, budget, aborted, taskId }: Props) 
       initial={{ opacity: 0, y: 6 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.25, ease: [0.23, 1, 0.32, 1] }}
-      className="max-w-[92%] overflow-hidden rounded-lg border border-border bg-card shadow-card"
+      className={cn('max-w-[92%] overflow-hidden rounded-lg border shadow-card', modeTheme.agentCard)}
     >
-      <div className="flex items-start justify-between gap-3 border-b border-border/80 bg-primary-bright/10 px-3 py-2.5">
+      <div
+        className={cn(
+          'flex items-start justify-between gap-3 border-b px-3 py-2.5',
+          modeTheme.resultHeader,
+        )}
+      >
         <div className="flex min-w-0 items-start gap-2">
-          <span className="mt-0.5 flex size-6 shrink-0 items-center justify-center rounded-md bg-primary text-primary-foreground">
+          <span
+            className={cn(
+              'mt-0.5 flex size-6 shrink-0 items-center justify-center rounded-md',
+              modeTheme.resultIcon,
+            )}
+          >
             <CheckCircle2 size={13} strokeWidth={2.5} />
           </span>
           <div className="min-w-0">
-            <p className="text-[10px] font-medium uppercase tracking-wide text-primary">
+            <p className={cn('text-[10px] font-medium uppercase tracking-wide', modeTheme.text)}>
               Agent report
             </p>
             <h3 className="truncate text-sm font-semibold leading-snug text-foreground">

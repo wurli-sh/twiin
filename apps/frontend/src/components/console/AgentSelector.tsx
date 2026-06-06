@@ -34,15 +34,27 @@ export function AgentSelector({
     return () => document.removeEventListener('mousedown', handleClick)
   }, [open])
 
+  const footprint = cn(
+    'flex min-h-[36px] items-center rounded-lg border border-border-strong',
+    compact ? 'min-w-[180px]' : 'min-w-[220px]',
+  )
+
   if (loading) {
     return (
-      <div className="h-9 w-36 animate-pulse rounded-lg border border-border bg-muted" />
+      <div className={cn(footprint, 'animate-pulse border-border bg-muted px-2.5')} />
     )
   }
 
   if (agents.length === 0) {
     return (
-      <span className="text-xs text-muted-foreground">No agents deployed</span>
+      <div
+        className={cn(
+          footprint,
+          'justify-center border-dashed bg-muted/30 px-2.5 text-xs text-muted-foreground',
+        )}
+      >
+        No agents deployed
+      </div>
     )
   }
 

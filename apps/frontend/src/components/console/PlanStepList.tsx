@@ -7,20 +7,29 @@ import {
 import { useSubAgents } from '@/hooks/useSubAgents'
 import type { PlanStep } from '@/lib/plan-api'
 import type { StepProgress } from '@/lib/console-session'
+import type { ExecutionMode } from '@/config/features'
+import { executionModeTheme } from '@/lib/execution-mode-theme'
 import { cn } from '@/lib/cn'
 
 type Props = {
   steps: PlanStep[]
   stepProgress?: (index: number) => StepProgress
+  executionMode?: ExecutionMode
   compact?: boolean
 }
 
-function StepIcon({ progress }: { progress?: StepProgress }) {
+function StepIcon({
+  progress,
+  accentClass,
+}: {
+  progress?: StepProgress
+  accentClass: string
+}) {
   if (progress === 'loading') {
-    return <Loader2 size={12} className="animate-spin text-primary" />
+    return <Loader2 size={12} className={cn('animate-spin', accentClass)} />
   }
   if (progress === 'done') {
-    return <Check size={12} className="text-primary" strokeWidth={2.5} />
+    return <Check size={12} className={accentClass} strokeWidth={2.5} />
   }
   if (progress === 'error') {
     return <X size={12} className="text-destructive" strokeWidth={2.5} />
@@ -32,16 +41,20 @@ function SubAgentBadge({
   label,
   configId,
   lane,
+  accentClass,
+  nativeBadgeClass,
 }: {
   label: string
   configId: number
   lane?: 'SomniaNative' | 'ExternalHTTP'
+  accentClass: string
+  nativeBadgeClass: string
 }) {
   const isExternal = lane === 'ExternalHTTP'
 
   return (
     <span className="inline-flex flex-wrap items-center gap-1.5 text-xs">
-      <span className="font-medium text-primary">{label}</span>
+      <span className={cn('font-medium', accentClass)}>{label}</span>
       <span className="text-muted-foreground">· config #{configId}</span>
       {lane && (
         <span
@@ -49,7 +62,7 @@ function SubAgentBadge({
             'inline-flex items-center gap-0.5 border px-1 py-px text-[10px] font-semibold uppercase tracking-wide',
             isExternal
               ? 'border-warning/40 bg-warning/10 text-warning-foreground'
-              : 'border-primary/20 bg-primary-bright/15 text-primary',
+              : nativeBadgeClass,
           )}
         >
           {isExternal ? <Globe size={9} /> : <Server size={9} />}
@@ -60,7 +73,13 @@ function SubAgentBadge({
   )
 }
 
-export function PlanStepList({ steps, stepProgress, compact }: Props) {
+export function PlanStepList({
+  steps,
+  stepProgress,
+  executionMode = 'claude',
+  compact,
+}: Props) {
+  const modeTheme = executionModeTheme(executionMode)
   const { subAgents } = useSubAgents()
 
   return (
@@ -79,11 +98,11 @@ export function PlanStepList({ steps, stepProgress, compact }: Props) {
             className={cn(
               'flex items-start gap-2.5 border-b border-border/60 py-2 last:border-0',
               compact && 'py-1.5',
-              loading && 'border-l-2 border-l-primary-bright bg-primary-bright/10 pl-2',
+              loading && cn('border-l-2 pl-2', modeTheme.progressActiveBg),
             )}
           >
             <div className="mt-0.5 flex size-4 shrink-0 items-center justify-center">
-              <StepIcon progress={progress} />
+              <StepIcon progress={progress} accentClass={modeTheme.icon} />
             </div>
             <div className="min-w-0 flex-1 space-y-0.5">
               <p
@@ -100,6 +119,8 @@ export function PlanStepList({ steps, stepProgress, compact }: Props) {
                 label={subAgent.label}
                 configId={subAgent.configId}
                 lane={subAgent.lane}
+                accentClass={modeTheme.text}
+                nativeBadgeClass={modeTheme.badge}
               />
               {taskDetail && (
                 <p className="truncate text-xs leading-snug text-muted-foreground">{taskDetail}</p>

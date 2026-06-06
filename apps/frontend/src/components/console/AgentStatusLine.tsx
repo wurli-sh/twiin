@@ -9,6 +9,7 @@ import {
 import type { PlanStep } from '@/lib/plan-api'
 import type { TaskStep } from '@/hooks/useTaskDetail'
 import { useRotatingPhrase } from '@/hooks/useRotatingPhrase'
+import { cn } from '@/lib/cn'
 
 type Props = {
   phase: AgentStatusPhase
@@ -16,6 +17,9 @@ type Props = {
   chainSteps?: TaskStep[]
   taskId?: string
   showTaskId?: boolean
+  accentClass?: string
+  shimmerClass?: string
+  trustless?: boolean
 }
 
 export function AgentStatusLine({
@@ -24,20 +28,23 @@ export function AgentStatusLine({
   chainSteps = [],
   taskId,
   showTaskId = false,
+  accentClass = 'text-primary',
+  shimmerClass = 'text-primary/90',
+  trustless = false,
 }: Props) {
   const phrases = useMemo(() => {
     if (planSteps && chainSteps.length > 0) {
       return buildExecutionPhrases(phase, planSteps, chainSteps)
     }
-    return getStatusPhrases(phase)
-  }, [phase, planSteps, chainSteps])
+    return getStatusPhrases(phase, trustless)
+  }, [phase, planSteps, chainSteps, trustless])
 
   const phrase = useRotatingPhrase(phrases)
 
   return (
     <div className="flex flex-wrap items-center gap-2">
-      <ThinkingSpinner className="size-4 shrink-0 text-primary" />
-      <TextShimmer className="text-sm text-primary/90" active>
+      <ThinkingSpinner className={cn('size-4 shrink-0', accentClass)} />
+      <TextShimmer className={cn('text-sm', shimmerClass)} active>
         {phrase}
       </TextShimmer>
       {showTaskId && taskId && (

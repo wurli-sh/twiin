@@ -1,4 +1,11 @@
-import { NativeConfigId, TaskState } from "@twiin/shared";
+import {
+  buildTrustlessResumePayload,
+  NativeConfigId,
+  TaskState,
+  TrustlessAwaiting,
+  type TrustlessStepInput,
+  type TrustlessTurnInput,
+} from "@twiin/shared";
 import { publicClient } from "../clients";
 import { deployment, orchestratorContract, agentRegistryContract } from "../contracts";
 import {
@@ -6,12 +13,7 @@ import {
   listTrustlessTasksAwaitingResume,
   listTrustlessTurns,
 } from "../db";
-import {
-  buildTrustlessResumePayload,
-  computeJaniceCostWei,
-  type TrustlessStepRecord,
-  type TrustlessTurnRecord,
-} from "../trustless";
+import { computeJaniceCostWei } from "../trustless";
 
 const POLL_MS = 5_000;
 
@@ -32,6 +34,9 @@ type ResumeDeps = {
   readTask: (
     taskId: bigint,
   ) => Promise<readonly [number, bigint, number, bigint, bigint, bigint, number]>;
+  readTrustlessContext: (
+    taskId: bigint,
+  ) => Promise<readonly [bigint, number, number, number, bigint, `0x${string}`]>;
   readJaniceCost: () => Promise<bigint>;
   resumeTrustlessTask: (
     args: readonly [bigint, `0x${string}`, bigint],
@@ -47,6 +52,7 @@ export function createTrustlessResumeKeeper(
     listTrustlessTurns,
     getStepsForTask,
     readTask: (taskId) => orchestratorContract.read.tasks([taskId]),
+    readTrustlessContext: (taskId) => orchestratorContract.read.trustlessCtx([taskId]),
     readJaniceCost: async () => {
       const requestDeposit = await publicClient.readContract({
         address: deployment.agentsApi as `0x${string}`,
@@ -76,17 +82,22 @@ export function createTrustlessResumeKeeper(
         const state = Number(chainTask[6]);
         if (state !== TaskState.Running) continue;
         if (deadline > 0 && deadline <= Math.floor(Date.now() / 1000)) continue;
-        if (task.iterations >= task.max_iterations) continue;
+        const trustlessCtx = await deps.readTrustlessContext(BigInt(task.task_id));
+        const chainAwaiting = Number(trustlessCtx[3]);
+        const chainIterations = Number(trustlessCtx[1]);
+        const chainMaxIterations = Number(trustlessCtx[2]);
+        if (chainAwaiting !== TrustlessAwaiting.Resume) continue;
+        if (chainIterations >= chainMaxIterations) continue;
 
-        const turns = (await deps.listTrustlessTurns(task.task_id)).map<TrustlessTurnRecord>(
+        const turns = (await deps.listTrustlessTurns(task.task_id)).map<TrustlessTurnInput>(
           (turn) => ({
             iteration: turn.iteration,
             finishReason: turn.finish_reason,
             assistantMessage: turn.assistant_message,
-            toolCalls: safeParseToolCalls(turn.tool_calls_json),
+            ...safeParseTurnContext(turn.tool_calls_json),
           }),
         );
-        const steps = (await deps.getStepsForTask(task.task_id)).map<TrustlessStepRecord>(
+        const steps = (await deps.getStepsForTask(task.task_id)).map<TrustlessStepInput>(
           (step) => ({
             stepIdx: step.step_idx,
             state: step.state,
@@ -100,7 +111,6 @@ export function createTrustlessResumeKeeper(
           goal: task.goal,
           turns,
           steps,
-          maxIterations: task.max_iterations,
         });
         await deps.resumeTrustlessTask([
           BigInt(task.task_id),
@@ -136,28 +146,54 @@ export function createTrustlessResumeKeeper(
   };
 }
 
-function safeParseToolCalls(
-  raw: string,
-): Array<{ toolName: string; args: `0x${string}` }> {
+function safeParseTurnContext(raw: string): Pick<
+  TrustlessTurnInput,
+  "toolCalls" | "updatedRoles" | "updatedMessages" | "pendingToolCallIds"
+> {
   try {
     const parsed = JSON.parse(raw) as unknown;
-    if (!Array.isArray(parsed)) return [];
-    return parsed.flatMap((item) => {
-      if (
-        item &&
-        typeof item === "object" &&
-        "toolName" in item &&
-        typeof item.toolName === "string" &&
-        "args" in item &&
-        typeof item.args === "string"
-      ) {
-        return [{ toolName: item.toolName, args: item.args as `0x${string}` }];
-      }
-      return [];
-    });
+    if (Array.isArray(parsed)) {
+      return {
+        toolCalls: parsed.flatMap((item) => parseToolCall(item)),
+      };
+    }
+    if (parsed && typeof parsed === "object") {
+      const record = parsed as Record<string, unknown>;
+      const toolCalls = Array.isArray(record.toolCalls)
+        ? record.toolCalls.flatMap((item) => parseToolCall(item))
+        : [];
+      return {
+        toolCalls,
+        updatedRoles: stringArray(record.updatedRoles),
+        updatedMessages: stringArray(record.updatedMessages),
+        pendingToolCallIds: stringArray(record.pendingToolCallIds),
+      };
+    }
+    return { toolCalls: [] };
   } catch {
-    return [];
+    return { toolCalls: [] };
   }
+}
+
+function parseToolCall(
+  item: unknown,
+): Array<{ toolName: string; args: `0x${string}` }> {
+  if (
+    item &&
+    typeof item === "object" &&
+    "toolName" in item &&
+    typeof item.toolName === "string" &&
+    "args" in item &&
+    typeof item.args === "string"
+  ) {
+    return [{ toolName: item.toolName, args: item.args as `0x${string}` }];
+  }
+  return [];
+}
+
+function stringArray(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  return value.filter((item): item is string => typeof item === "string");
 }
 
 function sleep(ms: number): Promise<void> {

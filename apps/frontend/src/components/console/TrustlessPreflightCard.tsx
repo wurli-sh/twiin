@@ -12,8 +12,8 @@ export function TrustlessPreflightCard({
   warnings,
 }: Props) {
   return (
-    <div className="max-w-[92%] border border-primary/25 bg-primary-bright/5 px-3 py-2.5 text-sm text-foreground">
-      <p className="font-semibold text-primary">Trustless preflight passed</p>
+    <div className="mode-trustless-pill max-w-[92%] px-3 py-2.5 text-sm text-foreground">
+      <p className="font-semibold mode-trustless-text">Trustless preflight passed</p>
       <p className="mt-0.5 text-muted-foreground">
         Minimum budget {minBudgetStt} STT · Janice round cost {janiceCostStt} STT · max{' '}
         {maxIterations} iterations

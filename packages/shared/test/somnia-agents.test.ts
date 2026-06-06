@@ -112,6 +112,16 @@ describe("decodeNativeAgentResult", () => {
     expect(decodeTaskCompletionFromLogData(logData)).toBe("12915400");
   });
 
+  it("decodes TaskCompleted log data when the event carries plain UTF-8 text", () => {
+    const logData = encodeAbiParameters(
+      [{ type: "string" }],
+      ["I cannot fetch real-time data."],
+    );
+    expect(decodeTaskCompletionFromLogData(logData)).toBe(
+      "I cannot fetch real-time data.",
+    );
+  });
+
   it("returns null when TaskCompleted log data is truncated", () => {
     const logData =
       "0x00000000000000000000000000000000000000000000000000000000000000200000000000000000000000000000000000000000000000000000000000000020";

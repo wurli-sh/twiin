@@ -3,11 +3,12 @@ import {
   deriveStepProgress,
   getActivePlan,
   getCurrentTurnEntries,
-  isTrustlessTurn,
   type SessionEntry,
   type PhaseState,
 } from '@/lib/console-session'
 import { PlanStepList } from './PlanStepList'
+import type { ExecutionMode } from '@/config/features'
+import { executionModeTheme } from '@/lib/execution-mode-theme'
 import type { TaskStep } from '@/hooks/useTaskDetail'
 import { cn } from '@/lib/cn'
 import { Check, Loader2 } from 'lucide-react'
@@ -18,6 +19,7 @@ type Props = {
   chainTaskState?: number
   activeExecutionTaskId?: string | null
   hookTaskId?: string | null
+  executionMode?: ExecutionMode
   trustless?: boolean
 }
 
@@ -29,7 +31,15 @@ const MACRO_LABELS: { key: keyof ReturnType<typeof deriveMacroPhases>; label: st
   { key: 'complete', label: 'Done' },
 ]
 
-function MacroDot({ state }: { state: PhaseState }) {
+function MacroDot({
+  state,
+  trustless,
+}: {
+  state: PhaseState
+  trustless: boolean
+}) {
+  const activeClass = trustless ? 'mode-trustless-dot-active' : 'mode-claude-dot-active'
+
   if (state === 'done') {
     return (
       <span className="flex size-5 items-center justify-center rounded-full bg-foreground text-background">
@@ -39,8 +49,13 @@ function MacroDot({ state }: { state: PhaseState }) {
   }
   if (state === 'loading' || state === 'active') {
     return (
-      <span className="flex size-5 items-center justify-center rounded-full border border-primary bg-primary-bright/20">
-        <Loader2 size={11} className="animate-spin text-primary" />
+      <span
+        className={cn(
+          'flex size-5 items-center justify-center rounded-full border',
+          activeClass,
+        )}
+      >
+        <Loader2 size={11} className="animate-spin" />
       </span>
     )
   }
@@ -50,10 +65,12 @@ function MacroDot({ state }: { state: PhaseState }) {
   return <span className="size-5 rounded-full border border-muted-foreground/30" />
 }
 
-function labelClass(state: PhaseState): string {
+function labelClass(state: PhaseState, trustless: boolean): string {
   if (state === 'done') return 'text-muted-foreground'
   if (state === 'loading' || state === 'active') {
-    return 'font-semibold text-primary'
+    return trustless
+      ? 'font-semibold mode-trustless-text'
+      : 'font-semibold mode-claude-text'
   }
   if (state === 'error') return 'font-medium text-destructive'
   return 'text-muted-foreground/60'
@@ -65,10 +82,11 @@ export function TaskProgressBar({
   chainTaskState,
   activeExecutionTaskId,
   hookTaskId,
-  trustless: trustlessProp,
+  executionMode = 'claude',
 }: Props) {
+  const modeTheme = executionModeTheme(executionMode)
   const turn = getCurrentTurnEntries(entries)
-  const trustless = trustlessProp ?? isTrustlessTurn(entries)
+  const trustless = executionMode === 'trustless'
   const phases = deriveMacroPhases(turn, chainTaskState, { trustless })
   const macroLabels = trustless
     ? MACRO_LABELS.map((item) =>
@@ -89,7 +107,12 @@ export function TaskProgressBar({
     (planEntry || trustless) && phases.execute !== 'pending'
 
   return (
-    <div className="sticky top-0 z-20 border-b border-border bg-background/95 px-3 py-2.5 backdrop-blur-sm">
+    <div
+      className={cn(
+        'sticky top-0 z-20 border-b px-3 py-2.5 backdrop-blur-sm',
+        modeTheme.progressBar,
+      )}
+    >
       <div className="flex items-center justify-between gap-1">
         {macroLabels.map(({ key, label }, i) => {
           const state = phases[key]
@@ -97,12 +120,12 @@ export function TaskProgressBar({
           const active = state === 'loading' || state === 'active'
           return (
             <div key={key} className="flex min-w-0 flex-1 items-center gap-1.5">
-              <MacroDot state={state} />
+              <MacroDot state={state} trustless={trustless} />
               <span
                 className={cn(
                   'truncate text-sm font-medium',
-                  labelClass(state),
-                  active && 'bg-primary-bright/10 px-1.5 py-0.5',
+                  labelClass(state, trustless),
+                  active && cn(modeTheme.progressActiveBg, 'px-1.5 py-0.5'),
                 )}
               >
                 {label}
@@ -111,7 +134,7 @@ export function TaskProgressBar({
                 <div
                   className={cn(
                     'mx-0.5 h-px flex-1',
-                    done ? 'bg-primary-bright/40' : 'bg-border',
+                    done ? modeTheme.progressConnector : 'bg-border',
                   )}
                 />
               )}
@@ -124,6 +147,26 @@ export function TaskProgressBar({
         <div className="mt-2.5 border-t border-border/80 pt-2.5">
           <PlanStepList
             steps={planEntry.plan.steps}
+            executionMode={executionMode}
+            compact
+            stepProgress={(i) => {
+              const chain = stepsForBar.find((s) => s.stepIdx === i)
+              return chain ? deriveStepProgress(chain.state) : 'pending'
+            }}
+          />
+        </div>
+      )}
+
+      {showSteps && trustless && !planEntry && stepsForBar.length > 0 && (
+        <div className="mt-2.5 border-t border-border/80 pt-2.5">
+          <PlanStepList
+            steps={stepsForBar.map((step) => ({
+              configId: Number(step.configId),
+              payload: step.payload,
+              maxCostWei: '0',
+              timeoutSeconds: 300,
+            }))}
+            executionMode={executionMode}
             compact
             stepProgress={(i) => {
               const chain = stepsForBar.find((s) => s.stepIdx === i)

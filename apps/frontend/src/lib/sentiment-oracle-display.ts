@@ -21,13 +21,29 @@ export function isSentimentOracleTask(
 
 /** Decode a Somnia oracle uint256 scaled with 8 decimals (CoinGecko planner default). */
 export function formatScaledUsd(raw: string, decimals = 8): string | null {
-  if (!/^\d+$/.test(raw.trim())) return null
-  const n = Number(raw) / 10 ** decimals
-  if (!Number.isFinite(n)) return null
-  if (Math.abs(n) >= 1) {
-    return n.toLocaleString(undefined, { maximumFractionDigits: 2 })
+  const digits = raw.trim()
+  if (!/^\d+$/.test(digits)) return null
+
+  const normalized = digits.replace(/^0+(?=\d)/, '')
+  const padded = normalized.padStart(decimals + 1, '0')
+  const whole = padded.slice(0, -decimals) || '0'
+  const fraction = padded.slice(-decimals)
+
+  // Guard against mislabeling arbitrary raw payloads as dollar values.
+  if (whole.replace(/^0+/, '').length > 15) return null
+
+  const wholeNumber = BigInt(whole)
+  if (wholeNumber >= 1n) {
+    const cents = fraction.slice(0, 2).replace(/0+$/, '')
+    const formattedWhole = wholeNumber.toLocaleString()
+    return cents ? `${formattedWhole}.${cents}` : formattedWhole
   }
-  return n.toPrecision(4)
+
+  const firstSignificant = fraction.search(/[1-9]/)
+  if (firstSignificant === -1) return '0'
+  const precision = Math.min(fraction.length, firstSignificant + 4)
+  const trimmedFraction = fraction.slice(0, precision).replace(/0+$/, '')
+  return trimmedFraction ? `0.${trimmedFraction}` : '0'
 }
 
 /**
