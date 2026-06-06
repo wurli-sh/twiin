@@ -15,10 +15,14 @@ import {
   upsertStep,
 } from "../db";
 import { publish } from "../sse";
+import { logTaskTimeline } from "../task-log";
 
 const CURSOR_KEY = "rater";
 const POLL_MS = 6_000;
 const CHUNK = 500n;
+const MAX_RPC_LOG_RANGE = 1_000n;
+const FAST_FORWARD_LAG_THRESHOLD = 100_000n;
+const FAST_FORWARD_TAIL = 10_000n;
 const MIN_QUALITY = 40;
 const externalResultPendingEvent = parseAbiItem(
   "event ExternalResultPending(uint256 indexed taskId, uint8 stepIdx, address registrant, bytes result)",
@@ -82,9 +86,32 @@ export function createRater(overrides: Partial<RaterDeps> = {}) {
   async function tick(): Promise<void> {
     const latest = await deps.getBlockNumber();
     const stored = await deps.getCursor(CURSOR_KEY);
+    if (stored > latest) {
+      const rewindTo = deps.startBlock > 0n && deps.startBlock <= latest
+        ? deps.startBlock
+        : latest;
+      deps.logger.warn(
+        `[rater] cursor ${stored} is ahead of latest block ${latest}; rewinding to ${rewindTo}`,
+      );
+      await deps.setCursor(CURSOR_KEY, rewindTo);
+      return;
+    }
     const from = stored === 0n && deps.startBlock > 0n ? deps.startBlock : stored;
     if (from > latest) return;
-    const to = from + CHUNK < latest ? from + CHUNK : latest;
+    const lag = latest - from;
+    if (lag > FAST_FORWARD_LAG_THRESHOLD) {
+      const fastForwardTo =
+        latest > FAST_FORWARD_TAIL ? latest - FAST_FORWARD_TAIL : 0n;
+      if (fastForwardTo > from) {
+        deps.logger.warn(
+          `[rater] lag ${lag} blocks is too large; fast-forwarding cursor from ${from} to ${fastForwardTo}`,
+        );
+        await deps.setCursor(CURSOR_KEY, fastForwardTo);
+        return;
+      }
+    }
+    const chunk = lag > MAX_RPC_LOG_RANGE ? MAX_RPC_LOG_RANGE : CHUNK;
+    const to = from + chunk < latest ? from + chunk : latest;
 
     const logs = await deps.getLogs({
       address: deps.addresses.orchestrator,
@@ -158,9 +185,19 @@ async function rateStep(
     resultText,
   );
   deps.logger.log(`[rater] task=${taskIdStr} step=${stepIdx} score=${score}`);
+  logTaskTimeline("rater_scored", {
+    taskId: taskIdStr,
+    stepIdx,
+    score,
+  });
 
   await deps.saveSubmittedRating(taskIdStr, stepIdx, score);
   try {
+    logTaskTimeline("rater_finalizing", {
+      taskId: taskIdStr,
+      stepIdx,
+      score,
+    });
     await deps.finalizeExternalStep([taskId, stepIdx, score]);
   } catch (e) {
     const msg = String(e);
@@ -183,6 +220,7 @@ async function rateStep(
     taskIdStr,
     stepIdx,
     "0",
+    null,
     newState,
     instruction,
     null,
@@ -192,6 +230,12 @@ async function rateStep(
   );
 
   deps.publish(taskIdStr, "step_rated", {
+    taskId: taskIdStr,
+    stepIdx,
+    score,
+    approved: score >= MIN_QUALITY,
+  });
+  logTaskTimeline("rater_finalized", {
     taskId: taskIdStr,
     stepIdx,
     score,

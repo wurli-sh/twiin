@@ -1,12 +1,16 @@
-import { parseAbiItem, type AbiEvent } from "viem";
-import { StepState, TaskState } from "@twiin/shared";
+import { decodeFunctionData, parseAbiItem, type AbiEvent, type Hex } from "viem";
+import { decodeTaskCompletionFromLogData, StepState, TaskState } from "@twiin/shared";
+import AgentOrchestratorAbi from "@twiin/shared/abis/AgentOrchestrator.json";
+import TwiinAccountAbi from "@twiin/shared/abis/TwiinAccount.json";
 import { publicClient } from "../clients";
 import { addresses, defaultStartBlock } from "../contracts";
 import {
   deactivateExternalAgent,
   deleteStepsForTask,
+  finalizeTaskSteps,
   getExternalAgent,
   getCursor,
+  getStep,
   setCursor,
   updateTaskState,
   upsertExternalAgent,
@@ -15,10 +19,15 @@ import {
 } from "../db";
 import { env } from "../env";
 import { publish } from "../sse";
+import { logTaskTimeline } from "../task-log";
 
 const CURSOR_KEY = "indexer";
 const POLL_MS = 4_000;
 const CHUNK = 500n;
+const MAX_RPC_LOG_RANGE = 1_000n;
+const FAST_FORWARD_LAG_THRESHOLD = 100_000n;
+const FAST_FORWARD_TAIL = 10_000n;
+const INDEXER_TICK_LOG_LAG_THRESHOLD = 5_000n;
 
 const taskCreatedEvent = parseAbiItem(
   "event TaskCreated(uint256 indexed taskId, uint256 indexed personalAgentId, uint8 mode, uint256 budgetWei)",
@@ -59,23 +68,44 @@ type LogArgs = Record<
   bigint | number | string | `0x${string}` | `0x${string}`[] | null | undefined
 >;
 
+type TxLike = {
+  input: Hex;
+};
+
+type DecodedTaskStep = {
+  configId: string;
+  payload: string;
+  timeoutSeconds: number;
+};
+
 type IndexerDeps = {
   getBlockNumber: () => Promise<bigint>;
+  getBlockTimestamp: (blockNumber: bigint) => Promise<number>;
   getLogs: (args: {
     address: `0x${string}`;
     event: AbiEvent;
     fromBlock: bigint;
     toBlock: bigint;
-  }) => Promise<Array<{ args: LogArgs; blockNumber?: bigint | null }>>;
+  }) => Promise<
+    Array<{
+      args: LogArgs;
+      data?: Hex | null;
+      blockNumber?: bigint | null;
+      transactionHash?: `0x${string}` | null;
+    }>
+  >;
+  getTransaction: (hash: `0x${string}`) => Promise<TxLike>;
   addresses: { orchestrator: `0x${string}`; agentRegistry: `0x${string}` };
   startBlock: bigint;
   getCursor: (name: string) => Promise<bigint>;
   setCursor: (name: string, block: bigint) => Promise<void>;
   getExternalAgent: typeof getExternalAgent;
+  getStep: typeof getStep;
   upsertExternalAgent: typeof upsertExternalAgent;
   deactivateExternalAgent: typeof deactivateExternalAgent;
   upsertTask: typeof upsertTask;
   deleteStepsForTask: typeof deleteStepsForTask;
+  finalizeTaskSteps: typeof finalizeTaskSteps;
   upsertStep: typeof upsertStep;
   updateTaskState: typeof updateTaskState;
   publish: typeof publish;
@@ -84,10 +114,17 @@ type IndexerDeps = {
 export function createIndexer(overrides: Partial<IndexerDeps> = {}) {
   const deps: IndexerDeps = {
     getBlockNumber: () => publicClient.getBlockNumber(),
+    getBlockTimestamp: async (blockNumber) =>
+      Number((await publicClient.getBlock({ blockNumber })).timestamp),
     getLogs: (args) =>
       publicClient.getLogs(args) as Promise<
-        Array<{ args: LogArgs; blockNumber?: bigint | null }>
+        Array<{
+          args: LogArgs;
+          blockNumber?: bigint | null;
+          transactionHash?: `0x${string}` | null;
+        }>
       >,
+    getTransaction: (hash) => publicClient.getTransaction({ hash }),
     addresses: {
       orchestrator: addresses.orchestrator,
       agentRegistry: addresses.agentRegistry,
@@ -96,10 +133,12 @@ export function createIndexer(overrides: Partial<IndexerDeps> = {}) {
     getCursor,
     setCursor,
     getExternalAgent,
+    getStep,
     upsertExternalAgent,
     deactivateExternalAgent,
     upsertTask,
     deleteStepsForTask,
+    finalizeTaskSteps,
     upsertStep,
     updateTaskState,
     publish,
@@ -111,9 +150,45 @@ export function createIndexer(overrides: Partial<IndexerDeps> = {}) {
   async function tick(): Promise<void> {
     const latest = await deps.getBlockNumber();
     const stored = await deps.getCursor(CURSOR_KEY);
+    if (stored > latest) {
+      const rewindTo = deps.startBlock > 0n && deps.startBlock <= latest
+        ? deps.startBlock
+        : latest;
+      console.warn(
+        `[indexer] cursor ${stored} is ahead of latest block ${latest}; rewinding to ${rewindTo}`,
+      );
+      await deps.setCursor(CURSOR_KEY, rewindTo);
+      return;
+    }
     const from = stored === 0n && deps.startBlock > 0n ? deps.startBlock : stored;
     if (from > latest) return;
-    const to = from + CHUNK < latest ? from + CHUNK : latest;
+    const lag = latest - from;
+    if (lag > FAST_FORWARD_LAG_THRESHOLD) {
+      const fastForwardTo =
+        latest > FAST_FORWARD_TAIL ? latest - FAST_FORWARD_TAIL : 0n;
+      if (fastForwardTo > from) {
+        console.warn(
+          `[indexer] lag ${lag} blocks is too large; fast-forwarding cursor from ${from} to ${fastForwardTo}`,
+        );
+        await deps.setCursor(CURSOR_KEY, fastForwardTo);
+        return;
+      }
+    }
+    const chunk = lag > MAX_RPC_LOG_RANGE ? MAX_RPC_LOG_RANGE : CHUNK;
+    const to = from + chunk < latest ? from + chunk : latest;
+
+    if (lag > INDEXER_TICK_LOG_LAG_THRESHOLD) {
+      logTaskTimeline("indexer_tick", {
+        cursor: stored.toString(),
+        fromBlock: from.toString(),
+        toBlock: to.toString(),
+        latestBlock: latest.toString(),
+        lag: lag.toString(),
+        chunkSize: chunk.toString(),
+        orchestrator: deps.addresses.orchestrator,
+        agentRegistry: deps.addresses.agentRegistry,
+      });
+    }
 
     const load = (event: AbiEvent) =>
       deps.getLogs({
@@ -123,7 +198,9 @@ export function createIndexer(overrides: Partial<IndexerDeps> = {}) {
         toBlock: to,
       });
 
-    for (const log of await load(taskCreatedEvent)) {
+    const taskCreatedLogs = await load(taskCreatedEvent);
+    logIndexerLogs("TaskCreated", taskCreatedLogs.length, from, to);
+    for (const log of taskCreatedLogs) {
       const { taskId, personalAgentId, mode, budgetWei } = log.args;
       if (taskId == null || personalAgentId == null) continue;
       await deps.deleteStepsForTask(taskId.toString());
@@ -137,6 +214,25 @@ export function createIndexer(overrides: Partial<IndexerDeps> = {}) {
         0,
         Number(log.blockNumber ?? 0n),
       );
+      const seededSteps = await loadTaskStepsFromTransaction(
+        deps,
+        log.transactionHash ?? null,
+      );
+      for (let stepIdx = 0; stepIdx < seededSteps.length; stepIdx++) {
+        const seeded = seededSteps[stepIdx];
+        await deps.upsertStep(
+          taskId.toString(),
+          stepIdx,
+          seeded.configId,
+          seeded.timeoutSeconds,
+          StepState.Pending,
+          seeded.payload,
+          null,
+          null,
+          null,
+          null,
+        );
+      }
       deps.publish(taskId.toString(), "task_created", {
         taskId: taskId.toString(),
         personalAgentId: personalAgentId.toString(),
@@ -145,13 +241,16 @@ export function createIndexer(overrides: Partial<IndexerDeps> = {}) {
       });
     }
 
-    for (const log of await load(externalAgentRequestEvent)) {
+    const externalAgentRequestLogs = await load(externalAgentRequestEvent);
+    logIndexerLogs("ExternalAgentRequest", externalAgentRequestLogs.length, from, to);
+    for (const log of externalAgentRequestLogs) {
       const { taskId, stepIdx, configId, payload, reqId, deadline } = log.args;
       if (taskId == null || stepIdx == null) continue;
       await deps.upsertStep(
         taskId.toString(),
         Number(stepIdx),
         configId?.toString() ?? "0",
+        null,
         StepState.RunningExternal,
         decodePayload((payload as `0x${string}` | null) ?? "0x"),
         (reqId as `0x${string}` | null) ?? null,
@@ -166,35 +265,55 @@ export function createIndexer(overrides: Partial<IndexerDeps> = {}) {
       });
     }
 
-    for (const log of await load(stepStateChangedEvent)) {
+    const stepStateChangedLogs = await load(stepStateChangedEvent);
+    logIndexerLogs("StepStateChanged", stepStateChangedLogs.length, from, to);
+    for (const log of stepStateChangedLogs) {
       const { taskId, stepIdx, state } = log.args;
       if (taskId == null || stepIdx == null) continue;
+      const stepState = Number(state ?? 0);
+      let deadline: number | null = null;
+      if (stepState === StepState.RunningNative && log.blockNumber != null) {
+        const existing = await deps.getStep(taskId.toString(), Number(stepIdx));
+        if (existing?.timeout_seconds != null) {
+          deadline =
+            (await deps.getBlockTimestamp(log.blockNumber)) + existing.timeout_seconds;
+        }
+      }
       await deps.upsertStep(
         taskId.toString(),
         Number(stepIdx),
         "0",
-        Number(state ?? 0),
+        null,
+        stepState,
         "",
         null,
         null,
         null,
-        null,
+        deadline,
       );
       deps.publish(taskId.toString(), "step_state", {
         taskId: taskId.toString(),
         stepIdx,
         state,
-        stateName: StepState[Number(state ?? 0)] ?? "Unknown",
+        stateName: StepState[stepState] ?? "Unknown",
       });
     }
 
-    for (const log of await load(externalResultPendingEvent)) {
+    const externalResultPendingLogs = await load(externalResultPendingEvent);
+    logIndexerLogs(
+      "ExternalResultPending",
+      externalResultPendingLogs.length,
+      from,
+      to,
+    );
+    for (const log of externalResultPendingLogs) {
       const { taskId, stepIdx, result } = log.args;
       if (taskId == null || stepIdx == null) continue;
       await deps.upsertStep(
         taskId.toString(),
         Number(stepIdx),
         "0",
+        null,
         StepState.AwaitingRating,
         "",
         null,
@@ -208,13 +327,21 @@ export function createIndexer(overrides: Partial<IndexerDeps> = {}) {
       });
     }
 
-    for (const log of await load(externalStepApprovedEvent)) {
+    const externalStepApprovedLogs = await load(externalStepApprovedEvent);
+    logIndexerLogs(
+      "ExternalStepApproved",
+      externalStepApprovedLogs.length,
+      from,
+      to,
+    );
+    for (const log of externalStepApprovedLogs) {
       const { taskId, stepIdx, score } = log.args;
       if (taskId == null || stepIdx == null) continue;
       await deps.upsertStep(
         taskId.toString(),
         Number(stepIdx),
         "0",
+        null,
         StepState.Succeeded,
         "",
         null,
@@ -229,13 +356,21 @@ export function createIndexer(overrides: Partial<IndexerDeps> = {}) {
       });
     }
 
-    for (const log of await load(externalStepRejectedEvent)) {
+    const externalStepRejectedLogs = await load(externalStepRejectedEvent);
+    logIndexerLogs(
+      "ExternalStepRejected",
+      externalStepRejectedLogs.length,
+      from,
+      to,
+    );
+    for (const log of externalStepRejectedLogs) {
       const { taskId, stepIdx, score } = log.args;
       if (taskId == null || stepIdx == null) continue;
       await deps.upsertStep(
         taskId.toString(),
         Number(stepIdx),
         "0",
+        null,
         StepState.Failed,
         "",
         null,
@@ -250,20 +385,34 @@ export function createIndexer(overrides: Partial<IndexerDeps> = {}) {
       });
     }
 
-    for (const log of await load(taskCompletedEvent)) {
+    const taskCompletedLogs = await load(taskCompletedEvent);
+    logIndexerLogs("TaskCompleted", taskCompletedLogs.length, from, to);
+    for (const log of taskCompletedLogs) {
       const { taskId, result } = log.args;
       if (taskId == null) continue;
       await deps.updateTaskState(taskId.toString(), TaskState.Completed);
+      await deps.finalizeTaskSteps(taskId.toString(), StepState.Succeeded);
+      const resultText = typeof result === "string" ? result : undefined;
+      const decodedResult =
+        (log.data ? decodeTaskCompletionFromLogData(log.data as `0x${string}`) : null) ??
+        normalizeDisplayText(resultText);
       deps.publish(taskId.toString(), "task_completed", {
         taskId: taskId.toString(),
-        result,
+        result: decodedResult,
+        preview: taskTextPreview(decodedResult),
       });
     }
 
-    for (const log of await load(taskAbortedEvent)) {
+    const taskAbortedLogs = await load(taskAbortedEvent);
+    logIndexerLogs("TaskAborted", taskAbortedLogs.length, from, to);
+    for (const log of taskAbortedLogs) {
       const { taskId, reason } = log.args;
       if (taskId == null) continue;
       await deps.updateTaskState(taskId.toString(), TaskState.Aborted);
+      await deps.finalizeTaskSteps(
+        taskId.toString(),
+        abortReasonToStepState(reason),
+      );
       deps.publish(taskId.toString(), "task_aborted", {
         taskId: taskId.toString(),
         reason,
@@ -278,7 +427,14 @@ export function createIndexer(overrides: Partial<IndexerDeps> = {}) {
         toBlock: to,
       });
 
-    for (const log of await registryLoad(externalAgentRegisteredEvent)) {
+    const externalAgentRegisteredLogs = await registryLoad(externalAgentRegisteredEvent);
+    logIndexerLogs(
+      "ExternalAgentRegistered",
+      externalAgentRegisteredLogs.length,
+      from,
+      to,
+    );
+    for (const log of externalAgentRegisteredLogs) {
       const { configId, registrant, endpointUrl, endpointHash, caps } = log.args;
       if (
         configId == null ||
@@ -297,7 +453,14 @@ export function createIndexer(overrides: Partial<IndexerDeps> = {}) {
       );
     }
 
-    for (const log of await registryLoad(externalEndpointUpdatedEvent)) {
+    const externalEndpointUpdatedLogs = await registryLoad(externalEndpointUpdatedEvent);
+    logIndexerLogs(
+      "ExternalEndpointUpdated",
+      externalEndpointUpdatedLogs.length,
+      from,
+      to,
+    );
+    for (const log of externalEndpointUpdatedLogs) {
       const { configId, newUrl, newHash } = log.args;
       if (configId == null || typeof newUrl !== "string" || newHash == null) {
         continue;
@@ -314,7 +477,14 @@ export function createIndexer(overrides: Partial<IndexerDeps> = {}) {
       );
     }
 
-    for (const log of await registryLoad(externalDeregisteredEvent)) {
+    const externalDeregisteredLogs = await registryLoad(externalDeregisteredEvent);
+    logIndexerLogs(
+      "ExternalDeregistered",
+      externalDeregisteredLogs.length,
+      from,
+      to,
+    );
+    for (const log of externalDeregisteredLogs) {
       const { configId } = log.args;
       if (configId == null) continue;
       await deps.deactivateExternalAgent(configId.toString());
@@ -356,12 +526,112 @@ export function createIndexer(overrides: Partial<IndexerDeps> = {}) {
   };
 }
 
+function normalizeDisplayText(text: string | null | undefined): string | null {
+  if (text == null) return null;
+
+  const normalized = text
+    .replace(/\r\n/g, "\n")
+    .replace(/\u0000/g, "")
+    .replace(/[^\S\n]+/g, " ")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+
+  if (!normalized) return null;
+  if (normalized.includes("\uFFFD")) return null;
+
+  const printableChars = Array.from(normalized).filter((char) =>
+    char === "\n" || char === "\t" || (char >= " " && char !== "\u007f"),
+  ).length;
+
+  if (printableChars / normalized.length < 0.9) return null;
+  return normalized;
+}
+
+function taskTextPreview(
+  text: string | null | undefined,
+  maxLength = 120,
+): string | null {
+  const normalized = normalizeDisplayText(text);
+  if (!normalized) return null;
+  const singleLine = normalized.replace(/\s*\n\s*/g, " ").trim();
+  if (!singleLine) return null;
+  return singleLine.length > maxLength
+    ? `${singleLine.slice(0, maxLength).trimEnd()}…`
+    : singleLine;
+}
+
+function abortReasonToStepState(reason: unknown): number {
+  const lower = typeof reason === "string" ? reason.toLowerCase() : "";
+  if (
+    lower.includes("timed out") ||
+    lower.includes("time out") ||
+    lower.includes("timeout")
+  ) {
+    return StepState.TimedOut;
+  }
+  return StepState.Failed;
+}
+
+function logIndexerLogs(
+  eventType: string,
+  count: number,
+  fromBlock: bigint,
+  toBlock: bigint,
+): void {
+  if (count <= 0) return;
+  logTaskTimeline("indexer_logs", {
+    eventType,
+    fromBlock: fromBlock.toString(),
+    toBlock: toBlock.toString(),
+    count,
+  });
+}
+
 function decodePayload(hex: `0x${string}`): string {
   try {
     const bytes = Buffer.from(hex.slice(2), "hex");
     return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
   } catch {
     return "";
+  }
+}
+
+async function loadTaskStepsFromTransaction(
+  deps: Pick<IndexerDeps, "getTransaction">,
+  hash: `0x${string}` | null,
+): Promise<DecodedTaskStep[]> {
+  if (!hash) return [];
+
+  try {
+    const tx = await deps.getTransaction(hash);
+    const outer = decodeFunctionData({
+      abi: TwiinAccountAbi,
+      data: tx.input,
+    });
+    if (outer.functionName !== "execute") return [];
+    if (!outer.args) return [];
+
+    const nestedCalldata = outer.args[2];
+    if (typeof nestedCalldata !== "string") return [];
+
+    const inner = decodeFunctionData({
+      abi: AgentOrchestratorAbi,
+      data: nestedCalldata as Hex,
+    });
+    if (inner.functionName !== "createTask") return [];
+    if (!inner.args) return [];
+
+    const steps = inner.args[1];
+    if (!Array.isArray(steps)) return [];
+
+    return steps.map((step) => ({
+      configId: step.subAgentConfigId.toString(),
+      payload: decodePayload(step.payload),
+      timeoutSeconds: Number(step.timeoutSeconds),
+    }));
+  } catch {
+    return [];
   }
 }
 

@@ -22,10 +22,14 @@ import {
   upsertStep,
 } from "../db";
 import { publish } from "../sse";
+import { logTaskTimeline } from "../task-log";
 
 const CURSOR_KEY = "relay";
 const POLL_MS = 4_000;
 const CHUNK = 500n;
+const MAX_RPC_LOG_RANGE = 1_000n;
+const FAST_FORWARD_LAG_THRESHOLD = 100_000n;
+const FAST_FORWARD_TAIL = 10_000n;
 const MAX_EXTERNAL_RESULT_SIZE = 16_384;
 const externalAgentRequestEvent = parseAbiItem(
   "event ExternalAgentRequest(uint256 indexed taskId, uint8 stepIdx, uint256 configId, address registrant, bytes32 endpointHash, bytes payload, bytes32 reqId, uint64 deadline)",
@@ -111,9 +115,32 @@ export function createRelay(overrides: Partial<RelayDeps> = {}) {
   async function tick(): Promise<void> {
     const latest = await deps.getBlockNumber();
     const stored = await deps.getCursor(CURSOR_KEY);
+    if (stored > latest) {
+      const rewindTo = deps.startBlock > 0n && deps.startBlock <= latest
+        ? deps.startBlock
+        : latest;
+      deps.logger.warn(
+        `[relay] cursor ${stored} is ahead of latest block ${latest}; rewinding to ${rewindTo}`,
+      );
+      await deps.setCursor(CURSOR_KEY, rewindTo);
+      return;
+    }
     const from = stored === 0n && deps.startBlock > 0n ? deps.startBlock : stored;
     if (from > latest) return;
-    const to = from + CHUNK < latest ? from + CHUNK : latest;
+    const lag = latest - from;
+    if (lag > FAST_FORWARD_LAG_THRESHOLD) {
+      const fastForwardTo =
+        latest > FAST_FORWARD_TAIL ? latest - FAST_FORWARD_TAIL : 0n;
+      if (fastForwardTo > from) {
+        deps.logger.warn(
+          `[relay] lag ${lag} blocks is too large; fast-forwarding cursor from ${from} to ${fastForwardTo}`,
+        );
+        await deps.setCursor(CURSOR_KEY, fastForwardTo);
+        return;
+      }
+    }
+    const chunk = lag > MAX_RPC_LOG_RANGE ? MAX_RPC_LOG_RANGE : CHUNK;
+    const to = from + chunk < latest ? from + chunk : latest;
 
     const logs = await deps.getLogs({
       address: deps.addresses.orchestrator,
@@ -151,10 +178,22 @@ export function createRelay(overrides: Partial<RelayDeps> = {}) {
         deps.logger.log(
           `[relay] step ${taskIdStr}:${stepIdx} deadline passed, skipping`,
         );
+        logTaskTimeline("relay_step_expired", {
+          taskId: taskIdStr,
+          stepIdx,
+          configId: configId.toString(),
+          deadline: deadline.toString(),
+        });
         continue;
       }
 
       try {
+        logTaskTimeline("relay_step_detected", {
+          taskId: taskIdStr,
+          stepIdx,
+          configId: configId.toString(),
+          deadline: deadline?.toString() ?? null,
+        });
         await processExternalStep(deps, {
           taskId,
           stepIdx,
@@ -244,6 +283,12 @@ async function processExternalStep(
 
   await deps.saveSubmittedResult(taskIdStr, stepIdx, resultHex, signature);
   try {
+    logTaskTimeline("relay_submitting_result", {
+      taskId: taskIdStr,
+      stepIdx,
+      configId: configId.toString(),
+      resultBytes: (resultHex.length - 2) / 2,
+    });
     await deps.submitExternalResult([taskId, stepIdx, resultHex, signature]);
   } catch (e) {
     await deps.deleteSubmittedResult(taskIdStr, stepIdx);
@@ -255,6 +300,7 @@ async function processExternalStep(
     taskIdStr,
     stepIdx,
     configId.toString(),
+    null,
     StepState.AwaitingRating,
     payloadText,
     reqId,
@@ -263,6 +309,11 @@ async function processExternalStep(
     null,
   );
   deps.publish(taskIdStr, "step_result_submitted", { taskId: taskIdStr, stepIdx });
+  logTaskTimeline("relay_result_submitted", {
+    taskId: taskIdStr,
+    stepIdx,
+    configId: configId.toString(),
+  });
   deps.logger.log(
     `[relay] submitted external result task=${taskIdStr} step=${stepIdx} config=${configId}`,
   );

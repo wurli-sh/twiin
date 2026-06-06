@@ -4,12 +4,13 @@ import {
   getTimedOutSteps,
   listRunningTaskIds,
 } from "../db";
+import { logTaskTimeline } from "../task-log";
 
 const POLL_MS = 5_000;
 
 type TimeoutDeps = {
   getTimedOutSteps: typeof getTimedOutSteps;
-  listRunningTaskIds: typeof listRunningTaskIds;
+  readNextTaskId: () => Promise<bigint>;
   readTask: (
     taskId: bigint,
   ) => Promise<readonly [number, bigint, number, bigint, bigint, bigint, number]>;
@@ -24,7 +25,7 @@ type TimeoutDeps = {
 export function createTimeoutKeeper(overrides: Partial<TimeoutDeps> = {}) {
   const deps: TimeoutDeps = {
     getTimedOutSteps,
-    listRunningTaskIds,
+    readNextTaskId: () => orchestratorContract.read.nextTaskId(),
     readTask: (taskId) => orchestratorContract.read.tasks([taskId]),
     timeoutExternalStep: (args) => orchestratorContract.write.timeoutExternalStep(args),
     timeoutRating: (args) => orchestratorContract.write.timeoutRating(args),
@@ -43,6 +44,12 @@ export function createTimeoutKeeper(overrides: Partial<TimeoutDeps> = {}) {
     for (const step of timedOutSteps) {
       try {
         const taskId = BigInt(step.task_id);
+        logTaskTimeline("timeout_detected", {
+          taskId: step.task_id,
+          stepIdx: step.step_idx,
+          state: step.state,
+          deadline: step.deadline,
+        });
         if (step.state === StepState.RunningExternal) {
           await deps.timeoutExternalStep([taskId, step.step_idx]);
         } else if (step.state === StepState.AwaitingRating) {
@@ -57,14 +64,19 @@ export function createTimeoutKeeper(overrides: Partial<TimeoutDeps> = {}) {
       }
     }
 
-    const runningTaskIds = await deps.listRunningTaskIds();
-    for (const taskIdStr of runningTaskIds) {
+    const nextTaskId = await deps.readNextTaskId();
+    for (let taskId = 1n; taskId <= nextTaskId; taskId++) {
+      const taskIdStr = taskId.toString();
       try {
-        const raw = await deps.readTask(BigInt(taskIdStr));
+        const raw = await deps.readTask(taskId);
         const deadline = Number(raw[5]);
         const state = Number(raw[6]);
         if (state === TaskState.Running && deadline > 0 && deadline <= now) {
-          await deps.timeoutTask([BigInt(taskIdStr)]);
+          logTaskTimeline("task_timeout_detected", {
+            taskId: taskIdStr,
+            deadline,
+          });
+          await deps.timeoutTask([taskId]);
         }
       } catch (error) {
         deps.logger.warn(
