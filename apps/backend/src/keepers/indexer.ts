@@ -1,5 +1,11 @@
 import { decodeFunctionData, parseAbiItem, type AbiEvent, type Hex } from "viem";
-import { decodeTaskCompletionFromLogData, StepState, TaskState } from "@twiin/shared";
+import {
+  TrustlessAwaiting,
+  decodeTaskCompletionFromLogData,
+  decodeTrustlessJaniceResult,
+  StepState,
+  TaskState,
+} from "@twiin/shared";
 import AgentOrchestratorAbi from "@twiin/shared/abis/AgentOrchestrator.json";
 import TwiinAccountAbi from "@twiin/shared/abis/TwiinAccount.json";
 import { publicClient } from "../clients";
@@ -11,8 +17,11 @@ import {
   getExternalAgent,
   getCursor,
   getStep,
+  patchTrustlessTask,
   setCursor,
   updateTaskState,
+  upsertTrustlessTask,
+  upsertTrustlessTurn,
   upsertExternalAgent,
   upsertStep,
   upsertTask,
@@ -52,6 +61,21 @@ const taskCompletedEvent = parseAbiItem(
 ) as AbiEvent;
 const taskAbortedEvent = parseAbiItem(
   "event TaskAborted(uint256 indexed taskId, string reason)",
+) as AbiEvent;
+const trustlessTaskIntentEvent = parseAbiItem(
+  "event TrustlessTaskIntent(uint256 indexed taskId, string goal, bytes32 intentHash, uint8 maxIterations)",
+) as AbiEvent;
+const trustlessStepAppendedEvent = parseAbiItem(
+  "event TrustlessStepAppended(uint256 indexed taskId, uint8 indexed stepIdx, uint256 configId, bytes payload, uint256 maxCostWei, uint64 timeoutSeconds)",
+) as AbiEvent;
+const janiceIterationEvent = parseAbiItem(
+  "event JaniceIteration(uint256 indexed taskId, uint8 indexed iteration, uint256 requestId, string finishReason, bytes32 transcriptHash)",
+) as AbiEvent;
+const janiceToolExecutedEvent = parseAbiItem(
+  "event JaniceToolExecuted(uint256 indexed taskId, uint8 indexed iteration, string toolName, bytes32 argsHash, bool success)",
+) as AbiEvent;
+const janiceResumeQueuedEvent = parseAbiItem(
+  "event JaniceResumeQueued(uint256 indexed taskId, uint8 indexed nextIteration, bytes32 transcriptHash, string reason)",
 ) as AbiEvent;
 const externalAgentRegisteredEvent = parseAbiItem(
   "event ExternalAgentRegistered(uint256 indexed configId, address indexed registrant, string endpointUrl, bytes32 endpointHash, bytes32[] caps, uint256 costWei)",
@@ -108,6 +132,9 @@ type IndexerDeps = {
   finalizeTaskSteps: typeof finalizeTaskSteps;
   upsertStep: typeof upsertStep;
   updateTaskState: typeof updateTaskState;
+  upsertTrustlessTask: typeof upsertTrustlessTask;
+  patchTrustlessTask: typeof patchTrustlessTask;
+  upsertTrustlessTurn: typeof upsertTrustlessTurn;
   publish: typeof publish;
 };
 
@@ -141,6 +168,9 @@ export function createIndexer(overrides: Partial<IndexerDeps> = {}) {
     finalizeTaskSteps,
     upsertStep,
     updateTaskState,
+    upsertTrustlessTask,
+    patchTrustlessTask,
+    upsertTrustlessTurn,
     publish,
     ...overrides,
   };
@@ -238,6 +268,51 @@ export function createIndexer(overrides: Partial<IndexerDeps> = {}) {
         personalAgentId: personalAgentId.toString(),
         mode,
         budgetWei: budgetWei?.toString(),
+      });
+    }
+
+    const trustlessTaskIntentLogs = await load(trustlessTaskIntentEvent);
+    logIndexerLogs("TrustlessTaskIntent", trustlessTaskIntentLogs.length, from, to);
+    for (const log of trustlessTaskIntentLogs) {
+      const { taskId, goal, intentHash, maxIterations } = log.args;
+      if (taskId == null || typeof goal !== "string" || intentHash == null) continue;
+      await deps.upsertTrustlessTask({
+        taskId: taskId.toString(),
+        goal,
+        intentHash: intentHash.toString(),
+        iterations: 0,
+        maxIterations: Number(maxIterations ?? 0),
+        awaiting: TrustlessAwaiting.Janice,
+        janiceRequestId: null,
+      });
+      deps.publish(taskId.toString(), "trustless_intent", {
+        taskId: taskId.toString(),
+        goal,
+        maxIterations,
+      });
+    }
+
+    const trustlessStepAppendedLogs = await load(trustlessStepAppendedEvent);
+    logIndexerLogs("TrustlessStepAppended", trustlessStepAppendedLogs.length, from, to);
+    for (const log of trustlessStepAppendedLogs) {
+      const { taskId, stepIdx, configId, payload, timeoutSeconds } = log.args;
+      if (taskId == null || stepIdx == null || configId == null) continue;
+      await deps.upsertStep(
+        taskId.toString(),
+        Number(stepIdx),
+        configId.toString(),
+        timeoutSeconds == null ? null : Number(timeoutSeconds),
+        StepState.Pending,
+        decodePayload((payload as `0x${string}` | null) ?? "0x"),
+        null,
+        null,
+        null,
+        null,
+      );
+      deps.publish(taskId.toString(), "trustless_step_appended", {
+        taskId: taskId.toString(),
+        stepIdx,
+        configId: configId.toString(),
       });
     }
 
@@ -415,6 +490,74 @@ export function createIndexer(overrides: Partial<IndexerDeps> = {}) {
       );
       deps.publish(taskId.toString(), "task_aborted", {
         taskId: taskId.toString(),
+        reason,
+      });
+    }
+
+    const janiceIterationLogs = await load(janiceIterationEvent);
+    logIndexerLogs("JaniceIteration", janiceIterationLogs.length, from, to);
+    for (const log of janiceIterationLogs) {
+      const { taskId, iteration, requestId, finishReason, transcriptHash } = log.args;
+      if (taskId == null || iteration == null || requestId == null) continue;
+      const callback = await loadTrustlessCallbackFromTransaction(
+        deps,
+        log.transactionHash ?? null,
+      );
+      const decoded = callback?.resultHex
+        ? decodeTrustlessJaniceResult(callback.resultHex)
+        : null;
+      await deps.upsertTrustlessTurn({
+        taskId: taskId.toString(),
+        iteration: Number(iteration),
+        requestId: requestId.toString(),
+        finishReason:
+          typeof finishReason === "string" ? finishReason : decoded?.finishReason ?? "error",
+        assistantMessage: decoded?.assistantMessage ?? "",
+        toolCallsJson: JSON.stringify(decoded?.toolCalls ?? []),
+        rawResultHex: callback?.resultHex ?? null,
+        transcriptHash: transcriptHash?.toString() ?? null,
+      });
+      await deps.patchTrustlessTask(taskId.toString(), {
+        iterations: Number(iteration),
+        janiceRequestId: requestId.toString(),
+        awaiting: TrustlessAwaiting.Janice,
+      });
+      deps.publish(taskId.toString(), "janice_iteration", {
+        taskId: taskId.toString(),
+        iteration,
+        requestId: requestId.toString(),
+        finishReason,
+        assistantMessage: decoded?.assistantMessage ?? "",
+        toolCalls: decoded?.toolCalls ?? [],
+      });
+    }
+
+    const janiceToolExecutedLogs = await load(janiceToolExecutedEvent);
+    logIndexerLogs("JaniceToolExecuted", janiceToolExecutedLogs.length, from, to);
+    for (const log of janiceToolExecutedLogs) {
+      const { taskId, iteration, toolName, argsHash, success } = log.args;
+      if (taskId == null || iteration == null || typeof toolName !== "string") continue;
+      deps.publish(taskId.toString(), "janice_tool_executed", {
+        taskId: taskId.toString(),
+        iteration,
+        toolName,
+        argsHash: argsHash?.toString(),
+        success,
+      });
+    }
+
+    const janiceResumeQueuedLogs = await load(janiceResumeQueuedEvent);
+    logIndexerLogs("JaniceResumeQueued", janiceResumeQueuedLogs.length, from, to);
+    for (const log of janiceResumeQueuedLogs) {
+      const { taskId, nextIteration, reason } = log.args;
+      if (taskId == null || nextIteration == null) continue;
+      await deps.patchTrustlessTask(taskId.toString(), {
+        awaiting: TrustlessAwaiting.Resume,
+        lastResumeReason: typeof reason === "string" ? reason : null,
+      });
+      deps.publish(taskId.toString(), "janice_resume_queued", {
+        taskId: taskId.toString(),
+        nextIteration,
         reason,
       });
     }
@@ -632,6 +775,29 @@ async function loadTaskStepsFromTransaction(
     }));
   } catch {
     return [];
+  }
+}
+
+async function loadTrustlessCallbackFromTransaction(
+  deps: Pick<IndexerDeps, "getTransaction">,
+  hash: `0x${string}` | null,
+): Promise<{ resultHex: `0x${string}` | null } | null> {
+  if (!hash) return null;
+  try {
+    const tx = await deps.getTransaction(hash);
+    const decoded = decodeFunctionData({
+      abi: AgentOrchestratorAbi,
+      data: tx.input,
+    });
+    if (decoded.functionName !== "handleResponse" || !decoded.args) return null;
+    const responses = decoded.args[1];
+    if (!Array.isArray(responses) || responses.length === 0) return null;
+    const first = responses[0];
+    return {
+      resultHex: (first.result as `0x${string}` | undefined) ?? null,
+    };
+  } catch {
+    return null;
   }
 }
 

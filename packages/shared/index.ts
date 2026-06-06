@@ -2,6 +2,7 @@ export * from "./constants";
 export * from "./digest";
 export * from "./twiin-account";
 export * from "./somnia-agents";
+export * from "./trustless";
 
 // ABIs — populated by `pnpm copy-abis` (requires contracts to be compiled first)
 export * from "./abis/index";
@@ -27,6 +28,7 @@ export const AddressesSchema = z.object({
   policy: AddrField,
   oracleFeed: AddrField,
   orchestrator: AddrField,
+  refreshManager: AddrField,
   factory: AddrField,
   mUSDC: AddrField,
   mockRouter: AddrField,
@@ -77,6 +79,7 @@ export type Addresses = Omit<ParsedAddresses, "_note"> & {
   policy: `0x${string}`;
   oracleFeed: `0x${string}`;
   orchestrator: `0x${string}`;
+  refreshManager: `0x${string}`;
   factory: `0x${string}`;
   mUSDC: `0x${string}`;
   mockRouter: `0x${string}`;

@@ -3250,11 +3250,6 @@ export const AgentOrchestratorAbi = [
       },
       {
         "internalType": "address",
-        "name": "_oracleFeed",
-        "type": "address"
-      },
-      {
-        "internalType": "address",
         "name": "_agentsApi",
         "type": "address"
       },
@@ -3271,6 +3266,41 @@ export const AgentOrchestratorAbi = [
     ],
     "stateMutability": "nonpayable",
     "type": "constructor"
+  },
+  {
+    "inputs": [],
+    "name": "BadJaniceCost",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "BadNativeConfig",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "BadSignature",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "BadStepCount",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "BadToolPayload",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "BudgetExhausted",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "DepositExceedsMax",
+    "type": "error"
   },
   {
     "inputs": [],
@@ -3301,37 +3331,77 @@ export const AgentOrchestratorAbi = [
   },
   {
     "inputs": [],
-    "name": "EmptyFilter",
+    "name": "MaxStepsReached",
     "type": "error"
   },
   {
     "inputs": [],
-    "name": "GasLimitExceeded",
+    "name": "NoAgent",
     "type": "error"
   },
   {
     "inputs": [],
-    "name": "GasLimitZero",
+    "name": "NoBudget",
     "type": "error"
   },
   {
     "inputs": [],
-    "name": "HandlerZeroAddress",
+    "name": "NoRegistrant",
     "type": "error"
   },
   {
     "inputs": [],
-    "name": "InsufficientBalance",
+    "name": "NotAgent",
     "type": "error"
   },
   {
     "inputs": [],
-    "name": "InvalidMaxFeePerGas",
+    "name": "NotAwaitingExternal",
     "type": "error"
   },
   {
     "inputs": [],
-    "name": "OnlyReactivityPrecompile",
+    "name": "NotAwaitingResume",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "NotPendingRating",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "NotRunning",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "NotTimedOut",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "NotTrustless",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "OnlyAdmin",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "OnlyAgentsApi",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "OnlyKeeper",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "OnlyRefreshManager",
     "type": "error"
   },
   {
@@ -3341,7 +3411,42 @@ export const AgentOrchestratorAbi = [
   },
   {
     "inputs": [],
-    "name": "TimestampInPast",
+    "name": "RefreshManagerAlreadySet",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "ResultTooLarge",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "StepExpired",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "StepOutOfRange",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "TaskAlreadyActive",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "TaskNotRunning",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "TaskTimedOut",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "ValueBudgetMismatch",
     "type": "error"
   },
   {
@@ -3502,6 +3607,111 @@ export const AgentOrchestratorAbi = [
         "type": "uint256"
       },
       {
+        "indexed": true,
+        "internalType": "uint8",
+        "name": "iteration",
+        "type": "uint8"
+      },
+      {
+        "indexed": false,
+        "internalType": "uint256",
+        "name": "requestId",
+        "type": "uint256"
+      },
+      {
+        "indexed": false,
+        "internalType": "string",
+        "name": "finishReason",
+        "type": "string"
+      },
+      {
+        "indexed": false,
+        "internalType": "bytes32",
+        "name": "transcriptHash",
+        "type": "bytes32"
+      }
+    ],
+    "name": "JaniceIteration",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      {
+        "indexed": true,
+        "internalType": "uint256",
+        "name": "taskId",
+        "type": "uint256"
+      },
+      {
+        "indexed": true,
+        "internalType": "uint8",
+        "name": "nextIteration",
+        "type": "uint8"
+      },
+      {
+        "indexed": false,
+        "internalType": "bytes32",
+        "name": "transcriptHash",
+        "type": "bytes32"
+      },
+      {
+        "indexed": false,
+        "internalType": "string",
+        "name": "reason",
+        "type": "string"
+      }
+    ],
+    "name": "JaniceResumeQueued",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      {
+        "indexed": true,
+        "internalType": "uint256",
+        "name": "taskId",
+        "type": "uint256"
+      },
+      {
+        "indexed": true,
+        "internalType": "uint8",
+        "name": "iteration",
+        "type": "uint8"
+      },
+      {
+        "indexed": false,
+        "internalType": "string",
+        "name": "toolName",
+        "type": "string"
+      },
+      {
+        "indexed": false,
+        "internalType": "bytes32",
+        "name": "argsHash",
+        "type": "bytes32"
+      },
+      {
+        "indexed": false,
+        "internalType": "bool",
+        "name": "success",
+        "type": "bool"
+      }
+    ],
+    "name": "JaniceToolExecuted",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      {
+        "indexed": true,
+        "internalType": "uint256",
+        "name": "taskId",
+        "type": "uint256"
+      },
+      {
         "indexed": false,
         "internalType": "uint8",
         "name": "stepIdx",
@@ -3528,62 +3738,6 @@ export const AgentOrchestratorAbi = [
       }
     ],
     "name": "RatingTimedOut",
-    "type": "event"
-  },
-  {
-    "anonymous": false,
-    "inputs": [
-      {
-        "indexed": true,
-        "internalType": "uint256",
-        "name": "personalAgentId",
-        "type": "uint256"
-      },
-      {
-        "indexed": false,
-        "internalType": "string",
-        "name": "topic",
-        "type": "string"
-      },
-      {
-        "indexed": false,
-        "internalType": "uint256",
-        "name": "timestampMillis",
-        "type": "uint256"
-      },
-      {
-        "indexed": false,
-        "internalType": "uint256",
-        "name": "subscriptionId",
-        "type": "uint256"
-      }
-    ],
-    "name": "RefreshScheduled",
-    "type": "event"
-  },
-  {
-    "anonymous": false,
-    "inputs": [
-      {
-        "indexed": true,
-        "internalType": "uint256",
-        "name": "personalAgentId",
-        "type": "uint256"
-      },
-      {
-        "indexed": false,
-        "internalType": "string",
-        "name": "topic",
-        "type": "string"
-      },
-      {
-        "indexed": false,
-        "internalType": "string",
-        "name": "reason",
-        "type": "string"
-      }
-    ],
-    "name": "RefreshSkipped",
     "type": "event"
   },
   {
@@ -3681,6 +3835,80 @@ export const AgentOrchestratorAbi = [
     "type": "event"
   },
   {
+    "anonymous": false,
+    "inputs": [
+      {
+        "indexed": true,
+        "internalType": "uint256",
+        "name": "taskId",
+        "type": "uint256"
+      },
+      {
+        "indexed": true,
+        "internalType": "uint8",
+        "name": "stepIdx",
+        "type": "uint8"
+      },
+      {
+        "indexed": false,
+        "internalType": "uint256",
+        "name": "configId",
+        "type": "uint256"
+      },
+      {
+        "indexed": false,
+        "internalType": "bytes",
+        "name": "payload",
+        "type": "bytes"
+      },
+      {
+        "indexed": false,
+        "internalType": "uint256",
+        "name": "maxCostWei",
+        "type": "uint256"
+      },
+      {
+        "indexed": false,
+        "internalType": "uint64",
+        "name": "timeoutSeconds",
+        "type": "uint64"
+      }
+    ],
+    "name": "TrustlessStepAppended",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      {
+        "indexed": true,
+        "internalType": "uint256",
+        "name": "taskId",
+        "type": "uint256"
+      },
+      {
+        "indexed": false,
+        "internalType": "string",
+        "name": "goal",
+        "type": "string"
+      },
+      {
+        "indexed": false,
+        "internalType": "bytes32",
+        "name": "intentHash",
+        "type": "bytes32"
+      },
+      {
+        "indexed": false,
+        "internalType": "uint8",
+        "name": "maxIterations",
+        "type": "uint8"
+      }
+    ],
+    "name": "TrustlessTaskIntent",
+    "type": "event"
+  },
+  {
     "inputs": [],
     "name": "CAP_ONCHAIN_EXECUTE",
     "outputs": [
@@ -3695,12 +3923,38 @@ export const AgentOrchestratorAbi = [
   },
   {
     "inputs": [],
+    "name": "JANICE_CONFIG_ID",
+    "outputs": [
+      {
+        "internalType": "uint256",
+        "name": "",
+        "type": "uint256"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
     "name": "MAX_EXTERNAL_RESULT_SIZE",
     "outputs": [
       {
         "internalType": "uint256",
         "name": "",
         "type": "uint256"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "MAX_JANICE_ITERATIONS",
+    "outputs": [
+      {
+        "internalType": "uint8",
+        "name": "",
+        "type": "uint8"
       }
     ],
     "stateMutability": "view",
@@ -3897,7 +4151,7 @@ export const AgentOrchestratorAbi = [
         "type": "uint256"
       }
     ],
-    "stateMutability": "nonpayable",
+    "stateMutability": "payable",
     "type": "function"
   },
   {
@@ -3946,6 +4200,35 @@ export const AgentOrchestratorAbi = [
       }
     ],
     "name": "createTask",
+    "outputs": [
+      {
+        "internalType": "uint256",
+        "name": "taskId",
+        "type": "uint256"
+      }
+    ],
+    "stateMutability": "payable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint256",
+        "name": "personalAgentId",
+        "type": "uint256"
+      },
+      {
+        "internalType": "bytes",
+        "name": "intentPayload",
+        "type": "bytes"
+      },
+      {
+        "internalType": "uint256",
+        "name": "budgetWei",
+        "type": "uint256"
+      }
+    ],
+    "name": "createTrustlessTask",
     "outputs": [
       {
         "internalType": "uint256",
@@ -4175,6 +4458,543 @@ export const AgentOrchestratorAbi = [
     "type": "function"
   },
   {
+    "inputs": [],
+    "name": "policy",
+    "outputs": [
+      {
+        "internalType": "contract AgentPolicy",
+        "name": "",
+        "type": "address"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "refreshManager",
+    "outputs": [
+      {
+        "internalType": "address",
+        "name": "",
+        "type": "address"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "registry6551",
+    "outputs": [
+      {
+        "internalType": "contract IERC6551Registry",
+        "name": "",
+        "type": "address"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint256",
+        "name": "taskId",
+        "type": "uint256"
+      },
+      {
+        "internalType": "bytes",
+        "name": "resumePayload",
+        "type": "bytes"
+      },
+      {
+        "internalType": "uint256",
+        "name": "janiceCostWei",
+        "type": "uint256"
+      }
+    ],
+    "name": "resumeTrustlessTask",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "address",
+        "name": "_refreshManager",
+        "type": "address"
+      }
+    ],
+    "name": "setRefreshManager",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint256",
+        "name": "taskId",
+        "type": "uint256"
+      },
+      {
+        "internalType": "uint8",
+        "name": "stepIdx",
+        "type": "uint8"
+      },
+      {
+        "internalType": "bytes",
+        "name": "result",
+        "type": "bytes"
+      },
+      {
+        "internalType": "bytes",
+        "name": "signature",
+        "type": "bytes"
+      }
+    ],
+    "name": "submitExternalResult",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint256",
+        "name": "",
+        "type": "uint256"
+      }
+    ],
+    "name": "taskLock",
+    "outputs": [
+      {
+        "internalType": "uint256",
+        "name": "",
+        "type": "uint256"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint256",
+        "name": "",
+        "type": "uint256"
+      }
+    ],
+    "name": "tasks",
+    "outputs": [
+      {
+        "internalType": "enum PlanMode",
+        "name": "mode",
+        "type": "uint8"
+      },
+      {
+        "internalType": "uint256",
+        "name": "personalAgentId",
+        "type": "uint256"
+      },
+      {
+        "internalType": "uint8",
+        "name": "cursor",
+        "type": "uint8"
+      },
+      {
+        "internalType": "uint256",
+        "name": "budgetWei",
+        "type": "uint256"
+      },
+      {
+        "internalType": "uint256",
+        "name": "spentWei",
+        "type": "uint256"
+      },
+      {
+        "internalType": "uint64",
+        "name": "deadline",
+        "type": "uint64"
+      },
+      {
+        "internalType": "enum TaskState",
+        "name": "state",
+        "type": "uint8"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint256",
+        "name": "taskId",
+        "type": "uint256"
+      },
+      {
+        "internalType": "uint8",
+        "name": "stepIdx",
+        "type": "uint8"
+      }
+    ],
+    "name": "timeoutExternalStep",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint256",
+        "name": "taskId",
+        "type": "uint256"
+      },
+      {
+        "internalType": "uint8",
+        "name": "stepIdx",
+        "type": "uint8"
+      }
+    ],
+    "name": "timeoutNativeStep",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint256",
+        "name": "taskId",
+        "type": "uint256"
+      },
+      {
+        "internalType": "uint8",
+        "name": "stepIdx",
+        "type": "uint8"
+      }
+    ],
+    "name": "timeoutRating",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint256",
+        "name": "taskId",
+        "type": "uint256"
+      }
+    ],
+    "name": "timeoutTask",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint256",
+        "name": "",
+        "type": "uint256"
+      }
+    ],
+    "name": "trustlessCtx",
+    "outputs": [
+      {
+        "internalType": "uint256",
+        "name": "janiceRequestId",
+        "type": "uint256"
+      },
+      {
+        "internalType": "uint8",
+        "name": "iterations",
+        "type": "uint8"
+      },
+      {
+        "internalType": "uint8",
+        "name": "maxIterations",
+        "type": "uint8"
+      },
+      {
+        "internalType": "enum TrustlessAwaiting",
+        "name": "awaiting",
+        "type": "uint8"
+      },
+      {
+        "internalType": "uint64",
+        "name": "deadline",
+        "type": "uint64"
+      },
+      {
+        "internalType": "bytes32",
+        "name": "intentHash",
+        "type": "bytes32"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "twiinAccountImpl",
+    "outputs": [
+      {
+        "internalType": "address",
+        "name": "",
+        "type": "address"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "twiinAgent",
+    "outputs": [
+      {
+        "internalType": "address",
+        "name": "",
+        "type": "address"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "vault",
+    "outputs": [
+      {
+        "internalType": "contract AgentVault",
+        "name": "",
+        "type": "address"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "stateMutability": "payable",
+    "type": "receive"
+  }
+] as const;
+
+export const AgentRefreshCoordinatorAbi = [
+  {
+    "inputs": [
+      {
+        "internalType": "address",
+        "name": "_registry6551",
+        "type": "address"
+      },
+      {
+        "internalType": "address",
+        "name": "_twiinAccountImpl",
+        "type": "address"
+      },
+      {
+        "internalType": "address",
+        "name": "_twiinAgent",
+        "type": "address"
+      },
+      {
+        "internalType": "address",
+        "name": "_policy",
+        "type": "address"
+      },
+      {
+        "internalType": "address",
+        "name": "_oracleFeed",
+        "type": "address"
+      },
+      {
+        "internalType": "address",
+        "name": "_orchestrator",
+        "type": "address"
+      },
+      {
+        "internalType": "address",
+        "name": "_keeper",
+        "type": "address"
+      },
+      {
+        "internalType": "address",
+        "name": "_admin",
+        "type": "address"
+      }
+    ],
+    "stateMutability": "nonpayable",
+    "type": "constructor"
+  },
+  {
+    "inputs": [],
+    "name": "EmptyFilter",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "GasLimitExceeded",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "GasLimitZero",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "HandlerZeroAddress",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "InsufficientBalance",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "InvalidMaxFeePerGas",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "NotAllowed",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "OnlyKeeper",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "OnlyReactivityPrecompile",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "OnlySelf",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "TimestampInPast",
+    "type": "error"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      {
+        "indexed": true,
+        "internalType": "uint256",
+        "name": "personalAgentId",
+        "type": "uint256"
+      },
+      {
+        "indexed": false,
+        "internalType": "string",
+        "name": "topic",
+        "type": "string"
+      },
+      {
+        "indexed": false,
+        "internalType": "uint256",
+        "name": "timestampMillis",
+        "type": "uint256"
+      },
+      {
+        "indexed": false,
+        "internalType": "uint256",
+        "name": "subscriptionId",
+        "type": "uint256"
+      }
+    ],
+    "name": "RefreshScheduled",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      {
+        "indexed": true,
+        "internalType": "uint256",
+        "name": "personalAgentId",
+        "type": "uint256"
+      },
+      {
+        "indexed": false,
+        "internalType": "string",
+        "name": "topic",
+        "type": "string"
+      },
+      {
+        "indexed": false,
+        "internalType": "string",
+        "name": "reason",
+        "type": "string"
+      }
+    ],
+    "name": "RefreshSkipped",
+    "type": "event"
+  },
+  {
+    "inputs": [],
+    "name": "MAX_STEPS",
+    "outputs": [
+      {
+        "internalType": "uint256",
+        "name": "",
+        "type": "uint256"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "TWIIN_6551_SALT",
+    "outputs": [
+      {
+        "internalType": "bytes32",
+        "name": "",
+        "type": "bytes32"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "admin",
+    "outputs": [
+      {
+        "internalType": "address",
+        "name": "",
+        "type": "address"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "keeper",
+    "outputs": [
+      {
+        "internalType": "address",
+        "name": "",
+        "type": "address"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
     "inputs": [
       {
         "internalType": "address",
@@ -4203,6 +5023,19 @@ export const AgentOrchestratorAbi = [
     "outputs": [
       {
         "internalType": "contract OracleFeed",
+        "name": "",
+        "type": "address"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "orchestrator",
+    "outputs": [
+      {
+        "internalType": "contract IRefreshTaskOrchestrator",
         "name": "",
         "type": "address"
       }
@@ -4380,34 +5213,6 @@ export const AgentOrchestratorAbi = [
   {
     "inputs": [
       {
-        "internalType": "uint256",
-        "name": "taskId",
-        "type": "uint256"
-      },
-      {
-        "internalType": "uint8",
-        "name": "stepIdx",
-        "type": "uint8"
-      },
-      {
-        "internalType": "bytes",
-        "name": "result",
-        "type": "bytes"
-      },
-      {
-        "internalType": "bytes",
-        "name": "signature",
-        "type": "bytes"
-      }
-    ],
-    "name": "submitExternalResult",
-    "outputs": [],
-    "stateMutability": "nonpayable",
-    "type": "function"
-  },
-  {
-    "inputs": [
-      {
         "internalType": "bytes4",
         "name": "interfaceId",
         "type": "bytes4"
@@ -4422,141 +5227,6 @@ export const AgentOrchestratorAbi = [
       }
     ],
     "stateMutability": "pure",
-    "type": "function"
-  },
-  {
-    "inputs": [
-      {
-        "internalType": "uint256",
-        "name": "",
-        "type": "uint256"
-      }
-    ],
-    "name": "taskLock",
-    "outputs": [
-      {
-        "internalType": "uint256",
-        "name": "",
-        "type": "uint256"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [
-      {
-        "internalType": "uint256",
-        "name": "",
-        "type": "uint256"
-      }
-    ],
-    "name": "tasks",
-    "outputs": [
-      {
-        "internalType": "enum PlanMode",
-        "name": "mode",
-        "type": "uint8"
-      },
-      {
-        "internalType": "uint256",
-        "name": "personalAgentId",
-        "type": "uint256"
-      },
-      {
-        "internalType": "uint8",
-        "name": "cursor",
-        "type": "uint8"
-      },
-      {
-        "internalType": "uint256",
-        "name": "budgetWei",
-        "type": "uint256"
-      },
-      {
-        "internalType": "uint256",
-        "name": "spentWei",
-        "type": "uint256"
-      },
-      {
-        "internalType": "uint64",
-        "name": "deadline",
-        "type": "uint64"
-      },
-      {
-        "internalType": "enum TaskState",
-        "name": "state",
-        "type": "uint8"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [
-      {
-        "internalType": "uint256",
-        "name": "taskId",
-        "type": "uint256"
-      },
-      {
-        "internalType": "uint8",
-        "name": "stepIdx",
-        "type": "uint8"
-      }
-    ],
-    "name": "timeoutExternalStep",
-    "outputs": [],
-    "stateMutability": "nonpayable",
-    "type": "function"
-  },
-  {
-    "inputs": [
-      {
-        "internalType": "uint256",
-        "name": "taskId",
-        "type": "uint256"
-      },
-      {
-        "internalType": "uint8",
-        "name": "stepIdx",
-        "type": "uint8"
-      }
-    ],
-    "name": "timeoutNativeStep",
-    "outputs": [],
-    "stateMutability": "nonpayable",
-    "type": "function"
-  },
-  {
-    "inputs": [
-      {
-        "internalType": "uint256",
-        "name": "taskId",
-        "type": "uint256"
-      },
-      {
-        "internalType": "uint8",
-        "name": "stepIdx",
-        "type": "uint8"
-      }
-    ],
-    "name": "timeoutRating",
-    "outputs": [],
-    "stateMutability": "nonpayable",
-    "type": "function"
-  },
-  {
-    "inputs": [
-      {
-        "internalType": "uint256",
-        "name": "taskId",
-        "type": "uint256"
-      }
-    ],
-    "name": "timeoutTask",
-    "outputs": [],
-    "stateMutability": "nonpayable",
     "type": "function"
   },
   {
@@ -4586,19 +5256,6 @@ export const AgentOrchestratorAbi = [
     "type": "function"
   },
   {
-    "inputs": [],
-    "name": "vault",
-    "outputs": [
-      {
-        "internalType": "contract AgentVault",
-        "name": "",
-        "type": "address"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
     "stateMutability": "payable",
     "type": "receive"
   }
@@ -4609,6 +5266,26 @@ export const OracleFeedAbi = [
     "inputs": [],
     "stateMutability": "nonpayable",
     "type": "constructor"
+  },
+  {
+    "inputs": [],
+    "name": "OnlyAuthorizedPublisher",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "OnlyDeployer",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "SetOnce",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "ZeroAddress",
+    "type": "error"
   },
   {
     "anonymous": false,
@@ -4658,6 +5335,19 @@ export const OracleFeedAbi = [
       }
     ],
     "name": "OrchestratorSet",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      {
+        "indexed": true,
+        "internalType": "address",
+        "name": "refreshManager",
+        "type": "address"
+      }
+    ],
+    "name": "RefreshManagerSet",
     "type": "event"
   },
   {
@@ -4971,6 +5661,19 @@ export const OracleFeedAbi = [
     "type": "function"
   },
   {
+    "inputs": [],
+    "name": "refreshManager",
+    "outputs": [
+      {
+        "internalType": "address",
+        "name": "",
+        "type": "address"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
     "inputs": [
       {
         "components": [
@@ -5025,6 +5728,19 @@ export const OracleFeedAbi = [
       }
     ],
     "name": "setOrchestrator",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "address",
+        "name": "_refreshManager",
+        "type": "address"
+      }
+    ],
+    "name": "setRefreshManager",
     "outputs": [],
     "stateMutability": "nonpayable",
     "type": "function"

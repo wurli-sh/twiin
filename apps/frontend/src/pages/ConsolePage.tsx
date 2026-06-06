@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { motion } from 'framer-motion'
 import { SquarePen } from 'lucide-react'
-import { parseEther } from 'viem'
+import { formatEther, parseEther } from 'viem'
 import { TranscriptPanel } from '@/components/console/TranscriptPanel'
 import { CommandBar } from '@/components/console/CommandBar'
 import { BudgetWarningsBar } from '@/components/console/BudgetWarningsBar'
@@ -11,6 +11,7 @@ import { TwiinAvatar } from '@/components/ui/TwiinAvatar'
 import { TextLoop } from '@/components/ui/TextLoop'
 import { useTwiinAgents } from '@/hooks/useTwiinAgents'
 import { useCreateTask } from '@/hooks/useCreateTask'
+import { useCreateTrustlessTask } from '@/hooks/useCreateTrustlessTask'
 import { useAgentPolicy } from '@/hooks/useAgentPolicy'
 import { useTaskStream } from '@/hooks/useTaskStream'
 import { useTaskDetail } from '@/hooks/useTaskDetail'
@@ -18,7 +19,12 @@ import { useWallet } from '@/hooks/useWallet'
 import { useUIStore } from '@/stores/ui'
 import { type PlanBudgetMismatch } from '@/components/console/PlanBudgetRecovery'
 import { requestPlan, isPlanOverBudgetError } from '@/lib/plan-api'
-import { maxTaskBudgetStt } from '@/lib/agent-budget'
+import {
+  requestTrustlessPreflight,
+  isTrustlessBudgetTooLowError,
+} from '@/lib/trustless-api'
+import { maxTaskBudgetStt, perTaskCapStt } from '@/lib/agent-budget'
+import { ENABLE_TRUSTLESS_JANICE, type ExecutionMode } from '@/config/features'
 import { type AgentStatusPhase } from '@/lib/agent-status-copy'
 import {
   createEntryId,
@@ -123,10 +129,14 @@ export function ConsolePage() {
   const [isPlanning, setIsPlanning] = useState(false)
   const [isApproving, setIsApproving] = useState(false)
   const [isRaisingCaps, setIsRaisingCaps] = useState(false)
+  const [executionMode, setExecutionMode] = useState<ExecutionMode>(
+    ENABLE_TRUSTLESS_JANICE ? 'trustless' : 'claude',
+  )
   const [activeTaskId, setActiveTaskId] = useState<string | null>(null)
   const [detailVersion, setDetailVersion] = useState(0)
 
   const { submitCreateTask } = useCreateTask()
+  const { submitCreateTrustlessTask } = useCreateTrustlessTask()
   const { updatePolicy } = useAgentPolicy()
   const { events, connected } = useTaskStream(activeTaskId)
   const { task: chainTask, steps: chainSteps, completion: taskCompletion } =
@@ -151,7 +161,10 @@ export function ConsolePage() {
     chainTask?.state === TaskState.Completed || chainTask?.state === TaskState.Aborted
 
   const budgetNum = Number(budgetStt)
-  const maxPerTaskNum = agent ? Number(agent.maxPerTask) : 0
+  const maxPerTaskNum =
+    agent
+      ? Number(executionMode === 'trustless' ? agent.maxPerTaskTrustless : agent.maxPerTask)
+      : 0
   const dailyRemaining =
     agent ? Math.max(0, Number(agent.dailyCap) - Number(agent.dailySpent)) : 0
   const lowBalance =
@@ -216,11 +229,12 @@ export function ConsolePage() {
 
   useEffect(() => {
     if (!agent || sessionEntries.length > 0) return
-    const affordable = maxTaskBudgetStt(agent)
+    const affordable = maxTaskBudgetStt(agent, executionMode)
+    const cap = perTaskCapStt(agent, executionMode)
     if (affordable > 0) {
-      setBudgetStt(Math.min(affordable, Number(agent.maxPerTask)).toFixed(2))
+      setBudgetStt(Math.min(affordable, cap).toFixed(2))
     }
-  }, [agent?.id.toString(), sessionEntries.length])
+  }, [agent?.id.toString(), sessionEntries.length, executionMode])
 
   useEffect(() => {
     const terminalEvent = events.some(
@@ -305,6 +319,74 @@ export function ConsolePage() {
     }
   }
 
+  async function runTrustless(trimmedGoal: string, budget: string) {
+    if (!agentId || !agent) return
+    setIsPlanning(true)
+    appendStatusForTurn('planning')
+    try {
+      const budgetWei = parseEther(budget).toString()
+      const preflight = await requestTrustlessPreflight({
+        goal: trimmedGoal,
+        personalAgentId: agentId,
+        budgetWei,
+      })
+      removeStatusForTurn()
+      appendEntry({
+        id: createEntryId(),
+        kind: 'trustless_preflight',
+        goal: trimmedGoal,
+        minBudgetStt: Number(formatEther(BigInt(preflight.minBudgetWei))).toFixed(4),
+        janiceCostStt: Number(formatEther(BigInt(preflight.janiceCostWei))).toFixed(4),
+        maxIterations: preflight.maxIterations,
+        warnings: preflight.warnings,
+      })
+
+      setIsApproving(true)
+      const { txHash, taskId } = await submitCreateTrustlessTask({
+        agent,
+        orchestrator: preflight.orchestrator,
+        budgetWei: BigInt(preflight.budgetWei),
+        createTaskCalldata: preflight.createTaskCalldata,
+      })
+
+      setGoal('')
+      if (taskId) {
+        setActiveTaskId(taskId)
+        appendEntry({ id: createEntryId(), kind: 'execution', taskId })
+        toast.success(`Trustless task #${taskId} created`)
+      } else {
+        toast.success('Trustless task submitted')
+      }
+
+      const explorer = somniaTestnet.blockExplorers.default.url
+      toast.message(
+        <a href={`${explorer}/tx/${txHash}`} target="_blank" rel="noopener noreferrer">
+          View transaction
+        </a>,
+      )
+    } catch (e) {
+      removeStatusForTurn()
+      if (isTrustlessBudgetTooLowError(e)) {
+        appendEntry({
+          id: createEntryId(),
+          kind: 'error',
+          text: `Trustless mode needs at least ${Number(formatEther(BigInt(e.minBudgetWei))).toFixed(4)} STT to start.`,
+        })
+        toast.error('Budget below trustless minimum')
+      } else {
+        appendEntry({
+          id: createEntryId(),
+          kind: 'error',
+          text: e instanceof Error ? e.message : 'Trustless preflight failed',
+        })
+        toast.error(e instanceof Error ? e.message : 'Trustless preflight failed')
+      }
+    } finally {
+      setIsPlanning(false)
+      setIsApproving(false)
+    }
+  }
+
   function resolveGoalInput(
     rawInput: string,
   ): { goal: string; aliasUsed?: string; error?: string } | null {
@@ -344,9 +426,13 @@ export function ConsolePage() {
       toast.error('Enter a valid budget in STT')
       return
     }
-    const maxPerTask = Number(agent.maxPerTask)
+    const maxPerTask = Number(
+      executionMode === 'trustless' ? agent.maxPerTaskTrustless : agent.maxPerTask,
+    )
     if (maxPerTask > 0 && budgetNum > maxPerTask) {
-      toast.error(`Budget exceeds per-task cap (${agent.maxPerTask} STT). Lower budget or update policy.`)
+      const label =
+        executionMode === 'trustless' ? agent.maxPerTaskTrustless : agent.maxPerTask
+      toast.error(`Budget exceeds per-task cap (${label} STT). Lower budget or update policy.`)
       return
     }
     const dailyLeft = Math.max(0, Number(agent.dailyCap) - Number(agent.dailySpent))
@@ -404,7 +490,11 @@ export function ConsolePage() {
     })
     if (resolved.aliasUsed) toast.success('Re-running the previous task')
 
-    await runPlan(resolved.goal, budgetStt)
+    if (executionMode === 'trustless') {
+      await runTrustless(resolved.goal, budgetStt)
+    } else {
+      await runPlan(resolved.goal, budgetStt)
+    }
   }
 
   async function handleSetBudgetAndRetry(nextBudget: string) {
@@ -415,7 +505,11 @@ export function ConsolePage() {
       toast.error('Enter a goal first')
       return
     }
-    await runPlan(trimmed, nextBudget)
+    if (executionMode === 'trustless') {
+      await runTrustless(trimmed, nextBudget)
+    } else {
+      await runPlan(trimmed, nextBudget)
+    }
   }
 
   async function handleRaiseCapsAndRetry(estimatedStt: number) {
@@ -443,7 +537,10 @@ export function ConsolePage() {
       setBudgetStt(nextBudget)
       const lastUser = [...sessionEntries].reverse().find((e) => e.kind === 'user')
       const trimmed = lastUser?.kind === 'user' ? lastUser.text : goal.trim()
-      if (trimmed) await runPlan(trimmed, nextBudget)
+      if (trimmed) {
+        if (executionMode === 'trustless') await runTrustless(trimmed, nextBudget)
+        else await runPlan(trimmed, nextBudget)
+      }
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Policy update failed')
     } finally {
@@ -539,12 +636,35 @@ export function ConsolePage() {
                   disabled={isPlanning || isApproving}
                 />
               </div>
+              {ENABLE_TRUSTLESS_JANICE && (
+                <div className="mb-4 flex justify-center">
+                  <div className="inline-flex overflow-hidden rounded-md border border-border-strong bg-card text-xs font-medium">
+                    <button
+                      type="button"
+                      className={`px-3 py-1.5 ${executionMode === 'claude' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground'}`}
+                      onClick={() => setExecutionMode('claude')}
+                      disabled={isPlanning || isApproving}
+                    >
+                      Claude Plan
+                    </button>
+                    <button
+                      type="button"
+                      className={`px-3 py-1.5 ${executionMode === 'trustless' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground'}`}
+                      onClick={() => setExecutionMode('trustless')}
+                      disabled={isPlanning || isApproving}
+                    >
+                      Trustless Janice
+                    </button>
+                  </div>
+                </div>
+              )}
               <BudgetWarningsBar
                 agent={agent}
                 lowBalance={Boolean(lowBalance)}
                 overPerTaskCap={Boolean(overPerTaskCap)}
                 overDailyCap={Boolean(overDailyCap)}
                 dailyRemaining={dailyRemaining}
+                perTaskCapStt={maxPerTaskNum > 0 ? maxPerTaskNum.toFixed(2) : undefined}
                 className="mb-4"
               />
               <h2 className="text-xl font-bold tracking-normal text-foreground sm:text-2xl">
@@ -580,7 +700,9 @@ export function ConsolePage() {
                 {' '}today?
               </h2>
               <p className="mt-1.5 text-sm text-muted-foreground">
-                Twiin — your autonomous agent on Somnia
+                {executionMode === 'trustless'
+                  ? 'Trustless mode submits directly after preflight and bypasses plan approval.'
+                  : 'Twiin — your autonomous agent on Somnia'}
               </p>
             </motion.div>
 
@@ -620,6 +742,26 @@ export function ConsolePage() {
                 </button>
 
                 <div className="flex items-center gap-2">
+                  {ENABLE_TRUSTLESS_JANICE && (
+                    <div className="inline-flex overflow-hidden rounded-md border border-border-strong bg-card text-xs font-medium">
+                      <button
+                        type="button"
+                        className={`px-2.5 py-1 ${executionMode === 'claude' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground'}`}
+                        onClick={() => setExecutionMode('claude')}
+                        disabled={isPlanning || isApproving || Boolean(activeTaskId && taskRunning)}
+                      >
+                        Claude
+                      </button>
+                      <button
+                        type="button"
+                        className={`px-2.5 py-1 ${executionMode === 'trustless' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground'}`}
+                        onClick={() => setExecutionMode('trustless')}
+                        disabled={isPlanning || isApproving || Boolean(activeTaskId && taskRunning)}
+                      >
+                        Trustless
+                      </button>
+                    </div>
+                  )}
                   {agent && (
                     <div className="hidden items-center gap-2 rounded-md border border-border-strong px-3 py-1.5 text-xs sm:flex">
                       <div className="flex items-center gap-1.5">
@@ -652,6 +794,7 @@ export function ConsolePage() {
                 overPerTaskCap={Boolean(overPerTaskCap)}
                 overDailyCap={Boolean(overDailyCap)}
                 dailyRemaining={dailyRemaining}
+                perTaskCapStt={maxPerTaskNum > 0 ? maxPerTaskNum.toFixed(2) : undefined}
                 className="mt-2"
               />
             </div>
@@ -672,6 +815,7 @@ export function ConsolePage() {
               onSetBudgetAndRetry={(b) => void handleSetBudgetAndRetry(b)}
               onRaiseCapsAndRetry={(e) => void handleRaiseCapsAndRetry(e)}
               onDismissMismatch={() => setPlanMismatch(null)}
+              executionMode={executionMode}
             />
 
             <div className="pointer-events-none relative z-10 -mt-12 h-12 bg-gradient-to-t from-background to-transparent" />

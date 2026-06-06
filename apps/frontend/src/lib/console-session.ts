@@ -10,6 +10,15 @@ export type SessionEntry =
   | { id: string; kind: 'user'; text: string; budgetStt: string }
   | { id: string; kind: 'status'; phase: AgentStatusPhase }
   | { id: string; kind: 'plan'; goal: string; plan: PlanResponse; status: PlanStatus }
+  | {
+      id: string
+      kind: 'trustless_preflight'
+      goal: string
+      minBudgetStt: string
+      janiceCostStt: string
+      maxIterations: number
+      warnings: string[]
+    }
   | { id: string; kind: 'execution'; taskId: string }
   | {
       id: string
@@ -120,26 +129,40 @@ export function getCurrentTurnExecution(
   return null
 }
 
+export function isTrustlessTurn(entries: SessionEntry[]): boolean {
+  const turn = getCurrentTurnEntries(entries)
+  return turn.some((e) => e.kind === 'trustless_preflight')
+}
+
 export function deriveMacroPhases(
   entries: SessionEntry[],
   chainTaskState?: number,
+  options?: { trustless?: boolean },
 ): Record<MacroPhase, PhaseState> {
   const turn = getCurrentTurnEntries(entries)
+  const trustless = options?.trustless ?? isTrustlessTurn(entries)
   const hasUser = turn.some((e) => e.kind === 'user')
   const isPlanning = turn.some((e) => e.kind === 'status' && e.phase === 'planning')
   const planEntry = getActivePlan(turn)
+  const hasTrustlessPreflight = turn.some((e) => e.kind === 'trustless_preflight')
   const hasExecution = turn.some((e) => e.kind === 'execution')
   const hasResult = turn.some((e) => e.kind === 'result')
 
   let approve: PhaseState = 'pending'
-  if (planEntry?.status === 'pending') approve = 'active'
+  if (trustless && hasTrustlessPreflight) {
+    approve = 'done'
+  } else if (planEntry?.status === 'pending') approve = 'active'
   else if (planEntry?.status === 'approved') approve = 'done'
   else if (planEntry && (planEntry.status === 'rejected' || planEntry.status === 'expired')) {
     approve = 'error'
   }
 
   let plan: PhaseState = 'pending'
-  if (isPlanning) plan = 'loading'
+  if (trustless) {
+    if (isPlanning) plan = 'loading'
+    else if (hasTrustlessPreflight) plan = 'done'
+    else if (hasUser) plan = 'active'
+  } else if (isPlanning) plan = 'loading'
   else if (planEntry) plan = 'done'
   else if (hasUser) plan = 'active'
 

@@ -103,14 +103,19 @@ async function main() {
     );
     accounts.push(acctAddr);
     const acct = await ethers.getContractAt("TwiinAccount", acctAddr);
-    await acct.subscribePull(
-      manifest.addresses.orchestrator,
+  await acct.subscribePull(
+      manifest.addresses.refreshManager,
       taskBudget,
       refreshPeriod,
     );
   }
 
-  const templateHash = await orchestrator.registerTaskTemplate.staticCall(
+  const refreshManager = await ethers.getContractAt(
+    "AgentRefreshCoordinator",
+    manifest.addresses.refreshManager,
+  );
+
+  const templateHash = await refreshManager.registerTaskTemplate.staticCall(
     [
       {
         subAgentConfigId: externalConfigId,
@@ -121,7 +126,7 @@ async function main() {
     ],
     taskBudget,
   );
-  await orchestrator.registerTaskTemplate(
+  await refreshManager.registerTaskTemplate(
     [
       {
         subAgentConfigId: externalConfigId,
@@ -138,7 +143,7 @@ async function main() {
   for (let round = 0; round < rounds; round++) {
     console.log(`Round ${round + 1}/${rounds}`);
     for (let i = 0; i < agentIds.length; i++) {
-      const refreshTx = await orchestrator.refreshFromTemplateByKeeper(
+      const refreshTx = await refreshManager.refreshFromTemplateByKeeper(
         agentIds[i],
         `soak-topic-${i}`,
         templateHash,

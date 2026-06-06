@@ -59,7 +59,21 @@ export enum PlanMode {
   TrustlessJanice,
 }
 
+export enum TrustlessAwaiting {
+  Janice,
+  Step,
+  Resume,
+  Done,
+}
+
 // Policy seed defaults — must match TwiinFactory.sol deployTwiin seed values
 export const DEFAULT_DAILY_CAP_WEI = parseEther("2");
 export const DEFAULT_MAX_PER_TASK_WEI = parseEther("1");
 export const DEFAULT_MAX_TRUSTLESS_WEI = parseEther("2");
+/** Gate 0 T2 — contract loop + uint8 payload cap; see gate-results.md */
+export const MAX_JANICE_ITERATIONS = 8;
+/** Gate 0 T4 — matches AgentOrchestrator SUBCOMMITTEE_SIZE native lane */
+export const JANICE_ROUND_BUFFER_MULTIPLIER = 3;
+/** Gate 0 — minimum budget covers two Janice iterations */
+export const MIN_TRUSTLESS_BUDGET_MULTIPLIER = 2;
+export const JANICE_SOMNIA_AGENT_ID = 12847293847561029384n;

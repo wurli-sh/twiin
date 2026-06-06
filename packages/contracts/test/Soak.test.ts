@@ -43,10 +43,10 @@ describe("Multi-actor soak", () => {
       const acct = await ethers.getContractAt("TwiinAccount", acctAddr);
       await acct
         .connect(users[i])
-        .subscribePull(await d.orchestrator.getAddress(), ethers.parseEther("0.2"), 1);
+        .subscribePull(await d.refreshManager.getAddress(), ethers.parseEther("0.2"), 1);
     }
 
-    const templateHash = await d.orchestrator.connect(admin).registerTaskTemplate.staticCall(
+    const templateHash = await d.refreshManager.connect(admin).registerTaskTemplate.staticCall(
       [
         {
           subAgentConfigId: 6n,
@@ -57,7 +57,7 @@ describe("Multi-actor soak", () => {
       ],
       ethers.parseEther("0.2"),
     );
-    await d.orchestrator.connect(admin).registerTaskTemplate(
+    await d.refreshManager.connect(admin).registerTaskTemplate(
       [
         {
           subAgentConfigId: 6n,
@@ -68,11 +68,14 @@ describe("Multi-actor soak", () => {
       ],
       ethers.parseEther("0.2"),
     );
+
+    await ethers.provider.send("evm_increaseTime", [2]);
+    await ethers.provider.send("evm_mine", []);
 
     let expectedTaskId = 1n;
     for (let round = 0; round < 3; round++) {
       for (let i = 0; i < agentIds.length; i++) {
-        const refreshTx = await d.orchestrator
+        const refreshTx = await d.refreshManager
           .connect(keeper)
           .refreshFromTemplateByKeeper(agentIds[i], `topic-${i}`, templateHash);
         const refreshReceipt = await refreshTx.wait();
@@ -85,7 +88,7 @@ describe("Multi-actor soak", () => {
             }
           })
           .find((e) => e?.name === "ExternalAgentRequest");
-        expect(requestLog).to.not.equal(null);
+        expect(requestLog).to.not.equal(undefined);
 
         const reqId = requestLog!.args.reqId as string;
         const sig = await signExternalResult(

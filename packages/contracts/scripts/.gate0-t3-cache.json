@@ -1,0 +1,7 @@
+{
+  "createTrustlessTaskGas": 549566,
+  "janiceCallbackGas": 383980,
+  "hireSubAgentRoundTripGas": 519048,
+  "resumeTrustlessTaskGas": 201749,
+  "note": "Measured on local Hardhat with MockAgentsApi: Janice hireSubAgent callback + oracle step settle + resumeTrustlessTask."
+}

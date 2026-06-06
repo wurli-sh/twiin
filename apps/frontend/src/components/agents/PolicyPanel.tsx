@@ -12,6 +12,7 @@ import { formatDuration } from '@/lib/format-time'
 import { useAgentPolicy, type PullApproval } from '@/hooks/useAgentPolicy'
 import type { TwiinAgentInfo } from '@/hooks/useTwiinAgents'
 import { cn } from '@/lib/cn'
+import { ENABLE_TRUSTLESS_JANICE } from '@/config/features'
 
 const DEFAULT_PULL_PER_TICK = '0.2'
 const DEFAULT_PULL_PERIOD = '3600'
@@ -35,6 +36,7 @@ export function PolicyPanel({ agent, onUpdated, onToggleKillSwitch }: PolicyPane
 
  const [dailyCap, setDailyCap] = useState(agent.dailyCap)
  const [maxPerTask, setMaxPerTask] = useState(agent.maxPerTask)
+ const [maxPerTaskTrustless, setMaxPerTaskTrustless] = useState(agent.maxPerTaskTrustless)
  const [pullPerTick, setPullPerTick] = useState(DEFAULT_PULL_PER_TICK)
  const [pullPeriod, setPullPeriod] = useState(DEFAULT_PULL_PERIOD)
  const [pullApproval, setPullApproval] = useState<PullApproval | null>(null)
@@ -45,6 +47,7 @@ export function PolicyPanel({ agent, onUpdated, onToggleKillSwitch }: PolicyPane
  useEffect(() => {
  setDailyCap(agent.dailyCap)
  setMaxPerTask(agent.maxPerTask)
+ setMaxPerTaskTrustless(agent.maxPerTaskTrustless)
  }, [agent])
 
  useEffect(() => {
@@ -78,12 +81,19 @@ export function PolicyPanel({ agent, onUpdated, onToggleKillSwitch }: PolicyPane
  async function handleSavePolicy() {
  const dailyErr = parsePositiveStt(dailyCap, 'Daily cap')
  const taskErr = parsePositiveStt(maxPerTask, 'Per-task max')
- if (dailyErr || taskErr) {
- toast.error(dailyErr ?? taskErr)
+ const trustlessErr = ENABLE_TRUSTLESS_JANICE
+   ? parsePositiveStt(maxPerTaskTrustless, 'Trustless cap')
+   : null
+ if (dailyErr || taskErr || trustlessErr) {
+ toast.error(dailyErr ?? taskErr ?? trustlessErr)
  return
  }
  if (Number(maxPerTask) > Number(dailyCap)) {
  toast.error('Per-task max cannot exceed daily cap')
+ return
+ }
+ if (ENABLE_TRUSTLESS_JANICE && Number(maxPerTaskTrustless) > Number(dailyCap)) {
+ toast.error('Trustless cap cannot exceed daily cap')
  return
  }
 
@@ -92,7 +102,9 @@ export function PolicyPanel({ agent, onUpdated, onToggleKillSwitch }: PolicyPane
  agentId: agent.id,
  dailyCapStt: dailyCap,
  maxPerTaskStt: maxPerTask,
- maxPerTaskTrustlessWei: parseEther(agent.maxPerTaskTrustless),
+ maxPerTaskTrustlessWei: parseEther(
+   ENABLE_TRUSTLESS_JANICE ? maxPerTaskTrustless : agent.maxPerTaskTrustless,
+ ),
  killSwitch: agent.killSwitch,
  })
  toast.success('Policy updated on-chain')
@@ -210,9 +222,25 @@ export function PolicyPanel({ agent, onUpdated, onToggleKillSwitch }: PolicyPane
  className="mt-1 w-full border border-border bg-muted px-3 py-2.5 text-sm text-foreground outline-none focus:border-primary/40 disabled:opacity-50"
  />
  </label>
+ {ENABLE_TRUSTLESS_JANICE ? (
+ <label className="block">
+ <span className="text-[11px] font-semibold text-muted-foreground">
+ Max per trustless task (STT)
+ </span>
+ <input
+ type="text"
+ inputMode="decimal"
+ value={maxPerTaskTrustless}
+ onChange={(e) => setMaxPerTaskTrustless(e.target.value)}
+ disabled={isSaving}
+ className="mt-1 w-full border border-border bg-muted px-3 py-2.5 text-sm text-foreground outline-none focus:border-primary/40 disabled:opacity-50"
+ />
+ </label>
+ ) : (
  <p className="text-[10px] text-muted-foreground">
- Trustless cap (Phase 5): {agent.maxPerTaskTrustless} STT — unchanged here.
+ Trustless cap: {agent.maxPerTaskTrustless} STT
  </p>
+ )}
  <Button
  type="button"
  className="w-full"
@@ -246,7 +274,7 @@ export function PolicyPanel({ agent, onUpdated, onToggleKillSwitch }: PolicyPane
  </button>
  </div>
  <p className="text-[11px] leading-relaxed text-muted-foreground">
- Pre-authorise the orchestrator to pull STT from this agent&apos;s 6551 wallet for
+ Pre-authorise the refresh coordinator to pull STT from this agent&apos;s 6551 wallet for
  chain-side feed refreshes (Somnia Reactivity).
  </p>
 

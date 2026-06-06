@@ -270,6 +270,57 @@ describe("app routes", () => {
     await expect(res.json()).resolves.toEqual({ error: "invalid request body" });
   });
 
+  it("hides trustless preflight when the feature flag is disabled", async () => {
+    const { createApp } = await loadApp();
+    const res = await createApp().request("/api/trustless-preflight", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        goal: "Ship it",
+        personalAgentId: "1",
+        budgetWei: "100",
+      }),
+    });
+
+    expect(res.status).toBe(404);
+    await expect(res.json()).resolves.toEqual({ error: "trustless mode disabled" });
+  });
+
+  it("returns trustless create calldata after preflight", async () => {
+    const { createApp } = await loadApp({ ENABLE_TRUSTLESS_JANICE: "true" });
+    const res = await createApp({
+      trustlessPreflight: {
+        orchestrator: "0x1234567890123456789012345678901234567890",
+        readJaniceAgent: vi.fn().mockResolvedValue({
+          isActive: true,
+          suspended: false,
+          costWei: 70n,
+        }),
+        readRequestDeposit: vi.fn().mockResolvedValue(30n),
+      },
+    }).request("/api/trustless-preflight", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        goal: "Finish the task",
+        personalAgentId: "1",
+        budgetWei: "2000",
+      }),
+    });
+
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.orchestrator).toBe("0x1234567890123456789012345678901234567890");
+    expect(body.minBudgetWei).toBe("480");
+    const decoded = decodeFunctionData({
+      abi: AgentOrchestratorAbi,
+      data: body.createTaskCalldata,
+    });
+    expect(decoded.functionName).toBe("createTrustlessTask");
+    expect(decoded.args?.[0]).toBe(1n);
+    expect(decoded.args?.[2]).toBe(2000n);
+  });
+
   it("returns planned calldata for a valid planner response", async () => {
     const { createApp } = await loadApp();
     const savePlanRequest = vi.fn().mockResolvedValue(undefined);

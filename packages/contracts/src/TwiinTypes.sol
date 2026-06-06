@@ -8,6 +8,7 @@ enum AgentLane  { SomniaNative, ExternalHTTP }
 enum PlanMode   { ClaudePlan, TrustlessJanice }
 enum StepState  { Pending, RunningNative, RunningExternal, AwaitingRating, Succeeded, Failed, Retrying, TimedOut }
 enum TaskState  { Created, Running, Completed, Aborted }
+enum TrustlessAwaiting { Janice, Step, Resume, Done }
 
 struct Step {
     uint256 subAgentConfigId;

@@ -25,12 +25,14 @@ async function loadKeepers() {
     { createRater },
     { createTimeoutKeeper },
     { createExternalAgentBootstrap },
+    { createTrustlessResumeKeeper },
   ] = await Promise.all([
     import("../src/keepers/indexer"),
     import("../src/keepers/relay"),
     import("../src/keepers/rater"),
     import("../src/keepers/timeouts"),
     import("../src/keepers/externals"),
+    import("../src/keepers/trustless-resume"),
   ]);
   return {
     createIndexer,
@@ -38,6 +40,7 @@ async function loadKeepers() {
     createRater,
     createTimeoutKeeper,
     createExternalAgentBootstrap,
+    createTrustlessResumeKeeper,
   };
 }
 
@@ -758,5 +761,61 @@ describe("rater keeper", () => {
     await rater.tick();
 
     expect(finalizeExternalStep).toHaveBeenCalledWith([8n, 2, 0]);
+  });
+});
+
+describe("trustless resume keeper", () => {
+  it("reconstructs a resume payload and submits resumeTrustlessTask", async () => {
+    const { createTrustlessResumeKeeper } = await loadKeepers();
+    const resumeTrustlessTask = vi.fn().mockResolvedValue(undefined);
+    const keeper = createTrustlessResumeKeeper({
+      listTrustlessTasksAwaitingResume: vi.fn().mockResolvedValue([
+        {
+          task_id: "11",
+          goal: "Research X",
+          iterations: 1,
+          max_iterations: 8,
+          awaiting: 2,
+        },
+      ]),
+      listTrustlessTurns: vi.fn().mockResolvedValue([
+        {
+          iteration: 1,
+          request_id: "1",
+          finish_reason: "tool_calls",
+          assistant_message: "I hired an agent",
+          tool_calls_json: JSON.stringify([
+            { toolName: "hireSubAgent", args: "0x1234" },
+          ]),
+          raw_result_hex: null,
+          transcript_hash: null,
+        },
+      ]),
+      getStepsForTask: vi.fn().mockResolvedValue([
+        {
+          step_idx: 0,
+          config_id: "6",
+          timeout_seconds: 90,
+          state: StepState.Succeeded,
+          payload: "scrape",
+          req_id: null,
+          result_hex: "0x6f6b",
+          score: 90,
+          deadline: null,
+        },
+      ]),
+      readTask: vi.fn().mockResolvedValue([1, 1n, 1, 100n, 10n, 9999999999n, TaskState.Running]),
+      readJaniceCost: vi.fn().mockResolvedValue(123n),
+      resumeTrustlessTask,
+      logger: console,
+    });
+
+    await keeper.tick();
+
+    expect(resumeTrustlessTask).toHaveBeenCalledWith([
+      11n,
+      expect.stringMatching(/^0x/),
+      123n,
+    ]);
   });
 });

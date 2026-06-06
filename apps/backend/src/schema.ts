@@ -83,3 +83,31 @@ export const planRequests = sqliteTable("plan_requests", {
   budgetWei: text("budget_wei").notNull(),
   createdAt: integer("created_at").notNull(),
 });
+
+export const trustlessTasks = sqliteTable("trustless_tasks", {
+  taskId: text("task_id").primaryKey(),
+  goal: text("goal").notNull(),
+  intentHash: text("intent_hash").notNull(),
+  iterations: integer("iterations").notNull().default(0),
+  maxIterations: integer("max_iterations").notNull().default(0),
+  awaiting: integer("awaiting").notNull().default(0),
+  janiceRequestId: text("janice_request_id"),
+  lastResumeReason: text("last_resume_reason"),
+  updatedAt: integer("updated_at").notNull(),
+});
+
+export const trustlessTurns = sqliteTable(
+  "trustless_turns",
+  {
+    taskId: text("task_id").notNull(),
+    iteration: integer("iteration").notNull(),
+    requestId: text("request_id").notNull(),
+    finishReason: text("finish_reason").notNull(),
+    assistantMessage: text("assistant_message").notNull().default(""),
+    toolCallsJson: text("tool_calls_json").notNull().default("[]"),
+    rawResultHex: text("raw_result_hex"),
+    transcriptHash: text("transcript_hash"),
+    createdAt: integer("created_at").notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.taskId, t.iteration] })],
+);

@@ -79,6 +79,15 @@ contract AgentPolicy {
         emit KillSwitchToggled(personalAgentId, killed);
     }
 
+    /// @notice Full allowlist read — public mapping getter omits dynamic arrays.
+    function getAllowedContracts(uint256 personalAgentId)
+        external
+        view
+        returns (address[] memory)
+    {
+        return policies[personalAgentId].allowedContracts;
+    }
+
     // ─── Orchestrator-only gates ───────────────────────────────────────────────
 
     // Called once at createTask. Validates and reserves budget against daily+task caps.

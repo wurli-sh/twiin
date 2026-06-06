@@ -5,6 +5,10 @@ import { PlanBudgetRecovery, type PlanBudgetMismatch } from './PlanBudgetRecover
 import { TaskProgressBar } from './TaskProgressBar'
 import { TaskResultCard } from './TaskResultCard'
 import { AgentStatusLine } from './AgentStatusLine'
+import { TrustlessPreflightCard } from './TrustlessPreflightCard'
+import { TrustlessEventLine } from './TrustlessEventLine'
+import { isTrustlessStreamEvent } from '@/hooks/useTaskStream'
+import type { ExecutionMode } from '@/config/features'
 import { TaskState } from '@/config/contracts'
 import {
   type SessionEntry,
@@ -32,6 +36,7 @@ type Props = {
   onSetBudgetAndRetry: (b: string) => void
   onRaiseCapsAndRetry: (e: number) => void
   onDismissMismatch: () => void
+  executionMode?: ExecutionMode
 }
 
 function UserBubble({ children }: { children: React.ReactNode }) {
@@ -78,10 +83,12 @@ export function TranscriptPanel({
   onSetBudgetAndRetry,
   onRaiseCapsAndRetry,
   onDismissMismatch,
+  executionMode = 'claude',
 }: Props) {
   const bottomRef = useRef<HTMLDivElement>(null)
   const activeExecutionId = sessionEntries.findLast((e) => e.kind === 'execution')?.id
   const currentTurnExecution = getCurrentTurnExecution(sessionEntries)
+  const trustlessEvents = events.filter((ev) => isTrustlessStreamEvent(ev.type))
 
   useEffect(() => {
     requestAnimationFrame(() => {
@@ -98,6 +105,7 @@ export function TranscriptPanel({
           chainTaskState={chainTask?.state}
           activeExecutionTaskId={currentTurnExecution?.taskId}
           hookTaskId={activeTaskId}
+          trustless={executionMode === 'trustless'}
         />
       )}
 
@@ -150,6 +158,19 @@ export function TranscriptPanel({
                   onApprove={() => onApprove(entry.id)}
                   onReject={(reason) => onReject(entry.id, reason)}
                   isSubmitting={isApproving && entry.status === 'pending'}
+                />
+              </AgentBlock>
+            )
+          }
+
+          if (entry.kind === 'trustless_preflight') {
+            return (
+              <AgentBlock key={entry.id}>
+                <TrustlessPreflightCard
+                  minBudgetStt={entry.minBudgetStt}
+                  janiceCostStt={entry.janiceCostStt}
+                  maxIterations={entry.maxIterations}
+                  warnings={entry.warnings}
                 />
               </AgentBlock>
             )
@@ -209,6 +230,12 @@ export function TranscriptPanel({
 
           return null
         })}
+
+        {trustlessEvents.map((ev) => (
+          <AgentBlock key={`trustless-ev-${ev.id}`}>
+            <TrustlessEventLine event={ev} />
+          </AgentBlock>
+        ))}
 
         {isApproving && !sessionEntries.some((e) => e.kind === 'execution') && (
           <AgentBlock>

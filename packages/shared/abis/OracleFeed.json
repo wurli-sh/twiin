@@ -5,6 +5,26 @@
     "type": "constructor"
   },
   {
+    "inputs": [],
+    "name": "OnlyAuthorizedPublisher",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "OnlyDeployer",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "SetOnce",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "ZeroAddress",
+    "type": "error"
+  },
+  {
     "anonymous": false,
     "inputs": [
       {
@@ -52,6 +72,19 @@
       }
     ],
     "name": "OrchestratorSet",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      {
+        "indexed": true,
+        "internalType": "address",
+        "name": "refreshManager",
+        "type": "address"
+      }
+    ],
+    "name": "RefreshManagerSet",
     "type": "event"
   },
   {
@@ -365,6 +398,19 @@
     "type": "function"
   },
   {
+    "inputs": [],
+    "name": "refreshManager",
+    "outputs": [
+      {
+        "internalType": "address",
+        "name": "",
+        "type": "address"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
     "inputs": [
       {
         "components": [
@@ -419,6 +465,19 @@
       }
     ],
     "name": "setOrchestrator",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "address",
+        "name": "_refreshManager",
+        "type": "address"
+      }
+    ],
+    "name": "setRefreshManager",
     "outputs": [],
     "stateMutability": "nonpayable",
     "type": "function"

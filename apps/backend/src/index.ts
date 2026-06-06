@@ -8,6 +8,7 @@ import { startRelay } from "./keepers/relay";
 import { startRater } from "./keepers/rater";
 import { startTimeoutKeeper } from "./keepers/timeouts";
 import { createExternalAgentBootstrap } from "./keepers/externals";
+import { startTrustlessResumeKeeper } from "./keepers/trustless-resume";
 
 const app = createApp();
 
@@ -36,6 +37,9 @@ async function bootstrap(): Promise<void> {
     startRelay();
     startRater();
     startTimeoutKeeper();
+    if (env.ENABLE_TRUSTLESS_JANICE) {
+      startTrustlessResumeKeeper();
+    }
     void createExternalAgentBootstrap()
       .run()
       .then(() => {

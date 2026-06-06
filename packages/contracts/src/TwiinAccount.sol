@@ -124,12 +124,23 @@ contract TwiinAccount is
         return o;
     }
 
+    function _canonicalRefreshManager() internal view returns (address) {
+        (bool ok, bytes memory data) = _canonicalOrchestrator().staticcall(
+            abi.encodeWithSignature("refreshManager()")
+        );
+        if (!ok || data.length < 32) return address(0);
+        return abi.decode(data, (address));
+    }
+
     // Owner pre-authorises the canonical Orchestrator to pull up to perTickWei
     // once per periodSeconds — enables chain-side Reactivity refreshes without
     // requiring an owner co-signature on every tick.
     function subscribePull(address subscriber, uint128 perTickWei, uint64 periodSeconds) external {
         require(msg.sender == owner(), "not owner");
-        require(subscriber == _canonicalOrchestrator(), "subscriber not whitelisted");
+        require(
+            subscriber == _canonicalOrchestrator() || subscriber == _canonicalRefreshManager(),
+            "subscriber not whitelisted"
+        );
         require(perTickWei > 0 && periodSeconds > 0, "bad params");
         PullApproval storage p = pullApprovals[subscriber];
         // Preserve lastPullAt — re-approval cannot reset the rate-limit clock (R4-13).

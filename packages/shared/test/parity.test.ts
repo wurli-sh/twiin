@@ -18,10 +18,14 @@ import {
   CHAIN_ID,
   TWIIN_6551_SALT,
   DEFAULT_MAX_TRUSTLESS_WEI,
+  JANICE_ROUND_BUFFER_MULTIPLIER,
+  MAX_JANICE_ITERATIONS,
+  MIN_TRUSTLESS_BUDGET_MULTIPLIER,
   TaskState,
   StepState,
   AgentLane,
   PlanMode,
+  TrustlessAwaiting,
 } from "../constants";
 
 // ---------------------------------------------------------------------------
@@ -277,6 +281,13 @@ describe("enums match TwiinTypes.sol ordinals", () => {
     expect(PlanMode.ClaudePlan).toBe(0);
     expect(PlanMode.TrustlessJanice).toBe(1);
   });
+
+  it("TrustlessAwaiting", () => {
+    expect(TrustlessAwaiting.Janice).toBe(0);
+    expect(TrustlessAwaiting.Step).toBe(1);
+    expect(TrustlessAwaiting.Resume).toBe(2);
+    expect(TrustlessAwaiting.Done).toBe(3);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -306,6 +317,7 @@ describe("loadAddresses", () => {
       policy: addr,
       oracleFeed: addr,
       orchestrator: addr,
+      refreshManager: addr,
       factory: addr,
       mUSDC: addr,
       mockRouter: addr,
@@ -341,6 +353,7 @@ describe("loadDeploymentManifest", () => {
         policy: addr,
         oracleFeed: addr,
         orchestrator: addr,
+        refreshManager: addr,
         factory: addr,
         mUSDC: addr,
         mockRouter: addr,
@@ -378,5 +391,14 @@ describe("loadDeploymentManifest", () => {
 describe("policy defaults", () => {
   it("DEFAULT_MAX_TRUSTLESS_WEI matches TwiinFactory seed", () => {
     expect(DEFAULT_MAX_TRUSTLESS_WEI).toBe(parseEther("2"));
+  });
+
+  it("Gate 0 budget multipliers are stable", () => {
+    expect(JANICE_ROUND_BUFFER_MULTIPLIER).toBe(3);
+    expect(MIN_TRUSTLESS_BUDGET_MULTIPLIER).toBe(2);
+  });
+
+  it("MAX_JANICE_ITERATIONS matches contract constant", () => {
+    expect(MAX_JANICE_ITERATIONS).toBe(8);
   });
 });

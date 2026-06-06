@@ -34,15 +34,13 @@ async function main() {
   const acct = await ethers.getContractAt("TwiinAccount", acctAddr);
   await acct
     .connect(user)
-    .subscribePull(await d.orchestrator.getAddress(), ethers.parseEther("0.2"), 60);
+    .subscribePull(await d.refreshManager.getAddress(), ethers.parseEther("0.2"), 60);
 
-  const orchAddr = await d.orchestrator.getAddress();
+  const refreshAddr = await d.refreshManager.getAddress();
   await ethers.provider.send("hardhat_setBalance", [
-    orchAddr,
+    refreshAddr,
     "0x" + ethers.parseEther("40").toString(16),
   ]);
-  const orchSigner = await ethers.getImpersonatedSigner(orchAddr);
-
   const step = {
     subAgentConfigId: 6n,
     payload: ethers.toUtf8Bytes("refresh-step"),
@@ -50,12 +48,12 @@ async function main() {
     timeoutSeconds: 900,
   };
   const budget = ethers.parseEther("0.2");
-  const templateHash = await d.feed
-    .connect(orchSigner)
-    .registerTemplate.staticCall([step], budget);
-  await d.feed.connect(orchSigner).registerTemplate([step], budget);
+  const templateHash = await d.refreshManager
+    .connect(admin)
+    .registerTaskTemplate.staticCall([step], budget);
+  await d.refreshManager.connect(admin).registerTaskTemplate([step], budget);
 
-  const publishTx = await d.orchestrator
+  const publishTx = await d.refreshManager
     .connect(admin)
     .publishFeedAndMaybeSchedule(agentId, "health", "ok", 90, 600, 60, templateHash);
   const publishReceipt = await publishTx.wait();
@@ -69,7 +67,7 @@ async function main() {
   ]);
   const precompileSigner = await ethers.getImpersonatedSigner(precompile);
 
-  const onEventTx = await d.orchestrator
+  const onEventTx = await d.refreshManager
     .connect(precompileSigner)
     .onEvent(
       precompile,
@@ -82,12 +80,16 @@ async function main() {
     receipt!.logs
       .map((log) => {
         try {
-          return d.orchestrator.interface.parseLog(log);
+          return d.refreshManager.interface.parseLog(log);
         } catch {
           try {
-            return d.feed.interface.parseLog(log);
+            return d.orchestrator.interface.parseLog(log);
           } catch {
+            try {
+            return d.feed.interface.parseLog(log);
+            } catch {
             return null;
+            }
           }
         }
       })

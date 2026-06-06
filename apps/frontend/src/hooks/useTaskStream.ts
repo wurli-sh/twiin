@@ -7,7 +7,7 @@ export type StreamEvent = {
   at: number
 }
 
-const EVENT_LABELS: Record<string, string> = {
+export const STREAM_EVENT_LABELS: Record<string, string> = {
   task_created: 'Task created',
   step_dispatched: 'Step dispatched',
   step_state: 'Step state changed',
@@ -16,12 +16,29 @@ const EVENT_LABELS: Record<string, string> = {
   step_approved: 'Step approved',
   step_rejected: 'Step rejected',
   step_rated: 'Step rated',
+  trustless_intent: 'Trustless task intent',
+  trustless_step_appended: 'Trustless step appended',
+  janice_iteration: 'Janice iteration',
+  janice_tool_executed: 'Janice tool executed',
+  janice_resume_queued: 'Janice resume queued',
   task_completed: 'Task completed',
   task_aborted: 'Task aborted',
 }
 
 export function streamEventLabel(type: string): string {
-  return EVENT_LABELS[type] ?? type.replace(/_/g, ' ')
+  return STREAM_EVENT_LABELS[type] ?? type.replace(/_/g, ' ')
+}
+
+const TRUSTLESS_EVENT_TYPES = new Set([
+  'trustless_intent',
+  'trustless_step_appended',
+  'janice_iteration',
+  'janice_tool_executed',
+  'janice_resume_queued',
+])
+
+export function isTrustlessStreamEvent(type: string): boolean {
+  return TRUSTLESS_EVENT_TYPES.has(type)
 }
 
 export function useTaskStream(taskId: string | null) {
@@ -41,7 +58,7 @@ export function useTaskStream(taskId: string | null) {
 
     reset()
     const es = new EventSource(`/api/stream/${taskId}`)
-    const types = Object.keys(EVENT_LABELS)
+    const types = Object.keys(STREAM_EVENT_LABELS)
 
     es.onopen = () => setConnected(true)
     es.onerror = () => setConnected(false)

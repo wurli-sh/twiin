@@ -29,6 +29,9 @@ export const CONTRACTS = {
   orchestrator: {
     address: addresses.orchestrator,
   },
+  refreshManager: {
+    address: addresses.refreshManager,
+  },
   vault: {
     address: addresses.vault,
   },

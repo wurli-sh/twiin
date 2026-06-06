@@ -1,7 +1,6 @@
 import { useMemo } from 'react'
 import { motion } from 'framer-motion'
-import { Link } from 'react-router-dom'
-import { Shield, Terminal } from 'lucide-react'
+import { Shield } from 'lucide-react'
 import { cn } from '@/lib/cn'
 import { Tabs } from '@/components/ui/Tabs'
 import { AddAgentPanel } from '@/components/agents/AddAgentPanel'

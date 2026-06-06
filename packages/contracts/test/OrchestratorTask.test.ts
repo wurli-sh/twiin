@@ -62,7 +62,7 @@ describe("AgentOrchestrator — task lifecycle", () => {
         .createTask(agentId, [nativeStep()], ethers.parseEther("0.5"), 0, {
           value: ethers.parseEther("0.5"),
         }),
-    ).to.be.revertedWith("not agent");
+    ).to.be.revertedWithCustomError(d.orchestrator, "NotAgent");
   });
 
   it("createTask rejects msg.value != budgetWei", async () => {
@@ -122,7 +122,7 @@ describe("AgentOrchestrator — task lifecycle", () => {
 
     await expect(
       createTaskThroughAccount(d, agentId, acct.connect(user)),
-    ).to.be.revertedWith("task already active");
+    ).to.be.revertedWithCustomError(d.orchestrator, "TaskAlreadyActive");
   });
 
   it("NFT transfer blocked while taskLock != 0", async () => {
@@ -342,8 +342,9 @@ describe("AgentOrchestrator — task lifecycle", () => {
 
   it("timeoutTask is permissionless after TASK_DEADLINE", async () => {
     const d = await deployAll();
-    await expect(d.orchestrator.timeoutTask(999n)).to.be.revertedWith(
-      "not running",
+    await expect(d.orchestrator.timeoutTask(999n)).to.be.revertedWithCustomError(
+      d.orchestrator,
+      "NotRunning",
     );
   });
 
@@ -351,13 +352,13 @@ describe("AgentOrchestrator — task lifecycle", () => {
     const d = await deployAll();
     await expect(
       d.orchestrator.timeoutExternalStep(999n, 0),
-    ).to.be.revertedWith("task not running");
+    ).to.be.revertedWithCustomError(d.orchestrator, "TaskNotRunning");
   });
 
   it("timeoutNativeStep reverts on non-existent task", async () => {
     const d = await deployAll();
-    await expect(d.orchestrator.timeoutNativeStep(999n, 0)).to.be.revertedWith(
-      "task not running",
-    );
+    await expect(
+      d.orchestrator.timeoutNativeStep(999n, 0),
+    ).to.be.revertedWithCustomError(d.orchestrator, "TaskNotRunning");
   });
 });

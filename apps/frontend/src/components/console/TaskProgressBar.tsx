@@ -3,6 +3,7 @@ import {
   deriveStepProgress,
   getActivePlan,
   getCurrentTurnEntries,
+  isTrustlessTurn,
   type SessionEntry,
   type PhaseState,
 } from '@/lib/console-session'
@@ -17,6 +18,7 @@ type Props = {
   chainTaskState?: number
   activeExecutionTaskId?: string | null
   hookTaskId?: string | null
+  trustless?: boolean
 }
 
 const MACRO_LABELS: { key: keyof ReturnType<typeof deriveMacroPhases>; label: string }[] = [
@@ -63,21 +65,33 @@ export function TaskProgressBar({
   chainTaskState,
   activeExecutionTaskId,
   hookTaskId,
+  trustless: trustlessProp,
 }: Props) {
   const turn = getCurrentTurnEntries(entries)
-  const phases = deriveMacroPhases(turn, chainTaskState)
+  const trustless = trustlessProp ?? isTrustlessTurn(entries)
+  const phases = deriveMacroPhases(turn, chainTaskState, { trustless })
+  const macroLabels = trustless
+    ? MACRO_LABELS.map((item) =>
+        item.key === 'plan'
+          ? { ...item, label: 'Preflight' }
+          : item.key === 'approve'
+            ? { ...item, label: 'Submit' }
+            : item,
+      )
+    : MACRO_LABELS
   const planEntry = getActivePlan(turn)
   const stepsMatchExecution =
     activeExecutionTaskId != null &&
     hookTaskId != null &&
     hookTaskId === activeExecutionTaskId
   const stepsForBar = stepsMatchExecution ? chainSteps : []
-  const showSteps = planEntry && phases.execute !== 'pending'
+  const showSteps =
+    (planEntry || trustless) && phases.execute !== 'pending'
 
   return (
     <div className="sticky top-0 z-20 border-b border-border bg-background/95 px-3 py-2.5 backdrop-blur-sm">
       <div className="flex items-center justify-between gap-1">
-        {MACRO_LABELS.map(({ key, label }, i) => {
+        {macroLabels.map(({ key, label }, i) => {
           const state = phases[key]
           const done = state === 'done'
           const active = state === 'loading' || state === 'active'
@@ -93,7 +107,7 @@ export function TaskProgressBar({
               >
                 {label}
               </span>
-              {i < MACRO_LABELS.length - 1 && (
+              {i < macroLabels.length - 1 && (
                 <div
                   className={cn(
                     'mx-0.5 h-px flex-1',

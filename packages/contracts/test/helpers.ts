@@ -11,6 +11,7 @@ import {
   AgentPolicy,
   OracleFeed,
   AgentOrchestrator,
+  AgentRefreshCoordinator,
   TwiinFactory,
   MockERC20,
   MockUniswapV2Router02,
@@ -58,6 +59,7 @@ export interface Deployment {
   policy: AgentPolicy;
   feed: OracleFeed;
   orchestrator: AgentOrchestrator;
+  refreshManager: AgentRefreshCoordinator;
   factory: TwiinFactory;
   mUSDC: MockERC20;
   mockRouter: MockUniswapV2Router02;
@@ -140,11 +142,24 @@ export async function deployAll(
     await agentRegistry.getAddress(),
     await vault.getAddress(),
     await policy.getAddress(),
-    await feed.getAddress(),
     agentsApiAddr,
     keeper.address,
     admin.address,
   )) as AgentOrchestrator;
+
+  const AgentRefreshCoordinatorF = await ethers.getContractFactory(
+    "AgentRefreshCoordinator",
+  );
+  const refreshManager = (await AgentRefreshCoordinatorF.deploy(
+    await registry6551.getAddress(),
+    twiinAccountImpl,
+    await twiinAgent.getAddress(),
+    await policy.getAddress(),
+    await feed.getAddress(),
+    await orchestrator.getAddress(),
+    keeper.address,
+    admin.address,
+  )) as AgentRefreshCoordinator;
 
   // 5. Deploy TwiinFactory
   const TwiinFactoryF = await ethers.getContractFactory("TwiinFactory");
@@ -176,6 +191,8 @@ export async function deployAll(
   await policy.setOrchestrator(orchestratorAddr);
   await policy.setTwiinAgent(await twiinAgent.getAddress());
   await feed.setOrchestrator(orchestratorAddr);
+  await feed.setRefreshManager(await refreshManager.getAddress());
+  await orchestrator.setRefreshManager(await refreshManager.getAddress());
 
   // Wire factory address into TwiinAgent, TwiinNames, and AgentPolicy
   await twiinAgent.setFactory(factoryAddr);
@@ -309,6 +326,7 @@ export async function deployAll(
     policy,
     feed: feed,
     orchestrator,
+    refreshManager,
     factory,
     mUSDC,
     mockRouter,

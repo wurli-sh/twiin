@@ -33,11 +33,6 @@
       },
       {
         "internalType": "address",
-        "name": "_oracleFeed",
-        "type": "address"
-      },
-      {
-        "internalType": "address",
         "name": "_agentsApi",
         "type": "address"
       },
@@ -54,6 +49,41 @@
     ],
     "stateMutability": "nonpayable",
     "type": "constructor"
+  },
+  {
+    "inputs": [],
+    "name": "BadJaniceCost",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "BadNativeConfig",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "BadSignature",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "BadStepCount",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "BadToolPayload",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "BudgetExhausted",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "DepositExceedsMax",
+    "type": "error"
   },
   {
     "inputs": [],
@@ -84,37 +114,77 @@
   },
   {
     "inputs": [],
-    "name": "EmptyFilter",
+    "name": "MaxStepsReached",
     "type": "error"
   },
   {
     "inputs": [],
-    "name": "GasLimitExceeded",
+    "name": "NoAgent",
     "type": "error"
   },
   {
     "inputs": [],
-    "name": "GasLimitZero",
+    "name": "NoBudget",
     "type": "error"
   },
   {
     "inputs": [],
-    "name": "HandlerZeroAddress",
+    "name": "NoRegistrant",
     "type": "error"
   },
   {
     "inputs": [],
-    "name": "InsufficientBalance",
+    "name": "NotAgent",
     "type": "error"
   },
   {
     "inputs": [],
-    "name": "InvalidMaxFeePerGas",
+    "name": "NotAwaitingExternal",
     "type": "error"
   },
   {
     "inputs": [],
-    "name": "OnlyReactivityPrecompile",
+    "name": "NotAwaitingResume",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "NotPendingRating",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "NotRunning",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "NotTimedOut",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "NotTrustless",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "OnlyAdmin",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "OnlyAgentsApi",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "OnlyKeeper",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "OnlyRefreshManager",
     "type": "error"
   },
   {
@@ -124,7 +194,42 @@
   },
   {
     "inputs": [],
-    "name": "TimestampInPast",
+    "name": "RefreshManagerAlreadySet",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "ResultTooLarge",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "StepExpired",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "StepOutOfRange",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "TaskAlreadyActive",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "TaskNotRunning",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "TaskTimedOut",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "ValueBudgetMismatch",
     "type": "error"
   },
   {
@@ -285,6 +390,111 @@
         "type": "uint256"
       },
       {
+        "indexed": true,
+        "internalType": "uint8",
+        "name": "iteration",
+        "type": "uint8"
+      },
+      {
+        "indexed": false,
+        "internalType": "uint256",
+        "name": "requestId",
+        "type": "uint256"
+      },
+      {
+        "indexed": false,
+        "internalType": "string",
+        "name": "finishReason",
+        "type": "string"
+      },
+      {
+        "indexed": false,
+        "internalType": "bytes32",
+        "name": "transcriptHash",
+        "type": "bytes32"
+      }
+    ],
+    "name": "JaniceIteration",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      {
+        "indexed": true,
+        "internalType": "uint256",
+        "name": "taskId",
+        "type": "uint256"
+      },
+      {
+        "indexed": true,
+        "internalType": "uint8",
+        "name": "nextIteration",
+        "type": "uint8"
+      },
+      {
+        "indexed": false,
+        "internalType": "bytes32",
+        "name": "transcriptHash",
+        "type": "bytes32"
+      },
+      {
+        "indexed": false,
+        "internalType": "string",
+        "name": "reason",
+        "type": "string"
+      }
+    ],
+    "name": "JaniceResumeQueued",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      {
+        "indexed": true,
+        "internalType": "uint256",
+        "name": "taskId",
+        "type": "uint256"
+      },
+      {
+        "indexed": true,
+        "internalType": "uint8",
+        "name": "iteration",
+        "type": "uint8"
+      },
+      {
+        "indexed": false,
+        "internalType": "string",
+        "name": "toolName",
+        "type": "string"
+      },
+      {
+        "indexed": false,
+        "internalType": "bytes32",
+        "name": "argsHash",
+        "type": "bytes32"
+      },
+      {
+        "indexed": false,
+        "internalType": "bool",
+        "name": "success",
+        "type": "bool"
+      }
+    ],
+    "name": "JaniceToolExecuted",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      {
+        "indexed": true,
+        "internalType": "uint256",
+        "name": "taskId",
+        "type": "uint256"
+      },
+      {
         "indexed": false,
         "internalType": "uint8",
         "name": "stepIdx",
@@ -311,62 +521,6 @@
       }
     ],
     "name": "RatingTimedOut",
-    "type": "event"
-  },
-  {
-    "anonymous": false,
-    "inputs": [
-      {
-        "indexed": true,
-        "internalType": "uint256",
-        "name": "personalAgentId",
-        "type": "uint256"
-      },
-      {
-        "indexed": false,
-        "internalType": "string",
-        "name": "topic",
-        "type": "string"
-      },
-      {
-        "indexed": false,
-        "internalType": "uint256",
-        "name": "timestampMillis",
-        "type": "uint256"
-      },
-      {
-        "indexed": false,
-        "internalType": "uint256",
-        "name": "subscriptionId",
-        "type": "uint256"
-      }
-    ],
-    "name": "RefreshScheduled",
-    "type": "event"
-  },
-  {
-    "anonymous": false,
-    "inputs": [
-      {
-        "indexed": true,
-        "internalType": "uint256",
-        "name": "personalAgentId",
-        "type": "uint256"
-      },
-      {
-        "indexed": false,
-        "internalType": "string",
-        "name": "topic",
-        "type": "string"
-      },
-      {
-        "indexed": false,
-        "internalType": "string",
-        "name": "reason",
-        "type": "string"
-      }
-    ],
-    "name": "RefreshSkipped",
     "type": "event"
   },
   {
@@ -464,6 +618,80 @@
     "type": "event"
   },
   {
+    "anonymous": false,
+    "inputs": [
+      {
+        "indexed": true,
+        "internalType": "uint256",
+        "name": "taskId",
+        "type": "uint256"
+      },
+      {
+        "indexed": true,
+        "internalType": "uint8",
+        "name": "stepIdx",
+        "type": "uint8"
+      },
+      {
+        "indexed": false,
+        "internalType": "uint256",
+        "name": "configId",
+        "type": "uint256"
+      },
+      {
+        "indexed": false,
+        "internalType": "bytes",
+        "name": "payload",
+        "type": "bytes"
+      },
+      {
+        "indexed": false,
+        "internalType": "uint256",
+        "name": "maxCostWei",
+        "type": "uint256"
+      },
+      {
+        "indexed": false,
+        "internalType": "uint64",
+        "name": "timeoutSeconds",
+        "type": "uint64"
+      }
+    ],
+    "name": "TrustlessStepAppended",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      {
+        "indexed": true,
+        "internalType": "uint256",
+        "name": "taskId",
+        "type": "uint256"
+      },
+      {
+        "indexed": false,
+        "internalType": "string",
+        "name": "goal",
+        "type": "string"
+      },
+      {
+        "indexed": false,
+        "internalType": "bytes32",
+        "name": "intentHash",
+        "type": "bytes32"
+      },
+      {
+        "indexed": false,
+        "internalType": "uint8",
+        "name": "maxIterations",
+        "type": "uint8"
+      }
+    ],
+    "name": "TrustlessTaskIntent",
+    "type": "event"
+  },
+  {
     "inputs": [],
     "name": "CAP_ONCHAIN_EXECUTE",
     "outputs": [
@@ -478,12 +706,38 @@
   },
   {
     "inputs": [],
+    "name": "JANICE_CONFIG_ID",
+    "outputs": [
+      {
+        "internalType": "uint256",
+        "name": "",
+        "type": "uint256"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
     "name": "MAX_EXTERNAL_RESULT_SIZE",
     "outputs": [
       {
         "internalType": "uint256",
         "name": "",
         "type": "uint256"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "MAX_JANICE_ITERATIONS",
+    "outputs": [
+      {
+        "internalType": "uint8",
+        "name": "",
+        "type": "uint8"
       }
     ],
     "stateMutability": "view",
@@ -680,7 +934,7 @@
         "type": "uint256"
       }
     ],
-    "stateMutability": "nonpayable",
+    "stateMutability": "payable",
     "type": "function"
   },
   {
@@ -729,6 +983,35 @@
       }
     ],
     "name": "createTask",
+    "outputs": [
+      {
+        "internalType": "uint256",
+        "name": "taskId",
+        "type": "uint256"
+      }
+    ],
+    "stateMutability": "payable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint256",
+        "name": "personalAgentId",
+        "type": "uint256"
+      },
+      {
+        "internalType": "bytes",
+        "name": "intentPayload",
+        "type": "bytes"
+      },
+      {
+        "internalType": "uint256",
+        "name": "budgetWei",
+        "type": "uint256"
+      }
+    ],
+    "name": "createTrustlessTask",
     "outputs": [
       {
         "internalType": "uint256",
@@ -958,42 +1241,6 @@
     "type": "function"
   },
   {
-    "inputs": [
-      {
-        "internalType": "address",
-        "name": "emitter",
-        "type": "address"
-      },
-      {
-        "internalType": "bytes32[]",
-        "name": "eventTopics",
-        "type": "bytes32[]"
-      },
-      {
-        "internalType": "bytes",
-        "name": "data",
-        "type": "bytes"
-      }
-    ],
-    "name": "onEvent",
-    "outputs": [],
-    "stateMutability": "nonpayable",
-    "type": "function"
-  },
-  {
-    "inputs": [],
-    "name": "oracleFeed",
-    "outputs": [
-      {
-        "internalType": "contract OracleFeed",
-        "name": "",
-        "type": "address"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
     "inputs": [],
     "name": "policy",
     "outputs": [
@@ -1007,115 +1254,16 @@
     "type": "function"
   },
   {
-    "inputs": [
-      {
-        "internalType": "uint256",
-        "name": "personalAgentId",
-        "type": "uint256"
-      },
-      {
-        "internalType": "string",
-        "name": "topic",
-        "type": "string"
-      },
-      {
-        "internalType": "string",
-        "name": "value",
-        "type": "string"
-      },
-      {
-        "internalType": "uint8",
-        "name": "confidence",
-        "type": "uint8"
-      },
-      {
-        "internalType": "uint256",
-        "name": "maxAgeSeconds",
-        "type": "uint256"
-      },
-      {
-        "internalType": "uint256",
-        "name": "refreshInterval",
-        "type": "uint256"
-      },
-      {
-        "internalType": "bytes32",
-        "name": "templateHash",
-        "type": "bytes32"
-      }
-    ],
-    "name": "publishFeedAndMaybeSchedule",
-    "outputs": [],
-    "stateMutability": "nonpayable",
-    "type": "function"
-  },
-  {
-    "inputs": [
-      {
-        "internalType": "uint256",
-        "name": "personalAgentId",
-        "type": "uint256"
-      },
-      {
-        "internalType": "string",
-        "name": "topic",
-        "type": "string"
-      },
-      {
-        "internalType": "bytes32",
-        "name": "templateHash",
-        "type": "bytes32"
-      }
-    ],
-    "name": "refreshFromTemplateByKeeper",
-    "outputs": [],
-    "stateMutability": "nonpayable",
-    "type": "function"
-  },
-  {
-    "inputs": [
-      {
-        "components": [
-          {
-            "internalType": "uint256",
-            "name": "subAgentConfigId",
-            "type": "uint256"
-          },
-          {
-            "internalType": "bytes",
-            "name": "payload",
-            "type": "bytes"
-          },
-          {
-            "internalType": "uint256",
-            "name": "maxCostWei",
-            "type": "uint256"
-          },
-          {
-            "internalType": "uint32",
-            "name": "timeoutSeconds",
-            "type": "uint32"
-          }
-        ],
-        "internalType": "struct Step[]",
-        "name": "steps",
-        "type": "tuple[]"
-      },
-      {
-        "internalType": "uint256",
-        "name": "budgetWei",
-        "type": "uint256"
-      }
-    ],
-    "name": "registerTaskTemplate",
+    "inputs": [],
+    "name": "refreshManager",
     "outputs": [
       {
-        "internalType": "bytes32",
-        "name": "hash",
-        "type": "bytes32"
+        "internalType": "address",
+        "name": "",
+        "type": "address"
       }
     ],
-    "stateMutability": "nonpayable",
+    "stateMutability": "view",
     "type": "function"
   },
   {
@@ -1135,28 +1283,35 @@
     "inputs": [
       {
         "internalType": "uint256",
-        "name": "",
+        "name": "taskId",
         "type": "uint256"
       },
       {
-        "internalType": "string",
-        "name": "",
-        "type": "string"
+        "internalType": "bytes",
+        "name": "resumePayload",
+        "type": "bytes"
       },
       {
         "internalType": "uint256",
-        "name": "timestampMillis",
+        "name": "janiceCostWei",
         "type": "uint256"
       }
     ],
-    "name": "scheduleSubscriptionSelfCall",
-    "outputs": [
+    "name": "resumeTrustlessTask",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
       {
-        "internalType": "uint256",
-        "name": "subscriptionId",
-        "type": "uint256"
+        "internalType": "address",
+        "name": "_refreshManager",
+        "type": "address"
       }
     ],
+    "name": "setRefreshManager",
+    "outputs": [],
     "stateMutability": "nonpayable",
     "type": "function"
   },
@@ -1186,25 +1341,6 @@
     "name": "submitExternalResult",
     "outputs": [],
     "stateMutability": "nonpayable",
-    "type": "function"
-  },
-  {
-    "inputs": [
-      {
-        "internalType": "bytes4",
-        "name": "interfaceId",
-        "type": "bytes4"
-      }
-    ],
-    "name": "supportsInterface",
-    "outputs": [
-      {
-        "internalType": "bool",
-        "name": "",
-        "type": "bool"
-      }
-    ],
-    "stateMutability": "pure",
     "type": "function"
   },
   {
@@ -1340,6 +1476,50 @@
     "name": "timeoutTask",
     "outputs": [],
     "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint256",
+        "name": "",
+        "type": "uint256"
+      }
+    ],
+    "name": "trustlessCtx",
+    "outputs": [
+      {
+        "internalType": "uint256",
+        "name": "janiceRequestId",
+        "type": "uint256"
+      },
+      {
+        "internalType": "uint8",
+        "name": "iterations",
+        "type": "uint8"
+      },
+      {
+        "internalType": "uint8",
+        "name": "maxIterations",
+        "type": "uint8"
+      },
+      {
+        "internalType": "enum TrustlessAwaiting",
+        "name": "awaiting",
+        "type": "uint8"
+      },
+      {
+        "internalType": "uint64",
+        "name": "deadline",
+        "type": "uint64"
+      },
+      {
+        "internalType": "bytes32",
+        "name": "intentHash",
+        "type": "bytes32"
+      }
+    ],
+    "stateMutability": "view",
     "type": "function"
   },
   {

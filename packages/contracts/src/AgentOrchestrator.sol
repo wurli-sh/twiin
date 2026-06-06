@@ -4,31 +4,57 @@ pragma solidity 0.8.30;
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 import {MessageHashUtils} from "@openzeppelin/contracts/utils/cryptography/MessageHashUtils.sol";
-import {SomniaEventHandler} from "@somnia-chain/reactivity-contracts/contracts/SomniaEventHandler.sol";
-import {SomniaExtensions} from "@somnia-chain/reactivity-contracts/contracts/interfaces/SomniaExtensions.sol";
 
 import {IERC6551Registry} from "./interfaces/IERC6551Registry.sol";
 import {IAgentRequesterHandler, IAgentRequester, Response, ResponseStatus, Request} from "./interfaces/IAgentRequesterHandler.sol";
 import {AgentRegistry} from "./AgentRegistry.sol";
 import {AgentVault} from "./AgentVault.sol";
 import {AgentPolicy} from "./AgentPolicy.sol";
-import {OracleFeed} from "./OracleFeed.sol";
-import {TwiinAccount} from "./TwiinAccount.sol";
 import {
-    AgentLane, PlanMode, StepState, TaskState, Step
+    AgentLane, PlanMode, StepState, TaskState, TrustlessAwaiting, Step
 } from "./TwiinTypes.sol";
 
 // The orchestration engine: task lifecycle, agent dispatch, external result verification,
-// oracle feed publishing, and chain-side Reactivity refresh scheduling.
+// and trustless Janice execution. Refresh scheduling is delegated to AgentRefreshCoordinator.
 contract AgentOrchestrator is
     IAgentRequesterHandler,
-    SomniaEventHandler,
     ReentrancyGuard
 {
     using ECDSA for bytes32;
     using MessageHashUtils for bytes32;
 
     // ─── Constants ────────────────────────────────────────────────────────────
+
+    error OnlyAgentsApi();
+    error OnlyKeeper();
+    error NoAgent();
+    error NotAgent();
+    error ValueBudgetMismatch();
+    error TaskAlreadyActive();
+    error BadStepCount();
+    error NoBudget();
+    error NotTrustless();
+    error TaskNotRunning();
+    error NotAwaitingResume();
+    error TaskTimedOut();
+    error BadJaniceCost();
+    error DepositExceedsMax();
+    error BadToolPayload();
+    error ResultTooLarge();
+    error StepOutOfRange();
+    error NotAwaitingExternal();
+    error StepExpired();
+    error NoRegistrant();
+    error BadSignature();
+    error NotPendingRating();
+    error NotRunning();
+    error NotTimedOut();
+    error BudgetExhausted();
+    error BadNativeConfig();
+    error MaxStepsReached();
+    error OnlyAdmin();
+    error OnlyRefreshManager();
+    error RefreshManagerAlreadySet();
 
     uint256 public constant MIN_QUALITY_SCORE        = 40;
     uint64  public constant RATING_WINDOW            = 600;    // 10 min
@@ -38,14 +64,13 @@ contract AgentOrchestrator is
     uint64  public constant TASK_DEADLINE            = 1800;   // 30 min
     uint256 public constant MAX_EXTERNAL_RESULT_SIZE = 16_384; // 16 KB
     uint256 public constant SUBCOMMITTEE_SIZE        = 3;
+    uint8   public constant MAX_JANICE_ITERATIONS    = 8;
+    uint256 public constant JANICE_CONFIG_ID         = 0;
 
     bytes32 public constant CAP_ONCHAIN_EXECUTE = keccak256("onchain.execute");
 
     // ERC-6551 salt — matches TWIIN_6551_SALT in shared/constants.ts
     bytes32 public constant TWIIN_6551_SALT = bytes32(0);
-
-    // Refresh subscription options: 2M gas, no fee constraints.
-    uint64 private constant REFRESH_GAS_LIMIT = 2_000_000;
 
     // ─── Immutable references (set in constructor) ────────────────────────────
 
@@ -55,10 +80,10 @@ contract AgentOrchestrator is
     AgentRegistry    public immutable agentRegistry;
     AgentVault       public immutable vault;
     AgentPolicy      public immutable policy;
-    OracleFeed       public immutable oracleFeed;
     IAgentRequester  public immutable agentsApi;
     address          public immutable keeper;
     address          public immutable admin;
+    address          public refreshManager;
 
     // ─── Events ───────────────────────────────────────────────────────────────
 
@@ -72,8 +97,35 @@ contract AgentOrchestrator is
     event ExternalStepRejected(uint256 indexed taskId, uint8 stepIdx, address registrant, uint8 score);
     event RatingTimedOut(uint256 indexed taskId, uint8 stepIdx);
     event NativeStepTimedOut(uint256 indexed taskId, uint8 stepIdx);
-    event RefreshSkipped(uint256 indexed personalAgentId, string topic, string reason);
-    event RefreshScheduled(uint256 indexed personalAgentId, string topic, uint256 timestampMillis, uint256 subscriptionId);
+    event TrustlessTaskIntent(uint256 indexed taskId, string goal, bytes32 intentHash, uint8 maxIterations);
+    event TrustlessStepAppended(
+        uint256 indexed taskId,
+        uint8 indexed stepIdx,
+        uint256 configId,
+        bytes payload,
+        uint256 maxCostWei,
+        uint64 timeoutSeconds
+    );
+    event JaniceIteration(
+        uint256 indexed taskId,
+        uint8 indexed iteration,
+        uint256 requestId,
+        string finishReason,
+        bytes32 transcriptHash
+    );
+    event JaniceToolExecuted(
+        uint256 indexed taskId,
+        uint8 indexed iteration,
+        string toolName,
+        bytes32 argsHash,
+        bool success
+    );
+    event JaniceResumeQueued(
+        uint256 indexed taskId,
+        uint8 indexed nextIteration,
+        bytes32 transcriptHash,
+        string reason
+    );
 
     // ─── State ────────────────────────────────────────────────────────────────
 
@@ -103,12 +155,13 @@ contract AgentOrchestrator is
 
     struct NativeRef { uint256 taskId; uint8 stepIdx; }
 
-    // Refresh entry stored per-timestamp for _onEvent lookup.
-    struct RefreshEntry {
-        uint256 personalAgentId;
-        string topic;
-        bytes32 templateHash;
-        uint256 nonce;
+    struct TrustlessCtx {
+        uint256 janiceRequestId;
+        uint8 iterations;
+        uint8 maxIterations;
+        TrustlessAwaiting awaiting;
+        uint64 deadline;
+        bytes32 intentHash;
     }
 
     mapping(uint256 => uint256) public taskLock;   // personalAgentId → activeTaskId; 0 = free
@@ -116,18 +169,18 @@ contract AgentOrchestrator is
     uint256                     public nextTaskId;  // starts at 1
 
     mapping(uint256 => NativeRef) internal nativeReqIndex;   // somniaRequestId → (taskId, stepIdx)
-    mapping(uint256 => RefreshEntry[]) internal _scheduledRefreshes; // timestampMillis → entries
-    mapping(bytes32 => uint256) internal _refreshNonceByTopic; // agent/topic key → latest nonce
+    mapping(uint256 => uint256) internal trustlessReqIndex;  // janice requestId → taskId
+    mapping(uint256 => TrustlessCtx) public trustlessCtx;
 
     // ─── Modifiers ────────────────────────────────────────────────────────────
 
     modifier onlyAgentsApi() {
-        require(msg.sender == address(agentsApi), "only agents api");
+        if (msg.sender != address(agentsApi)) revert OnlyAgentsApi();
         _;
     }
 
     modifier onlyKeeper() {
-        require(msg.sender == keeper, "only keeper");
+        if (msg.sender != keeper) revert OnlyKeeper();
         _;
     }
 
@@ -138,7 +191,6 @@ contract AgentOrchestrator is
         address _agentRegistry,
         address _vault,
         address _policy,
-        address _oracleFeed,
         address _agentsApi,
         address _keeper,
         address _admin
@@ -149,7 +201,6 @@ contract AgentOrchestrator is
         agentRegistry     = AgentRegistry(_agentRegistry);
         vault             = AgentVault(_vault);
         policy            = AgentPolicy(_policy);
-        oracleFeed        = OracleFeed(_oracleFeed);
         agentsApi         = IAgentRequester(_agentsApi);
         keeper            = _keeper;
         admin             = _admin;
@@ -169,9 +220,9 @@ contract AgentOrchestrator is
         PlanMode mode
     ) external payable returns (uint256 taskId) {
         address expectedAgent = _twiinAccount(personalAgentId);
-        require(_agentExists(personalAgentId), "no agent");
-        require(msg.sender == expectedAgent, "not agent");
-        require(msg.value == budgetWei, "value != budgetWei");
+        if (!_agentExists(personalAgentId)) revert NoAgent();
+        if (msg.sender != expectedAgent) revert NotAgent();
+        if (msg.value != budgetWei) revert ValueBudgetMismatch();
         Step[] memory mSteps = new Step[](steps.length);
         for (uint256 i = 0; i < steps.length; i++) mSteps[i] = steps[i];
         return _createTaskInternal(personalAgentId, mSteps, budgetWei, mode);
@@ -183,9 +234,9 @@ contract AgentOrchestrator is
         uint256 budgetWei,
         PlanMode mode
     ) internal returns (uint256 taskId) {
-        require(taskLock[personalAgentId] == 0, "task already active");
-        require(steps.length > 0 && steps.length <= MAX_STEPS, "bad step count");
-        require(budgetWei > 0, "no budget");
+        if (taskLock[personalAgentId] != 0) revert TaskAlreadyActive();
+        if (steps.length == 0 || steps.length > MAX_STEPS) revert BadStepCount();
+        if (budgetWei == 0) revert NoBudget();
 
         // Reserve per-task + daily caps BEFORE touching vault (cheap revert on cap exceeded).
         policy.validateAndReserveTaskBudget(mode, personalAgentId, budgetWei);
@@ -211,6 +262,77 @@ contract AgentOrchestrator is
         _dispatchStep(taskId);
     }
 
+    function createTrustlessTask(
+        uint256 personalAgentId,
+        bytes calldata intentPayload,
+        uint256 budgetWei
+    ) external payable returns (uint256 taskId) {
+        address expectedAgent = _twiinAccount(personalAgentId);
+        if (!_agentExists(personalAgentId)) revert NoAgent();
+        if (msg.sender != expectedAgent) revert NotAgent();
+        if (msg.value != budgetWei) revert ValueBudgetMismatch();
+        if (taskLock[personalAgentId] != 0) revert TaskAlreadyActive();
+        if (budgetWei == 0) revert NoBudget();
+
+        string memory goal = abi.decode(intentPayload, (string));
+        bytes32 intentHash = keccak256(intentPayload);
+
+        policy.validateAndReserveTaskBudget(PlanMode.TrustlessJanice, personalAgentId, budgetWei);
+
+        taskId = ++nextTaskId;
+        taskLock[personalAgentId] = taskId;
+
+        Task storage t = tasks[taskId];
+        t.mode = PlanMode.TrustlessJanice;
+        t.personalAgentId = personalAgentId;
+        t.budgetWei = budgetWei;
+        t.deadline = uint64(block.timestamp + TASK_DEADLINE);
+        t.state = TaskState.Running;
+
+        TrustlessCtx storage ctx = trustlessCtx[taskId];
+        ctx.iterations = 0;
+        ctx.maxIterations = MAX_JANICE_ITERATIONS;
+        ctx.awaiting = TrustlessAwaiting.Janice;
+        ctx.deadline = t.deadline;
+        ctx.intentHash = intentHash;
+
+        vault.lockStep{value: budgetWei}(personalAgentId, taskId, budgetWei);
+
+        emit TaskCreated(taskId, personalAgentId, PlanMode.TrustlessJanice, budgetWei);
+        emit TrustlessTaskIntent(taskId, goal, intentHash, ctx.maxIterations);
+
+        bytes memory payload = _encodeJanicePayload(
+            _trustlessSystemPrompt(),
+            _buildInitialMessagesJson(goal),
+            _trustlessOnchainToolsJson(),
+            ctx.maxIterations
+        );
+        _startJaniceRequest(taskId, payload);
+    }
+
+    function resumeTrustlessTask(
+        uint256 taskId,
+        bytes calldata resumePayload,
+        uint256 janiceCostWei
+    ) external onlyKeeper nonReentrant {
+        Task storage t = tasks[taskId];
+        if (t.mode != PlanMode.TrustlessJanice) revert NotTrustless();
+        if (t.state != TaskState.Running) revert TaskNotRunning();
+        TrustlessCtx storage ctx = trustlessCtx[taskId];
+        if (ctx.awaiting != TrustlessAwaiting.Resume) revert NotAwaitingResume();
+        if (block.timestamp >= t.deadline) revert TaskTimedOut();
+
+        uint256 expectedCost = _nativeRequestCost(JANICE_CONFIG_ID);
+        if (janiceCostWei != expectedCost) revert BadJaniceCost();
+        _startJaniceRequest(taskId, resumePayload);
+    }
+
+    function setRefreshManager(address _refreshManager) external {
+        if (msg.sender != admin) revert OnlyAdmin();
+        if (refreshManager != address(0)) revert RefreshManagerAlreadySet();
+        refreshManager = _refreshManager;
+    }
+
     // ─── Step dispatch ────────────────────────────────────────────────────────
 
     function _dispatchStep(uint256 taskId) internal {
@@ -226,11 +348,8 @@ contract AgentOrchestrator is
             ? agentsApi.getRequestDeposit() + (a.costWei * SUBCOMMITTEE_SIZE)
             : a.costWei;
 
-        require(stepCost <= step.maxCostWei, "deposit exceeds maxCostWei");
-        require(
-            tasks[taskId].spentWei + stepCost <= tasks[taskId].budgetWei,
-            "budget exhausted"
-        );
+        if (stepCost > step.maxCostWei) revert DepositExceedsMax();
+        if (tasks[taskId].spentWei + stepCost > tasks[taskId].budgetWei) revert BudgetExhausted();
 
         // Iterate ALL capabilities to check onchain.execute allowlist (not just slot 0).
         for (uint256 i = 0; i < a.capabilities.length; i++) {
@@ -283,6 +402,12 @@ contract AgentOrchestrator is
         ResponseStatus status,
         Request memory /* details */
     ) external onlyAgentsApi {
+        uint256 trustlessTaskId = trustlessReqIndex[requestId];
+        if (trustlessTaskId != 0) {
+            _handleTrustlessResponse(trustlessTaskId, requestId, responses, status);
+            return;
+        }
+
         NativeRef memory ref = nativeReqIndex[requestId];
         if (ref.taskId == 0) return;  // unknown or already cleaned up
         if (tasks[ref.taskId].state != TaskState.Running) {
@@ -306,6 +431,80 @@ contract AgentOrchestrator is
         _advance(ref.taskId, ref.stepIdx, success, result);
     }
 
+    function _handleTrustlessResponse(
+        uint256 taskId,
+        uint256 requestId,
+        Response[] memory responses,
+        ResponseStatus status
+    ) internal {
+        delete trustlessReqIndex[requestId];
+
+        Task storage t = tasks[taskId];
+        if (t.state != TaskState.Running) return;
+
+        TrustlessCtx storage ctx = trustlessCtx[taskId];
+        if (ctx.awaiting != TrustlessAwaiting.Janice) return;
+
+        if (status != ResponseStatus.Success || responses.length == 0) {
+            _abortTask(taskId, "janice failed");
+            return;
+        }
+
+        (
+            string memory finishReason,
+            string[] memory toolNames,
+            bytes[] memory toolArgs,
+            string memory assistantMessage
+        ) = abi.decode(responses[0].result, (string, string[], bytes[], string));
+
+        ctx.iterations++;
+        bytes32 transcriptHash = keccak256(responses[0].result);
+        emit JaniceIteration(taskId, ctx.iterations, requestId, finishReason, transcriptHash);
+
+        if (_eq(finishReason, "max_iterations") || ctx.iterations >= ctx.maxIterations) {
+            _abortTask(taskId, "max iterations");
+            return;
+        }
+
+        if (_eq(finishReason, "stop")) {
+            _completeTrustlessTask(taskId, assistantMessage);
+            return;
+        }
+
+        if (!_eq(finishReason, "tool_calls")) {
+            _abortTask(taskId, "unsupported janice response");
+            return;
+        }
+
+        if (toolNames.length != toolArgs.length) revert BadToolPayload();
+        bool paused = false;
+        for (uint256 i = 0; i < toolNames.length; i++) {
+            if (paused) {
+                _abortTask(taskId, "unsupported post-pause tool");
+                return;
+            }
+            bool ok = _executeTrustlessTool(taskId, toolNames[i], toolArgs[i], assistantMessage);
+            emit JaniceToolExecuted(
+                taskId,
+                ctx.iterations,
+                toolNames[i],
+                keccak256(toolArgs[i]),
+                ok
+            );
+            if (!ok || t.state != TaskState.Running) return;
+            if (ctx.awaiting == TrustlessAwaiting.Step || ctx.awaiting == TrustlessAwaiting.Resume) {
+                paused = true;
+            }
+        }
+
+        if (paused) return;
+
+        if (t.state == TaskState.Running && ctx.awaiting == TrustlessAwaiting.Janice) {
+            ctx.awaiting = TrustlessAwaiting.Resume;
+            emit JaniceResumeQueued(taskId, ctx.iterations + 1, transcriptHash, "tool_batch_complete");
+        }
+    }
+
     // ─── External result submission ────────────────────────────────────────────
 
     // Permissionless relay — ECDSA-verified. Result held pending rating (no payment yet).
@@ -315,13 +514,13 @@ contract AgentOrchestrator is
         bytes calldata result,
         bytes calldata signature
     ) external nonReentrant {
-        require(result.length <= MAX_EXTERNAL_RESULT_SIZE, "result too large");
-        require(tasks[taskId].state == TaskState.Running, "task not running");
-        require(stepIdx < tasks[taskId].runtime.length, "step out of range");
+        if (result.length > MAX_EXTERNAL_RESULT_SIZE) revert ResultTooLarge();
+        if (tasks[taskId].state != TaskState.Running) revert TaskNotRunning();
+        if (stepIdx >= tasks[taskId].runtime.length) revert StepOutOfRange();
         StepRuntime storage rt = tasks[taskId].runtime[stepIdx];
-        require(rt.state == StepState.RunningExternal, "not awaiting");
-        require(block.timestamp <= rt.deadline, "expired");
-        require(rt.externalRegistrant != address(0), "no registrant");
+        if (rt.state != StepState.RunningExternal) revert NotAwaitingExternal();
+        if (block.timestamp > rt.deadline) revert StepExpired();
+        if (rt.externalRegistrant == address(0)) revert NoRegistrant();
 
         // EIP-191 + chain-id bound + replay-proof (reqId binds prevrandao).
         bytes32 digest = keccak256(abi.encodePacked(
@@ -334,7 +533,7 @@ contract AgentOrchestrator is
             keccak256(result)
         ));
         address recovered = digest.toEthSignedMessageHash().recover(signature);
-        require(recovered != address(0) && recovered == rt.externalRegistrant, "bad sig");
+        if (recovered == address(0) || recovered != rt.externalRegistrant) revert BadSignature();
 
         // CEI: mutate state before side effects.
         rt.resultData = result;
@@ -354,7 +553,7 @@ contract AgentOrchestrator is
         uint8 score
     ) external onlyKeeper nonReentrant {
         StepRuntime storage rt = tasks[taskId].runtime[stepIdx];
-        require(rt.state == StepState.AwaitingRating, "not pending rating");
+        if (rt.state != StepState.AwaitingRating) revert NotPendingRating();
 
         uint256 configId = rt.externalConfigId;
 
@@ -377,13 +576,10 @@ contract AgentOrchestrator is
 
     // Permissionless auto-release after RATING_WINDOW (benefit of doubt for keeper absence).
     function timeoutRating(uint256 taskId, uint8 stepIdx) external nonReentrant {
-        require(tasks[taskId].state == TaskState.Running, "task not running");
-        require(stepIdx < tasks[taskId].runtime.length, "step out of range");
+        if (tasks[taskId].state != TaskState.Running) revert TaskNotRunning();
+        if (stepIdx >= tasks[taskId].runtime.length) revert StepOutOfRange();
         StepRuntime storage rt = tasks[taskId].runtime[stepIdx];
-        require(
-            rt.state == StepState.AwaitingRating && block.timestamp >= rt.deadline,
-            "not timed out"
-        );
+        if (!(rt.state == StepState.AwaitingRating && block.timestamp >= rt.deadline)) revert NotTimedOut();
         uint256 configId = rt.externalConfigId;
 
         rt.state = StepState.Succeeded;                            // CEI
@@ -399,13 +595,10 @@ contract AgentOrchestrator is
 
     // External agent never responded.
     function timeoutExternalStep(uint256 taskId, uint8 stepIdx) external nonReentrant {
-        require(tasks[taskId].state == TaskState.Running, "task not running");
-        require(stepIdx < tasks[taskId].runtime.length, "step out of range");
+        if (tasks[taskId].state != TaskState.Running) revert TaskNotRunning();
+        if (stepIdx >= tasks[taskId].runtime.length) revert StepOutOfRange();
         StepRuntime storage rt = tasks[taskId].runtime[stepIdx];
-        require(
-            rt.state == StepState.RunningExternal && block.timestamp >= rt.deadline,
-            "not timed out"
-        );
+        if (!(rt.state == StepState.RunningExternal && block.timestamp >= rt.deadline)) revert NotTimedOut();
         uint256 configId = rt.externalConfigId;
 
         rt.state = StepState.TimedOut;                             // CEI
@@ -416,13 +609,10 @@ contract AgentOrchestrator is
 
     // Native validators never produced a callback.
     function timeoutNativeStep(uint256 taskId, uint8 stepIdx) external nonReentrant {
-        require(tasks[taskId].state == TaskState.Running, "task not running");
-        require(stepIdx < tasks[taskId].runtime.length, "step out of range");
+        if (tasks[taskId].state != TaskState.Running) revert TaskNotRunning();
+        if (stepIdx >= tasks[taskId].runtime.length) revert StepOutOfRange();
         StepRuntime storage rt = tasks[taskId].runtime[stepIdx];
-        require(
-            rt.state == StepState.RunningNative && block.timestamp >= rt.deadline,
-            "not timed out"
-        );
+        if (!(rt.state == StepState.RunningNative && block.timestamp >= rt.deadline)) revert NotTimedOut();
         uint256 configId = tasks[taskId].steps[stepIdx].subAgentConfigId;
 
         rt.state = StepState.TimedOut;                             // CEI
@@ -435,8 +625,8 @@ contract AgentOrchestrator is
     // Permissionless task-level reaper (30 min deadline).
     function timeoutTask(uint256 taskId) external nonReentrant {
         Task storage t = tasks[taskId];
-        require(t.state == TaskState.Running, "not running");
-        require(block.timestamp >= t.deadline, "not timed out");
+        if (t.state != TaskState.Running) revert NotRunning();
+        if (block.timestamp < t.deadline) revert NotTimedOut();
         _abortTask(taskId, "task timed out");
     }
 
@@ -455,9 +645,18 @@ contract AgentOrchestrator is
         emit TaskCompleted(taskId, result);
     }
 
+    function _completeTrustlessTask(uint256 taskId, string memory result) internal {
+        trustlessCtx[taskId].awaiting = TrustlessAwaiting.Done;
+        _completeTask(taskId, result);
+    }
+
     // _abortTask: decrement active counters for in-flight external steps, sweep, release lock.
     function _abortTask(uint256 taskId, string memory reason) internal {
         Task storage t = tasks[taskId];
+        TrustlessCtx storage ctx = trustlessCtx[taskId];
+        if (ctx.janiceRequestId != 0) {
+            delete trustlessReqIndex[ctx.janiceRequestId];
+        }
         uint8 c = t.cursor;
         if (c < t.runtime.length) {
             StepRuntime storage rt = t.runtime[c];
@@ -477,6 +676,9 @@ contract AgentOrchestrator is
         }
         taskLock[t.personalAgentId] = 0;
         t.state = TaskState.Aborted;
+        if (t.mode == PlanMode.TrustlessJanice) {
+            ctx.awaiting = TrustlessAwaiting.Done;
+        }
         emit TaskAborted(taskId, reason);
     }
 
@@ -489,16 +691,36 @@ contract AgentOrchestrator is
         if (success) {
             t.cursor++;
             if (t.cursor == t.steps.length) {
-                // All steps done.
-                _completeTask(taskId, string(result));
+                if (t.mode == PlanMode.TrustlessJanice) {
+                    TrustlessCtx storage trustless = trustlessCtx[taskId];
+                    trustless.awaiting = TrustlessAwaiting.Resume;
+                    emit JaniceResumeQueued(
+                        taskId,
+                        trustless.iterations + 1,
+                        keccak256(result),
+                        "step_succeeded"
+                    );
+                } else {
+                    _completeTask(taskId, string(result));
+                }
             } else {
                 _dispatchStep(taskId);
             }
         } else {
             StepRuntime storage rt = t.runtime[stepIdx];
             if (rt.state == StepState.TimedOut) {
-                // Timed-out steps don't retry — latency was the symptom.
-                _abortTask(taskId, "step timed out");
+                if (t.mode == PlanMode.TrustlessJanice) {
+                    TrustlessCtx storage trustlessTimedOut = trustlessCtx[taskId];
+                    trustlessTimedOut.awaiting = TrustlessAwaiting.Resume;
+                    emit JaniceResumeQueued(
+                        taskId,
+                        trustlessTimedOut.iterations + 1,
+                        keccak256(bytes("step timed out")),
+                        "step_failed"
+                    );
+                } else {
+                    _abortTask(taskId, "step timed out");
+                }
                 return;
             }
             if (rt.retryCount < MAX_RETRIES) {
@@ -507,9 +729,33 @@ contract AgentOrchestrator is
                 // Snapshot byCapability array at retry-start to avoid Elo-write mutations (R2-24).
                 uint256[] memory snapshot = _snapshotByCapability(stepIdx, t);
                 bool dispatched = _retryWithSnapshot(taskId, stepIdx, snapshot);
-                if (!dispatched) _abortTask(taskId, "step failed");
+                if (!dispatched) {
+                    if (t.mode == PlanMode.TrustlessJanice) {
+                        TrustlessCtx storage trustlessFailed = trustlessCtx[taskId];
+                        trustlessFailed.awaiting = TrustlessAwaiting.Resume;
+                        emit JaniceResumeQueued(
+                            taskId,
+                            trustlessFailed.iterations + 1,
+                            keccak256(bytes("step failed")),
+                            "step_failed"
+                        );
+                    } else {
+                        _abortTask(taskId, "step failed");
+                    }
+                }
             } else {
-                _abortTask(taskId, "step failed");
+                if (t.mode == PlanMode.TrustlessJanice) {
+                    TrustlessCtx storage trustlessExhausted = trustlessCtx[taskId];
+                    trustlessExhausted.awaiting = TrustlessAwaiting.Resume;
+                    emit JaniceResumeQueued(
+                        taskId,
+                        trustlessExhausted.iterations + 1,
+                        keccak256(bytes("step failed")),
+                        "step_failed"
+                    );
+                } else {
+                    _abortTask(taskId, "step failed");
+                }
             }
         }
     }
@@ -542,194 +788,15 @@ contract AgentOrchestrator is
         return false;
     }
 
-    // ─── Oracle feed + refresh scheduling ────────────────────────────────────
+    // ─── Refresh hook ─────────────────────────────────────────────────────────
 
-    function publishFeedAndMaybeSchedule(
-        uint256 personalAgentId,
-        string calldata topic,
-        string calldata value,
-        uint8 confidence,
-        uint256 maxAgeSeconds,
-        uint256 refreshInterval,
-        bytes32 templateHash
-    ) external {
-        require(msg.sender == address(this) || msg.sender == admin, "not allowed");
-        _publishFeedAndMaybeSchedule(
-            personalAgentId, topic, value, confidence, maxAgeSeconds, refreshInterval, templateHash
-        );
-    }
-
-    function registerTaskTemplate(
-        Step[] calldata steps,
-        uint256 budgetWei
-    ) external returns (bytes32 hash) {
-        require(msg.sender == admin, "not allowed");
-        return oracleFeed.registerTemplate(steps, budgetWei);
-    }
-
-    function _publishFeedAndMaybeSchedule(
-        uint256 personalAgentId,
-        string memory topic,
-        string memory value,
-        uint8 confidence,
-        uint256 maxAgeSeconds,
-        uint256 refreshInterval,
-        bytes32 templateHash
-    ) internal {
-        bytes32 topicKey = keccak256(abi.encode(personalAgentId, topic));
-        ++_refreshNonceByTopic[topicKey];
-        oracleFeed.publishFeed(
-            personalAgentId, topic, value, confidence, maxAgeSeconds, refreshInterval, templateHash
-        );
-        if (refreshInterval > 0) {
-            _scheduleOrUpdateRefresh(personalAgentId, topic, refreshInterval, templateHash);
-        }
-    }
-
-    function _scheduleOrUpdateRefresh(
-        uint256 personalAgentId,
-        string memory topic,
-        uint256 refreshInterval,
-        bytes32 templateHash
-    ) internal {
-        bytes32 topicKey = keccak256(abi.encode(personalAgentId, topic));
-        uint256 nonce = _refreshNonceByTopic[topicKey];
-        uint256 timestampMillis = (block.timestamp + refreshInterval) * 1000;
-
-        // Store the entry so _onEvent can look it up by timestamp.
-        _scheduledRefreshes[timestampMillis].push(RefreshEntry({
-            personalAgentId: personalAgentId,
-            topic: topic,
-            templateHash: templateHash,
-            nonce: nonce
-        }));
-
-        // Try scheduling via Somnia Reactivity precompile (fails gracefully on Hardhat / low balance).
-        // We use an external self-call so try/catch works on the library internal.
-        try this.scheduleSubscriptionSelfCall(personalAgentId, topic, timestampMillis)
-            returns (uint256 subscriptionId)
-        {
-            emit RefreshScheduled(personalAgentId, topic, timestampMillis, subscriptionId);
-        } catch {
-            // Subscription failed (no precompile in Hardhat, balance < 32 STT, etc.).
-            // Refresh still works via the keeper fallback path.
-        }
-    }
-
-    // External self-call wrapper so _scheduleOrUpdateRefresh can try/catch the library call.
-    function scheduleSubscriptionSelfCall(
-        uint256 /*personalAgentId*/,
-        string calldata /*topic*/,
-        uint256 timestampMillis
-    ) external returns (uint256 subscriptionId) {
-        require(msg.sender == address(this), "only self");
-        SomniaExtensions.SubscriptionOptions memory opts = SomniaExtensions.SubscriptionOptions({
-            priorityFeePerGas: 0,
-            maxFeePerGas: 0,
-            gasLimit: REFRESH_GAS_LIMIT
-        });
-        return SomniaExtensions.scheduleSubscriptionAtTimestamp(address(this), timestampMillis, opts);
-    }
-
-    // Reactivity callback — only reachable from precompile 0x0100 (enforced by SomniaEventHandler base).
-    function _onEvent(
-        address /* emitter */,
-        bytes32[] calldata eventTopics,
-        bytes calldata /* data */  // empty for Schedule events
-    ) internal override {
-        // eventTopics[1] = bytes32(timestampMillis) from the Schedule event.
-        if (eventTopics.length < 2) return;
-        uint256 timestampMillis = uint256(eventTopics[1]);
-
-        RefreshEntry[] storage entries = _scheduledRefreshes[timestampMillis];
-        for (uint256 i = 0; i < entries.length; i++) {
-            if (!_isRefreshEntryCurrent(entries[i])) continue;
-            _refreshFromTemplate(
-                entries[i].personalAgentId,
-                entries[i].topic,
-                entries[i].templateHash
-            );
-        }
-        delete _scheduledRefreshes[timestampMillis];  // storage cleanup
-    }
-
-    // ─── Refresh execution ────────────────────────────────────────────────────
-
-    function _refreshFromTemplate(
-        uint256 personalAgentId,
-        string memory topic,
-        bytes32 templateHash
-    ) internal {
-        if (policy.isKilled(personalAgentId)) {
-            emit RefreshSkipped(personalAgentId, topic, "kill switch");
-            return;
-        }
-        if (taskLock[personalAgentId] != 0) {
-            emit RefreshSkipped(personalAgentId, topic, "task in flight");
-            return;
-        }
-        // Guard before getTemplate — it reverts on unknown hash; emit event instead.
-        if (!oracleFeed.taskTemplateRegistered(templateHash)) {
-            emit RefreshSkipped(personalAgentId, topic, "task preflight");
-            return;
-        }
-        Step[] memory steps = oracleFeed.getTemplate(templateHash);
-        uint256 budget = oracleFeed.taskTemplateBudget(templateHash);
-        if (!_preflightRefreshTask(personalAgentId, steps, budget)) {
-            emit RefreshSkipped(personalAgentId, topic, "task preflight");
-            return;
-        }
-
-        address payable acct = payable(_twiinAccount(personalAgentId));
-        try TwiinAccount(acct).pullForRefresh(address(this), budget) {
-            try this.createRefreshTaskFromPulledFunds(personalAgentId, steps, budget) {
-                // ok
-            } catch {
-                // Refund pulled STT back to the 6551 account on create failure.
-                (bool ok, ) = acct.call{value: budget}("");
-                require(ok, "refund failed");  // should never fail since acct has receive()
-                emit RefreshSkipped(personalAgentId, topic, "task create");
-            }
-        } catch {
-            emit RefreshSkipped(personalAgentId, topic, "refresh allowance");
-        }
-    }
-
-    // Only callable by this contract (catchable self-call from _refreshFromTemplate).
     function createRefreshTaskFromPulledFunds(
         uint256 personalAgentId,
         Step[] calldata steps,
         uint256 budget
-    ) external returns (uint256 taskId) {
-        require(msg.sender == address(this), "only self");
+    ) external payable returns (uint256 taskId) {
+        if (msg.sender != refreshManager) revert OnlyRefreshManager();
         return _createTaskInternal(personalAgentId, steps, budget, PlanMode.ClaudePlan);
-    }
-
-    // Degraded-mode keeper fallback — uses same 6551 pull allowance, never calls external createTask.
-    function refreshFromTemplateByKeeper(
-        uint256 personalAgentId,
-        string calldata topic,
-        bytes32 templateHash
-    ) external onlyKeeper {
-        _refreshFromTemplate(personalAgentId, topic, templateHash);
-    }
-
-    // Mirrors create/dispatch failure conditions without mutating state.
-    function _preflightRefreshTask(
-        uint256 personalAgentId,
-        Step[] memory steps,
-        uint256 budget
-    ) internal view returns (bool) {
-        if (taskLock[personalAgentId] != 0) return false;
-        if (steps.length == 0 || steps.length > MAX_STEPS) return false;
-        if (budget == 0) return false;
-        if (!policy.canReserveTaskBudget(PlanMode.ClaudePlan, personalAgentId, budget)) return false;
-        return true;
-    }
-
-    function _isRefreshEntryCurrent(RefreshEntry storage entry) internal view returns (bool) {
-        bytes32 topicKey = keccak256(abi.encode(entry.personalAgentId, entry.topic));
-        return _refreshNonceByTopic[topicKey] == entry.nonce;
     }
 
     // ─── Helpers ─────────────────────────────────────────────────────────────
@@ -750,5 +817,203 @@ contract AgentOrchestrator is
         );
         if (!ok || data.length < 32) return false;
         return abi.decode(data, (address)) != address(0);
+    }
+
+    function _startJaniceRequest(uint256 taskId, bytes memory payload) internal {
+        Task storage t = tasks[taskId];
+        TrustlessCtx storage ctx = trustlessCtx[taskId];
+        policy.requireNotKilled(t.personalAgentId);
+
+        uint256 stepCost = _nativeRequestCost(JANICE_CONFIG_ID);
+        if (t.spentWei + stepCost > t.budgetWei) revert BudgetExhausted();
+
+        t.spentWei += stepCost;
+        vault.payNative(taskId, stepCost);
+
+        AgentRegistry.SubAgent memory janice = agentRegistry.get(JANICE_CONFIG_ID);
+        uint256 reqId = agentsApi.createRequest{value: stepCost}(
+            janice.somniaAgentId,
+            address(this),
+            this.handleResponse.selector,
+            payload
+        );
+        ctx.awaiting = TrustlessAwaiting.Janice;
+        ctx.janiceRequestId = reqId;
+        trustlessReqIndex[reqId] = taskId;
+    }
+
+    function _nativeRequestCost(uint256 configId) internal view returns (uint256) {
+        AgentRegistry.SubAgent memory a = agentRegistry.get(configId);
+        if (!(a.isActive && a.lane == AgentLane.SomniaNative)) revert BadNativeConfig();
+        return agentsApi.getRequestDeposit() + (a.costWei * SUBCOMMITTEE_SIZE);
+    }
+
+    function _executeTrustlessTool(
+        uint256 taskId,
+        string memory toolName,
+        bytes memory toolArgs,
+        string memory assistantMessage
+    ) internal returns (bool) {
+        Task storage t = tasks[taskId];
+        TrustlessCtx storage ctx = trustlessCtx[taskId];
+
+        if (_eq(toolName, "hireSubAgent")) {
+            (
+                uint256 configId,
+                bytes memory payload,
+                uint256 maxCostWei,
+                uint32 timeoutSeconds
+            ) = abi.decode(toolArgs, (uint256, bytes, uint256, uint32));
+            if (t.steps.length >= MAX_STEPS) revert MaxStepsReached();
+            t.steps.push(
+                Step({
+                    subAgentConfigId: configId,
+                    payload: payload,
+                    maxCostWei: maxCostWei,
+                    timeoutSeconds: timeoutSeconds
+                })
+            );
+            t.runtime.push();
+            uint8 stepIdx = uint8(t.steps.length - 1);
+            emit TrustlessStepAppended(taskId, stepIdx, configId, payload, maxCostWei, timeoutSeconds);
+            ctx.awaiting = TrustlessAwaiting.Step;
+            _dispatchStep(taskId);
+            return true;
+        }
+
+        if (_eq(toolName, "completeTrustlessTask")) {
+            string memory finalResult = abi.decode(toolArgs, (string));
+            _completeTrustlessTask(taskId, bytes(finalResult).length == 0 ? assistantMessage : finalResult);
+            return true;
+        }
+
+        if (_eq(toolName, "publishOracle")) {
+            if (refreshManager == address(0)) {
+                _abortTask(taskId, "refresh manager unset");
+                return false;
+            }
+            (
+                uint256 personalAgentId,
+                string memory topic,
+                string memory value,
+                uint8 confidence,
+                uint256 maxAgeSeconds,
+                uint256 refreshInterval,
+                bytes32 templateHash
+            ) = abi.decode(toolArgs, (uint256, string, string, uint8, uint256, uint256, bytes32));
+            (bool ok, ) = refreshManager.call(
+                abi.encodeWithSignature(
+                    "publishFeedAndMaybeSchedule(uint256,string,string,uint8,uint256,uint256,bytes32)",
+                    personalAgentId,
+                    topic,
+                    value,
+                    confidence,
+                    maxAgeSeconds,
+                    refreshInterval,
+                    templateHash
+                )
+            );
+            if (!ok) {
+                _abortTask(taskId, "publish oracle failed");
+                return false;
+            }
+            return true;
+        }
+
+        if (_eq(toolName, "rateSubAgent")) {
+            (uint256 configId, uint32 latencyMs, uint8 score) = abi.decode(
+                toolArgs,
+                (uint256, uint32, uint8)
+            );
+            agentRegistry.recordSuccess(configId, latencyMs, score);
+            return true;
+        }
+
+        _abortTask(taskId, "unknown trustless tool");
+        return false;
+    }
+
+    function _trustlessSystemPrompt() internal pure returns (string memory) {
+        return "You are Janice, a trustless planner. Use on-chain tools or complete the task.";
+    }
+
+    function _buildInitialMessagesJson(string memory goal) internal pure returns (string memory) {
+        return string(
+            abi.encodePacked(
+                '[{"role":"user","content":"',
+                _escapeJson(goal),
+                '"}]'
+            )
+        );
+    }
+
+    function _trustlessOnchainToolsJson() internal pure returns (string memory) {
+        return '[{"name":"hireSubAgent"},{"name":"publishOracle"},{"name":"rateSubAgent"},{"name":"completeTrustlessTask"}]';
+    }
+
+    function _encodeJanicePayload(
+        string memory systemPrompt,
+        string memory messagesJson,
+        string memory onchainToolsJson,
+        uint8 maxIterations
+    ) internal pure returns (bytes memory) {
+        return abi.encodeWithSignature(
+            "inferToolsChat(string,string,string,uint8)",
+            systemPrompt,
+            messagesJson,
+            onchainToolsJson,
+            maxIterations
+        );
+    }
+
+    function _eq(string memory a, string memory b) internal pure returns (bool) {
+        return keccak256(bytes(a)) == keccak256(bytes(b));
+    }
+
+    function _escapeJson(string memory value) internal pure returns (string memory) {
+        bytes memory src = bytes(value);
+        bytes memory out = new bytes(src.length * 6);
+        uint256 j = 0;
+
+        for (uint256 i = 0; i < src.length; i++) {
+            bytes1 c = src[i];
+            if (c == 0x22) {
+                out[j++] = 0x5c;
+                out[j++] = 0x22;
+            } else if (c == 0x5c) {
+                out[j++] = 0x5c;
+                out[j++] = 0x5c;
+            } else if (c == 0x08) {
+                out[j++] = 0x5c;
+                out[j++] = 0x62;
+            } else if (c == 0x0c) {
+                out[j++] = 0x5c;
+                out[j++] = 0x66;
+            } else if (c == 0x0a) {
+                out[j++] = 0x5c;
+                out[j++] = 0x6e;
+            } else if (c == 0x0d) {
+                out[j++] = 0x5c;
+                out[j++] = 0x72;
+            } else if (c == 0x09) {
+                out[j++] = 0x5c;
+                out[j++] = 0x74;
+            } else if (uint8(c) < 0x20) {
+                out[j++] = 0x5c;
+                out[j++] = 0x75;
+                out[j++] = 0x30;
+                out[j++] = 0x30;
+                uint8 hi = uint8(c) / 16;
+                uint8 lo = uint8(c) % 16;
+                out[j++] = hi < 10 ? bytes1(hi + 0x30) : bytes1(hi + 0x57);
+                out[j++] = lo < 10 ? bytes1(lo + 0x30) : bytes1(lo + 0x57);
+            } else {
+                out[j++] = c;
+            }
+        }
+
+        bytes memory trimmed = new bytes(j);
+        for (uint256 i = 0; i < j; i++) trimmed[i] = out[i];
+        return string(trimmed);
     }
 }

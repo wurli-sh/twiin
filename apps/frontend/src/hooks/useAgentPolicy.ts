@@ -5,7 +5,6 @@ import {
   CONTRACTS,
   AgentPolicyAbi,
   TwiinAccountAbi,
-  addresses,
 } from '@/config/contracts'
 import { readContract } from '@/lib/read-contract'
 import { somniaTestnet } from '@/config/chains'
@@ -32,7 +31,7 @@ export function useAgentPolicy() {
           address: tbaAddress,
           abi: TwiinAccountAbi,
           functionName: 'pullApprovals',
-          args: [CONTRACTS.orchestrator.address],
+          args: [CONTRACTS.refreshManager.address],
         })
         const perTickWei = raw[0]
         const periodSeconds = raw[1]
@@ -57,8 +56,30 @@ export function useAgentPolicy() {
       maxPerTaskTrustlessWei: bigint
       killSwitch: boolean
     }) => {
+      if (!publicClient) throw new Error('RPC not ready')
       setIsSaving(true)
       try {
+        let allowedContracts: Address[] = [CONTRACTS.mockRouter.address]
+        try {
+          const onChain = await readContract<readonly Address[]>(publicClient, {
+            address: CONTRACTS.policy.address,
+            abi: [
+              {
+                type: 'function',
+                name: 'getAllowedContracts',
+                stateMutability: 'view',
+                inputs: [{ name: 'personalAgentId', type: 'uint256' }],
+                outputs: [{ name: '', type: 'address[]' }],
+              },
+            ],
+            functionName: 'getAllowedContracts',
+            args: [input.agentId],
+          })
+          if (onChain.length > 0) allowedContracts = [...onChain]
+        } catch {
+          // Deployed policy may predate getAllowedContracts — keep factory seed allowlist.
+        }
+
         const tx = await writeContractAsync({
           chainId: somniaTestnet.id,
           address: CONTRACTS.policy.address,
@@ -69,7 +90,7 @@ export function useAgentPolicy() {
             parseEther(input.dailyCapStt),
             parseEther(input.maxPerTaskStt),
             input.maxPerTaskTrustlessWei,
-            [addresses.mockRouter],
+            allowedContracts,
             input.killSwitch,
           ],
         } as never)
@@ -78,7 +99,7 @@ export function useAgentPolicy() {
         setIsSaving(false)
       }
     },
-    [writeContractAsync],
+    [publicClient, writeContractAsync],
   )
 
   const subscribePull = useCallback(
@@ -99,7 +120,7 @@ export function useAgentPolicy() {
           abi: TwiinAccountAbi,
           functionName: 'subscribePull',
           args: [
-            CONTRACTS.orchestrator.address,
+            CONTRACTS.refreshManager.address,
             perTickWei,
             BigInt(input.periodSeconds),
           ],
@@ -121,7 +142,7 @@ export function useAgentPolicy() {
           address: tbaAddress,
           abi: TwiinAccountAbi,
           functionName: 'revokePull',
-          args: [CONTRACTS.orchestrator.address],
+          args: [CONTRACTS.refreshManager.address],
         } as never)
         return tx
       } finally {

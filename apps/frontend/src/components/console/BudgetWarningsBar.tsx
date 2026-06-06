@@ -7,6 +7,7 @@ type Props = {
   overPerTaskCap: boolean
   overDailyCap: boolean
   dailyRemaining: number
+  perTaskCapStt?: string
   className?: string
 }
 
@@ -21,8 +22,10 @@ export function BudgetWarningsBar({
   overPerTaskCap,
   overDailyCap,
   dailyRemaining,
+  perTaskCapStt,
   className,
 }: Props) {
+  const capLabel = perTaskCapStt ?? agent.maxPerTask
   if (!agent) return null
 
   const items: WarningItem[] = []
@@ -35,7 +38,7 @@ export function BudgetWarningsBar({
   }
   if (overPerTaskCap) {
     items.push({
-      text: `Budget exceeds per-task cap (${agent.maxPerTask} STT)`,
+      text: `Budget exceeds per-task cap (${capLabel} STT)`,
       severity: 'destructive',
     })
   }

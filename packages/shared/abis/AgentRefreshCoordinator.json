@@ -1,0 +1,476 @@
+[
+  {
+    "inputs": [
+      {
+        "internalType": "address",
+        "name": "_registry6551",
+        "type": "address"
+      },
+      {
+        "internalType": "address",
+        "name": "_twiinAccountImpl",
+        "type": "address"
+      },
+      {
+        "internalType": "address",
+        "name": "_twiinAgent",
+        "type": "address"
+      },
+      {
+        "internalType": "address",
+        "name": "_policy",
+        "type": "address"
+      },
+      {
+        "internalType": "address",
+        "name": "_oracleFeed",
+        "type": "address"
+      },
+      {
+        "internalType": "address",
+        "name": "_orchestrator",
+        "type": "address"
+      },
+      {
+        "internalType": "address",
+        "name": "_keeper",
+        "type": "address"
+      },
+      {
+        "internalType": "address",
+        "name": "_admin",
+        "type": "address"
+      }
+    ],
+    "stateMutability": "nonpayable",
+    "type": "constructor"
+  },
+  {
+    "inputs": [],
+    "name": "EmptyFilter",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "GasLimitExceeded",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "GasLimitZero",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "HandlerZeroAddress",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "InsufficientBalance",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "InvalidMaxFeePerGas",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "NotAllowed",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "OnlyKeeper",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "OnlyReactivityPrecompile",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "OnlySelf",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "TimestampInPast",
+    "type": "error"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      {
+        "indexed": true,
+        "internalType": "uint256",
+        "name": "personalAgentId",
+        "type": "uint256"
+      },
+      {
+        "indexed": false,
+        "internalType": "string",
+        "name": "topic",
+        "type": "string"
+      },
+      {
+        "indexed": false,
+        "internalType": "uint256",
+        "name": "timestampMillis",
+        "type": "uint256"
+      },
+      {
+        "indexed": false,
+        "internalType": "uint256",
+        "name": "subscriptionId",
+        "type": "uint256"
+      }
+    ],
+    "name": "RefreshScheduled",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      {
+        "indexed": true,
+        "internalType": "uint256",
+        "name": "personalAgentId",
+        "type": "uint256"
+      },
+      {
+        "indexed": false,
+        "internalType": "string",
+        "name": "topic",
+        "type": "string"
+      },
+      {
+        "indexed": false,
+        "internalType": "string",
+        "name": "reason",
+        "type": "string"
+      }
+    ],
+    "name": "RefreshSkipped",
+    "type": "event"
+  },
+  {
+    "inputs": [],
+    "name": "MAX_STEPS",
+    "outputs": [
+      {
+        "internalType": "uint256",
+        "name": "",
+        "type": "uint256"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "TWIIN_6551_SALT",
+    "outputs": [
+      {
+        "internalType": "bytes32",
+        "name": "",
+        "type": "bytes32"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "admin",
+    "outputs": [
+      {
+        "internalType": "address",
+        "name": "",
+        "type": "address"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "keeper",
+    "outputs": [
+      {
+        "internalType": "address",
+        "name": "",
+        "type": "address"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "address",
+        "name": "emitter",
+        "type": "address"
+      },
+      {
+        "internalType": "bytes32[]",
+        "name": "eventTopics",
+        "type": "bytes32[]"
+      },
+      {
+        "internalType": "bytes",
+        "name": "data",
+        "type": "bytes"
+      }
+    ],
+    "name": "onEvent",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "oracleFeed",
+    "outputs": [
+      {
+        "internalType": "contract OracleFeed",
+        "name": "",
+        "type": "address"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "orchestrator",
+    "outputs": [
+      {
+        "internalType": "contract IRefreshTaskOrchestrator",
+        "name": "",
+        "type": "address"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "policy",
+    "outputs": [
+      {
+        "internalType": "contract AgentPolicy",
+        "name": "",
+        "type": "address"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint256",
+        "name": "personalAgentId",
+        "type": "uint256"
+      },
+      {
+        "internalType": "string",
+        "name": "topic",
+        "type": "string"
+      },
+      {
+        "internalType": "string",
+        "name": "value",
+        "type": "string"
+      },
+      {
+        "internalType": "uint8",
+        "name": "confidence",
+        "type": "uint8"
+      },
+      {
+        "internalType": "uint256",
+        "name": "maxAgeSeconds",
+        "type": "uint256"
+      },
+      {
+        "internalType": "uint256",
+        "name": "refreshInterval",
+        "type": "uint256"
+      },
+      {
+        "internalType": "bytes32",
+        "name": "templateHash",
+        "type": "bytes32"
+      }
+    ],
+    "name": "publishFeedAndMaybeSchedule",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint256",
+        "name": "personalAgentId",
+        "type": "uint256"
+      },
+      {
+        "internalType": "string",
+        "name": "topic",
+        "type": "string"
+      },
+      {
+        "internalType": "bytes32",
+        "name": "templateHash",
+        "type": "bytes32"
+      }
+    ],
+    "name": "refreshFromTemplateByKeeper",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "components": [
+          {
+            "internalType": "uint256",
+            "name": "subAgentConfigId",
+            "type": "uint256"
+          },
+          {
+            "internalType": "bytes",
+            "name": "payload",
+            "type": "bytes"
+          },
+          {
+            "internalType": "uint256",
+            "name": "maxCostWei",
+            "type": "uint256"
+          },
+          {
+            "internalType": "uint32",
+            "name": "timeoutSeconds",
+            "type": "uint32"
+          }
+        ],
+        "internalType": "struct Step[]",
+        "name": "steps",
+        "type": "tuple[]"
+      },
+      {
+        "internalType": "uint256",
+        "name": "budgetWei",
+        "type": "uint256"
+      }
+    ],
+    "name": "registerTaskTemplate",
+    "outputs": [
+      {
+        "internalType": "bytes32",
+        "name": "hash",
+        "type": "bytes32"
+      }
+    ],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "registry6551",
+    "outputs": [
+      {
+        "internalType": "contract IERC6551Registry",
+        "name": "",
+        "type": "address"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint256",
+        "name": "",
+        "type": "uint256"
+      },
+      {
+        "internalType": "string",
+        "name": "",
+        "type": "string"
+      },
+      {
+        "internalType": "uint256",
+        "name": "timestampMillis",
+        "type": "uint256"
+      }
+    ],
+    "name": "scheduleSubscriptionSelfCall",
+    "outputs": [
+      {
+        "internalType": "uint256",
+        "name": "subscriptionId",
+        "type": "uint256"
+      }
+    ],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "bytes4",
+        "name": "interfaceId",
+        "type": "bytes4"
+      }
+    ],
+    "name": "supportsInterface",
+    "outputs": [
+      {
+        "internalType": "bool",
+        "name": "",
+        "type": "bool"
+      }
+    ],
+    "stateMutability": "pure",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "twiinAccountImpl",
+    "outputs": [
+      {
+        "internalType": "address",
+        "name": "",
+        "type": "address"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "twiinAgent",
+    "outputs": [
+      {
+        "internalType": "address",
+        "name": "",
+        "type": "address"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "stateMutability": "payable",
+    "type": "receive"
+  }
+]

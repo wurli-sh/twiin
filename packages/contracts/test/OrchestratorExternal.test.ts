@@ -14,7 +14,7 @@ describe("AgentOrchestrator — external result flow", () => {
     // Bounds check fires before the state check on a non-existent task.
     await expect(
       d.orchestrator.submitExternalResult(999n, 0, "0x1234", "0x"),
-    ).to.be.revertedWith("task not running");
+    ).to.be.revertedWithCustomError(d.orchestrator, "TaskNotRunning");
   });
 
   it("submitExternalResult rejects result that is too large (size checked first)", async () => {
@@ -22,7 +22,7 @@ describe("AgentOrchestrator — external result flow", () => {
     const bigResult = "0x" + "ab".repeat(16_385); // 16 385 bytes > 16 384 limit
     await expect(
       d.orchestrator.submitExternalResult(999n, 0, bigResult, "0x"),
-    ).to.be.revertedWith("result too large");
+    ).to.be.revertedWithCustomError(d.orchestrator, "ResultTooLarge");
   });
 
   it("finalizeExternalStep is onlyKeeper", async () => {
@@ -30,13 +30,14 @@ describe("AgentOrchestrator — external result flow", () => {
     const [, , attacker] = await ethers.getSigners();
     await expect(
       d.orchestrator.connect(attacker).finalizeExternalStep(999n, 0, 80),
-    ).to.be.revertedWith("only keeper");
+    ).to.be.revertedWithCustomError(d.orchestrator, "OnlyKeeper");
   });
 
   it("timeoutRating rejects on non-existent task", async () => {
     const d = await deployAll();
-    await expect(d.orchestrator.timeoutRating(999n, 0)).to.be.revertedWith(
-      "task not running",
+    await expect(d.orchestrator.timeoutRating(999n, 0)).to.be.revertedWithCustomError(
+      d.orchestrator,
+      "TaskNotRunning",
     );
   });
 
@@ -372,10 +373,10 @@ describe("AgentOrchestrator — refresh preflight", () => {
     const [, , attacker] = await ethers.getSigners();
     const fakeHash = ethers.keccak256(ethers.toUtf8Bytes("template"));
     await expect(
-      d.orchestrator
+      d.refreshManager
         .connect(attacker)
         .refreshFromTemplateByKeeper(1n, "topic", fakeHash),
-    ).to.be.revertedWith("only keeper");
+    ).to.be.revertedWithCustomError(d.refreshManager, "OnlyKeeper");
   });
 
   it("refreshFromTemplateByKeeper emits RefreshSkipped('kill switch') when kill switch on", async () => {
@@ -390,11 +391,11 @@ describe("AgentOrchestrator — refresh preflight", () => {
     const fakeHash = ethers.keccak256(ethers.toUtf8Bytes("template"));
 
     await expect(
-      d.orchestrator
+      d.refreshManager
         .connect(keeper)
         .refreshFromTemplateByKeeper(agentId, "health", fakeHash),
     )
-      .to.emit(d.orchestrator, "RefreshSkipped")
+      .to.emit(d.refreshManager, "RefreshSkipped")
       .withArgs(agentId, "health", "kill switch");
   });
 
@@ -414,17 +415,17 @@ describe("AgentOrchestrator — refresh preflight", () => {
 
     // Template not registered → getTemplate will revert → caught → "task preflight"
     await expect(
-      d.orchestrator
+      d.refreshManager
         .connect(keeper)
         .refreshFromTemplateByKeeper(agentId, "health", fakeHash),
     )
-      .to.emit(d.orchestrator, "RefreshSkipped")
+      .to.emit(d.refreshManager, "RefreshSkipped")
       .withArgs(agentId, "health", "task preflight");
   });
 
   it("refreshFromTemplateByKeeper emits RefreshSkipped('refresh allowance') when no pull approval", async () => {
     const d = await deployAll();
-    const [, keeper, user] = await ethers.getSigners();
+    const [admin, keeper, user] = await ethers.getSigners();
 
     await d.factory
       .connect(user)
@@ -432,14 +433,7 @@ describe("AgentOrchestrator — refresh preflight", () => {
     const agentId = 1n;
     await d.policy.connect(user).toggleKillSwitch(agentId, false);
 
-    // Register a template with the orchestrator
-    const orchAddr = await d.orchestrator.getAddress();
-    await ethers.provider.send("hardhat_setBalance", [
-      orchAddr,
-      "0x" + ethers.parseEther("10").toString(16),
-    ]);
-    const orchSigner = await ethers.getImpersonatedSigner(orchAddr);
-
+    // Register a template with the refresh coordinator.
     const step = {
       subAgentConfigId: 2n,
       payload: "0x",
@@ -447,30 +441,29 @@ describe("AgentOrchestrator — refresh preflight", () => {
       timeoutSeconds: 900,
     };
     const budget = ethers.parseEther("0.2");
-
-    const templateHash = await d.feed
-      .connect(orchSigner)
-      .registerTemplate.staticCall([step], budget);
-    await d.feed.connect(orchSigner).registerTemplate([step], budget);
+    const templateHash = await d.refreshManager
+      .connect(admin)
+      .registerTaskTemplate.staticCall([step], budget);
+    await d.refreshManager.connect(admin).registerTaskTemplate([step], budget);
 
     // No subscribePull set → pullForRefresh will revert → RefreshSkipped("refresh allowance")
     await expect(
-      d.orchestrator
+      d.refreshManager
         .connect(keeper)
         .refreshFromTemplateByKeeper(agentId, "test", templateHash),
     )
-      .to.emit(d.orchestrator, "RefreshSkipped")
+      .to.emit(d.refreshManager, "RefreshSkipped")
       .withArgs(agentId, "test", "refresh allowance");
   });
 
-  it("createRefreshTaskFromPulledFunds rejects non-self caller", async () => {
+  it("createRefreshTaskFromPulledFunds rejects non-refresh-manager caller", async () => {
     const d = await deployAll();
     const [, , attacker] = await ethers.getSigners();
     await expect(
       d.orchestrator
         .connect(attacker)
         .createRefreshTaskFromPulledFunds(1n, [], ethers.parseEther("0.1")),
-    ).to.be.revertedWith("only self");
+    ).to.be.revertedWithCustomError(d.orchestrator, "OnlyRefreshManager");
   });
 
   it("stale scheduled refresh entries are ignored after the topic is cancelled", async () => {
@@ -492,14 +485,7 @@ describe("AgentOrchestrator — refresh preflight", () => {
     const acct = await ethers.getContractAt("TwiinAccount", acctAddr);
     await acct
       .connect(user)
-      .subscribePull(await d.orchestrator.getAddress(), ethers.parseEther("0.2"), 60);
-
-    const orchAddr = await d.orchestrator.getAddress();
-    await ethers.provider.send("hardhat_setBalance", [
-      orchAddr,
-      "0x" + ethers.parseEther("40").toString(16),
-    ]);
-    const orchSigner = await ethers.getImpersonatedSigner(orchAddr);
+      .subscribePull(await d.refreshManager.getAddress(), ethers.parseEther("0.2"), 1);
 
     const step = {
       subAgentConfigId: 2n,
@@ -508,12 +494,12 @@ describe("AgentOrchestrator — refresh preflight", () => {
       timeoutSeconds: 900,
     };
     const budget = ethers.parseEther("0.2");
-    const templateHash = await d.feed
-      .connect(orchSigner)
-      .registerTemplate.staticCall([step], budget);
-    await d.feed.connect(orchSigner).registerTemplate([step], budget);
+    const templateHash = await d.refreshManager
+      .connect(admin)
+      .registerTaskTemplate.staticCall([step], budget);
+    await d.refreshManager.connect(admin).registerTaskTemplate([step], budget);
 
-    const publishTx = await d.orchestrator
+    const publishTx = await d.refreshManager
       .connect(admin)
       .publishFeedAndMaybeSchedule(
         agentId,
@@ -528,7 +514,7 @@ describe("AgentOrchestrator — refresh preflight", () => {
     const publishBlock = await ethers.provider.getBlock(publishReceipt!.blockNumber);
     const timestampMillis = BigInt((publishBlock!.timestamp + 60) * 1000);
 
-    await d.orchestrator
+    await d.refreshManager
       .connect(admin)
       .publishFeedAndMaybeSchedule(
         agentId,
@@ -547,7 +533,7 @@ describe("AgentOrchestrator — refresh preflight", () => {
     ]);
     const precompileSigner = await ethers.getImpersonatedSigner(precompile);
 
-    await d.orchestrator
+    await d.refreshManager
       .connect(precompileSigner)
       .onEvent(
         precompile,
@@ -562,7 +548,7 @@ describe("AgentOrchestrator — refresh preflight", () => {
 
   it("refresh refunds pulled funds if task creation fails after preflight", async () => {
     const d = await deployAll({ useMockApi: true });
-    const [, keeper, user] = await ethers.getSigners();
+    const [admin, keeper, user] = await ethers.getSigners();
 
     await d.factory
       .connect(user)
@@ -579,15 +565,10 @@ describe("AgentOrchestrator — refresh preflight", () => {
     const acct = await ethers.getContractAt("TwiinAccount", acctAddr);
     await acct
       .connect(user)
-      .subscribePull(await d.orchestrator.getAddress(), ethers.parseEther("0.2"), 60);
+      .subscribePull(await d.refreshManager.getAddress(), ethers.parseEther("0.2"), 1);
     const before = await ethers.provider.getBalance(acctAddr);
-
-    const orchAddr = await d.orchestrator.getAddress();
-    await ethers.provider.send("hardhat_setBalance", [
-      orchAddr,
-      "0x" + ethers.parseEther("40").toString(16),
-    ]);
-    const orchSigner = await ethers.getImpersonatedSigner(orchAddr);
+    await ethers.provider.send("evm_increaseTime", [2]);
+    await ethers.provider.send("evm_mine", []);
 
     const badStep = {
       subAgentConfigId: 2n,
@@ -596,17 +577,17 @@ describe("AgentOrchestrator — refresh preflight", () => {
       timeoutSeconds: 900,
     };
     const budget = ethers.parseEther("0.2");
-    const templateHash = await d.feed
-      .connect(orchSigner)
-      .registerTemplate.staticCall([badStep], budget);
-    await d.feed.connect(orchSigner).registerTemplate([badStep], budget);
+    const templateHash = await d.refreshManager
+      .connect(admin)
+      .registerTaskTemplate.staticCall([badStep], budget);
+    await d.refreshManager.connect(admin).registerTaskTemplate([badStep], budget);
 
     await expect(
-      d.orchestrator
+      d.refreshManager
         .connect(keeper)
         .refreshFromTemplateByKeeper(agentId, "health", templateHash),
     )
-      .to.emit(d.orchestrator, "RefreshSkipped")
+      .to.emit(d.refreshManager, "RefreshSkipped")
       .withArgs(agentId, "health", "task create");
 
     expect(await ethers.provider.getBalance(acctAddr)).to.equal(before);

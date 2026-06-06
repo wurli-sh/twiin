@@ -21,6 +21,7 @@ const CONTRACT_EXPORTS = [
   "AgentVault",
   "AgentPolicy",
   "AgentOrchestrator",
+  "AgentRefreshCoordinator",
   "OracleFeed",
 ] as const;
 
@@ -37,6 +38,7 @@ type AddressMap = {
   policy: string;
   oracleFeed: string;
   orchestrator: string;
+  refreshManager: string;
   factory: string;
   mUSDC: string;
   mockRouter: string;
@@ -137,6 +139,10 @@ async function validateWiring(addresses: AddressMap, refs: {
   await assertDeploymentInvariant(
     (await oracleFeed.orchestrator()) === addresses.orchestrator,
     "OracleFeed.orchestrator mismatch",
+  );
+  await assertDeploymentInvariant(
+    (await oracleFeed.refreshManager()) === addresses.refreshManager,
+    "OracleFeed.refreshManager mismatch",
   );
 
   const expectedNativeNames = [
@@ -251,13 +257,27 @@ async function main() {
     await agentRegistry.getAddress(),
     await vault.getAddress(),
     await policy.getAddress(),
-    await oracleFeed.getAddress(),
     agentsApiAddr,
     keeperAddr,
     deployer.address,
   );
   await orchestrator.waitForDeployment();
   await captureTx("orchestrator", orchestrator);
+
+  const AgentRefreshCoordinatorF =
+    await ethers.getContractFactory("AgentRefreshCoordinator");
+  const refreshManager = await AgentRefreshCoordinatorF.deploy(
+    await registry6551.getAddress(),
+    await twiinAccountImpl.getAddress(),
+    await twiinAgent.getAddress(),
+    await policy.getAddress(),
+    await oracleFeed.getAddress(),
+    await orchestrator.getAddress(),
+    keeperAddr,
+    deployer.address,
+  );
+  await refreshManager.waitForDeployment();
+  await captureTx("refreshManager", refreshManager);
 
   console.log("\n[5/7] Deploying TwiinFactory...");
   const TwiinFactoryF = await ethers.getContractFactory("TwiinFactory");
@@ -290,6 +310,8 @@ async function main() {
   await (await policy.setOrchestrator(await orchestrator.getAddress())).wait();
   await (await policy.setTwiinAgent(await twiinAgent.getAddress())).wait();
   await (await oracleFeed.setOrchestrator(await orchestrator.getAddress())).wait();
+  await (await oracleFeed.setRefreshManager(await refreshManager.getAddress())).wait();
+  await (await orchestrator.setRefreshManager(await refreshManager.getAddress())).wait();
 
   console.log("\n[7/7] Seeding capabilities, native agents, and reserved names...");
   const capabilities = [
@@ -431,6 +453,7 @@ async function main() {
     policy: await policy.getAddress(),
     oracleFeed: await oracleFeed.getAddress(),
     orchestrator: await orchestrator.getAddress(),
+    refreshManager: await refreshManager.getAddress(),
     factory: await factory.getAddress(),
     mUSDC: await mUSDC.getAddress(),
     mockRouter: await mockRouter.getAddress(),

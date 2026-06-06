@@ -9,6 +9,11 @@ import {Step} from "./TwiinTypes.sol";
 contract OracleFeed {
     uint256 public constant MAX_STEPS = 8;
 
+    error OnlyAuthorizedPublisher();
+    error OnlyDeployer();
+    error SetOnce();
+    error ZeroAddress();
+
     struct Feed {
         string  value;
         uint8   confidence;       // 0–100
@@ -20,6 +25,7 @@ contract OracleFeed {
 
     address public immutable deployer;
     address public           orchestrator;  // one-shot setter
+    address public           refreshManager;  // one-shot setter
 
     // personalAgentId → topicHash → Feed
     mapping(uint256 => mapping(bytes32 => Feed)) public feeds;
@@ -34,9 +40,10 @@ contract OracleFeed {
     event RefreshSubscriptionCancelled(uint256 indexed agentId, string topic);
     event TemplateRegistered(bytes32 indexed hash, uint256 stepCount, uint256 budgetWei);
     event OrchestratorSet(address indexed orchestrator);
+    event RefreshManagerSet(address indexed refreshManager);
 
-    modifier onlyOrchestrator() {
-        require(msg.sender == orchestrator, "only orchestrator");
+    modifier onlyAuthorizedPublisher() {
+        if (msg.sender != orchestrator && msg.sender != refreshManager) revert OnlyAuthorizedPublisher();
         _;
     }
 
@@ -45,17 +52,25 @@ contract OracleFeed {
     }
 
     function setOrchestrator(address _orchestrator) external {
-        require(msg.sender == deployer, "only deployer");
-        require(orchestrator == address(0), "set once");
-        require(_orchestrator != address(0), "zero addr");
+        if (msg.sender != deployer) revert OnlyDeployer();
+        if (orchestrator != address(0)) revert SetOnce();
+        if (_orchestrator == address(0)) revert ZeroAddress();
         orchestrator = _orchestrator;
         emit OrchestratorSet(_orchestrator);
+    }
+
+    function setRefreshManager(address _refreshManager) external {
+        if (msg.sender != deployer) revert OnlyDeployer();
+        if (refreshManager != address(0)) revert SetOnce();
+        if (_refreshManager == address(0)) revert ZeroAddress();
+        refreshManager = _refreshManager;
+        emit RefreshManagerSet(_refreshManager);
     }
 
     // ─── Template management ─────────────────────────────────────────────────
 
     function registerTemplate(Step[] calldata steps, uint256 budgetWei)
-        external onlyOrchestrator returns (bytes32 hash)
+        external onlyAuthorizedPublisher returns (bytes32 hash)
     {
         require(steps.length > 0 && steps.length <= MAX_STEPS, "bad step count");
         require(budgetWei > 0, "no budget");
@@ -86,7 +101,7 @@ contract OracleFeed {
         uint256 maxAgeSeconds,
         uint256 refreshInterval,
         bytes32 taskTemplateHash
-    ) external onlyOrchestrator {
+    ) external onlyAuthorizedPublisher {
         require(confidence <= 100, "confidence out of range");
         require(bytes(topic).length > 0 && bytes(topic).length <= 64, "bad topic length");
         require(bytes(value).length <= 1024, "value too large");
