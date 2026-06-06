@@ -1,14 +1,14 @@
 import { useState, useRef, useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Link, useLocation } from 'react-router-dom'
-import { ChevronDown, ClipboardCopy, ExternalLink, LogOut, Cpu } from 'lucide-react'
+import { ChevronDown, ClipboardCopy, ExternalLink, LogOut } from 'lucide-react'
 import { useWallet } from '@/hooks/useWallet'
+import { cn } from '@/lib/cn'
 
 const navLinks = [
   { to: '/', label: 'Home' },
   { to: '/agents', label: 'Agents' },
   { to: '/console', label: 'Console' },
-  { to: '/feeds', label: 'Feeds' },
   { to: '/marketplace', label: 'Marketplace' },
 ] as const
 
@@ -18,7 +18,7 @@ export function Navbar() {
   const [walletMenuOpen, setWalletMenuOpen] = useState(false)
   const [copied, setCopied] = useState(false)
   const menuRef = useRef<HTMLDivElement>(null)
-  
+
   const display = address ? `${address.slice(0, 5)}...${address.slice(-4)}` : ''
 
   useEffect(() => {
@@ -36,19 +36,16 @@ export function Navbar() {
   }, [isConnected, pathname])
 
   return (
-    <header className="sticky top-0 z-40 flex justify-center px-4 w-full">
-      <div className="mt-4 grid h-14 w-full max-w-5xl grid-cols-[1fr_auto_1fr] items-center rounded-2xl bg-surface/80 backdrop-blur-md px-4 sm:px-6 shadow-xl border border-border">
-        {/* Brand — left */}
-        <Link to="/" className="flex items-center gap-2 select-none group">
-          <div className="size-7 rounded-lg bg-gradient-to-tr from-primary to-accent flex items-center justify-center shadow-md">
-            <Cpu size={14} className="text-secondary animate-pulse" />
+    <header className="sticky top-0 z-40 flex w-full justify-center px-4">
+      <div className="mt-4 grid h-14 w-full max-w-5xl grid-cols-[1fr_auto_1fr] items-center bg-charcoal/95 px-4 shadow-elev backdrop-blur-md sm:px-6">
+        <Link to="/" className="group flex select-none items-center gap-2">
+          <div className="flex size-4ta items-center justify-center bg-primary-bright shadow-lime-pill">
           </div>
-          <span className="text-base font-bold tracking-tight text-text group-hover:text-primary transition-colors">
+          <span className="text-base font-bold tracking-tight text-primary-bright group-hover:text-white transition-colors">
             Twiin
           </span>
         </Link>
 
-        {/* Nav links — center */}
         <nav className="flex items-center justify-center gap-0.5 sm:gap-1">
           {navLinks.map(({ to, label }) => {
             const isActive = pathname === to || (to !== '/' && pathname.startsWith(to))
@@ -56,14 +53,15 @@ export function Navbar() {
               <Link
                 key={to}
                 to={to}
-                className={`relative rounded-xl px-3 sm:px-4 py-1.5 text-xs sm:text-sm font-medium transition-colors duration-200 ${
-                  isActive ? 'text-primary' : 'text-text-muted hover:text-text'
-                }`}
+                className={cn(
+                  'relative px-3 py-1.5 text-xs font-medium transition-colors duration-200 sm:px-4 sm:text-sm',
+                  isActive ? 'text-white' : 'text-white/60 hover:text-white',
+                )}
               >
                 {isActive && (
                   <motion.div
                     layoutId="activeNav"
-                    className="absolute inset-0 rounded-xl bg-primary/10 border border-primary/20"
+                    className="absolute inset-0 bg-white/15"
                     transition={{ type: 'spring', stiffness: 350, damping: 30 }}
                   />
                 )}
@@ -73,18 +71,17 @@ export function Navbar() {
           })}
         </nav>
 
-        {/* Wallet — right */}
         <div className="flex justify-end" ref={menuRef}>
           {isConnecting ? (
-            <div className="flex items-center gap-2 rounded-xl bg-white/5 px-5 py-2 border border-border">
-              <div className="h-4 w-20 animate-pulse rounded bg-white/10" />
+            <div className="flex items-center gap-2 border border-white/10 bg-charcoal-soft px-5 py-2">
+              <div className="h-4 w-20 animate-pulse bg-white/10" />
             </div>
           ) : !isConnected ? (
             <div className="relative">
               <motion.button
                 whileTap={{ scale: 0.96 }}
                 onClick={() => setWalletMenuOpen(!walletMenuOpen)}
-                className="flex cursor-pointer items-center justify-center gap-2 whitespace-nowrap rounded-xl bg-primary px-4 sm:px-5 py-2 text-xs sm:text-sm font-bold text-secondary shadow-md hover:shadow-primary/25 transition-all"
+                className="pill-gradient flex cursor-pointer items-center justify-center gap-2 whitespace-nowrap bg-primary-bright px-4 py-2 text-xs font-semibold text-primary shadow-lime-pill sm:px-5 sm:text-sm"
               >
                 Connect Wallet
               </motion.button>
@@ -92,14 +89,14 @@ export function Navbar() {
               <AnimatePresence>
                 {walletMenuOpen && (
                   <motion.div
-                    className="absolute right-0 top-full mt-2 w-56 rounded-xl bg-surface border border-border-strong shadow-2xl overflow-hidden z-50"
-                    initial={{ opacity: 0, y: -8, scale: 0.95 }}
-                    animate={{ opacity: 1, y: 0, scale: 1 }}
-                    exit={{ opacity: 0, y: -8, scale: 0.95 }}
+                    className="absolute right-0 top-full z-50 mt-2 w-56 overflow-hidden border border-border bg-background shadow-elev"
+                    initial={{ opacity: 0, y: -8 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: -8 }}
                     transition={{ duration: 0.15 }}
                   >
-                    <div className="px-4 py-3 border-b border-border">
-                      <span className="text-[10px] font-bold text-text-faint uppercase tracking-wider">
+                    <div className="border-b border-border px-4 py-3">
+                      <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
                         Choose Wallet
                       </span>
                     </div>
@@ -108,12 +105,12 @@ export function Navbar() {
                         <button
                           key={connector.uid}
                           onClick={() => connectWith(connector)}
-                          className="w-full flex items-center gap-3 px-3 py-2.5 text-xs font-semibold text-text hover:bg-surface-alt rounded-lg transition-colors cursor-pointer"
+                          className="flex w-full cursor-pointer items-center gap-3 px-3 py-2.5 text-xs font-semibold text-foreground transition-colors hover:bg-muted"
                         >
                           {connector.icon ? (
-                            <img src={connector.icon} alt="" className="size-4 rounded" />
+                            <img src={connector.icon} alt="" className="size-4" />
                           ) : (
-                            <div className="size-4 rounded bg-primary" />
+                            <div className="size-4 bg-primary-bright" />
                           )}
                           {connector.name}
                         </button>
@@ -127,31 +124,31 @@ export function Navbar() {
             <div className="relative">
               <button
                 onClick={() => setWalletMenuOpen(!walletMenuOpen)}
-                className="flex cursor-pointer items-center justify-center gap-2 rounded-xl bg-surface-alt hover:bg-surface-hover transition-colors px-4 sm:px-5 py-2 border border-border"
+                className="flex cursor-pointer items-center justify-center gap-2 border border-white/10 bg-charcoal-soft px-4 py-2 transition-colors hover:bg-charcoal sm:px-5"
               >
-                <span className="text-xs sm:text-sm font-semibold text-text font-mono">{display}</span>
+                <span className="font-mono text-xs font-semibold text-white sm:text-sm">{display}</span>
                 <ChevronDown
                   size={12}
-                  className={`text-text-faint transition-transform duration-200 ${walletMenuOpen ? 'rotate-180' : ''}`}
+                  className={cn('text-white/50 transition-transform duration-200', walletMenuOpen && 'rotate-180')}
                 />
               </button>
 
               <AnimatePresence>
                 {walletMenuOpen && (
                   <motion.div
-                    className="absolute right-0 top-full mt-2 w-52 rounded-xl bg-surface border border-border shadow-2xl overflow-hidden z-50"
-                    initial={{ opacity: 0, y: -8, scale: 0.95 }}
-                    animate={{ opacity: 1, y: 0, scale: 1 }}
-                    exit={{ opacity: 0, y: -8, scale: 0.95 }}
+                    className="absolute right-0 top-full z-50 mt-2 w-52 overflow-hidden border border-border bg-background shadow-elev"
+                    initial={{ opacity: 0, y: -8 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: -8 }}
                     transition={{ duration: 0.15 }}
                   >
-                    <div className="px-4 py-3 border-b border-border/80">
-                      <p className="text-[10px] font-bold text-text-faint uppercase tracking-wider">Connected Wallet</p>
-                      <p className="text-[11px] text-text-muted mt-0.5 font-mono truncate">
-                        {address}
+                    <div className="border-b border-border px-4 py-3">
+                      <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
+                        Connected Wallet
                       </p>
+                      <p className="mt-0.5 truncate font-mono text-[11px] text-muted-foreground">{address}</p>
                     </div>
-                    <div className="p-1 space-y-0.5">
+                    <div className="space-y-0.5 p-1">
                       <button
                         onClick={() => {
                           if (address) {
@@ -160,23 +157,26 @@ export function Navbar() {
                             setTimeout(() => setCopied(false), 1500)
                           }
                         }}
-                        className="w-full flex items-center gap-3 px-3 py-2 text-xs font-semibold text-text hover:bg-surface-alt rounded-lg transition-colors cursor-pointer"
+                        className="flex w-full cursor-pointer items-center gap-3 px-3 py-2 text-xs font-semibold text-foreground transition-colors hover:bg-muted"
                       >
-                        <ClipboardCopy size={13} className="text-text-faint" />
+                        <ClipboardCopy size={13} className="text-muted-foreground" />
                         {copied ? 'Copied!' : 'Copy Address'}
                       </button>
                       <a
                         href={`https://shannon-explorer.somnia.network/address/${address}`}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="w-full flex items-center gap-3 px-3 py-2 text-xs font-semibold text-text hover:bg-surface-alt rounded-lg transition-colors cursor-pointer"
+                        className="flex w-full cursor-pointer items-center gap-3 px-3 py-2 text-xs font-semibold text-foreground transition-colors hover:bg-muted"
                       >
-                        <ExternalLink size={13} className="text-text-faint" />
+                        <ExternalLink size={13} className="text-muted-foreground" />
                         Explorer
                       </a>
                       <button
-                        onClick={() => { disconnect(); setWalletMenuOpen(false) }}
-                        className="w-full flex items-center gap-3 px-3 py-2 text-xs font-semibold text-danger hover:bg-danger/10 rounded-lg transition-colors cursor-pointer border-t border-border/50"
+                        onClick={() => {
+                          disconnect()
+                          setWalletMenuOpen(false)
+                        }}
+                        className="flex w-full cursor-pointer items-center gap-3 border-t border-border px-3 py-2 text-xs font-semibold text-destructive transition-colors hover:bg-destructive/10"
                       >
                         <LogOut size={13} />
                         Disconnect
