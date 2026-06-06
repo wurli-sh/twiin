@@ -9,9 +9,9 @@ interface BadgeProps {
 }
 
 const variantStyles: Record<BadgeVariant, string> = {
-  default: 'bg-primary/20 text-primary border border-primary/20',
-  success: 'bg-success/10 text-success border border-success/25',
-  danger: 'bg-danger/10 text-danger border border-danger/25',
+  default: 'bg-primary-bright/30 text-primary border border-primary/20',
+  success: 'bg-success-soft text-success border border-success/25',
+  danger: 'bg-danger-soft text-destructive border border-destructive/25',
   warning: 'bg-warning/10 text-warning border border-warning/25',
 }
 
@@ -19,9 +19,9 @@ export function Badge({ variant = 'default', className, children }: BadgeProps) 
   return (
     <span
       className={cn(
-        'inline-flex items-center rounded-lg px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider',
+        'inline-flex items-center px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider',
         variantStyles[variant],
-        className
+        className,
       )}
     >
       {children}

@@ -25,7 +25,6 @@ export function ThinkingSpinner({ className }: { className?: string }) {
           y={square.y}
           width="3"
           height="3"
-          rx="1"
           style={{
             opacity: square.corner ? 0 : undefined,
             animation: square.corner

@@ -4,23 +4,41 @@ type ButtonVariant = 'primary' | 'secondary' | 'outline' | 'danger'
 
 interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
   variant?: ButtonVariant
+  size?: 'sm' | 'md' | 'lg'
   children: React.ReactNode
 }
 
 const variantStyles: Record<ButtonVariant, string> = {
-  primary: 'bg-primary text-secondary hover:bg-primary/90 font-bold',
-  secondary: 'bg-surface-alt hover:bg-surface-hover text-text border border-border-strong',
-  outline: 'border border-border-strong text-text hover:bg-surface-alt bg-transparent',
-  danger: 'border border-danger/20 text-danger hover:bg-danger/5 bg-transparent',
+  primary:
+    'pill-gradient bg-charcoal text-white shadow-pill hover:bg-charcoal-soft active:scale-[0.97]',
+  secondary:
+    'pill-gradient bg-primary-bright text-primary shadow-lime-pill hover:opacity-90 active:scale-[0.97]',
+  outline:
+    'border border-border bg-background text-foreground shadow-soft hover:bg-muted active:scale-[0.97]',
+  danger:
+    'border border-destructive/30 bg-destructive/10 text-destructive hover:bg-destructive/15 active:scale-[0.97]',
 }
 
-export function Button({ variant = 'primary', className, children, ...props }: ButtonProps) {
+const sizeStyles = {
+  sm: 'px-3 py-1.5 text-xs',
+  md: 'px-5 py-2.5 text-sm',
+  lg: 'px-6 py-3 text-base',
+}
+
+export function Button({
+  variant = 'primary',
+  size = 'md',
+  className,
+  children,
+  ...props
+}: ButtonProps) {
   return (
     <button
       className={cn(
-        'flex items-center justify-center gap-2 rounded-lg px-5 py-2.5 text-sm font-semibold transition-all hover:scale-[1.02] active:scale-[0.98] cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:scale-100',
+        'inline-flex items-center justify-center gap-2 font-semibold transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed disabled:active:scale-100',
         variantStyles[variant],
-        className
+        sizeStyles[size],
+        className,
       )}
       {...props}
     >
