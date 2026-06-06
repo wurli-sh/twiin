@@ -8,7 +8,6 @@ import { HomePage } from '@/pages/HomePage'
 import { AgentsPage } from '@/pages/AgentsPage'
 import { ConsolePage } from '@/pages/ConsolePage'
 import { MarketplacePage } from '@/pages/MarketplacePage'
-import { FeedsPage } from '@/pages/FeedsPage'
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -28,19 +27,16 @@ export function App() {
             position="top-right"
             toastOptions={{
               style: {
-                background: 'rgba(20, 20, 23, 0.92)',
-                backdropFilter: 'blur(8px)',
-                WebkitBackdropFilter: 'blur(8px)',
-                color: '#f3f4f6',
-                border: '1px solid rgba(150, 131, 255, 0.2)',
-                borderRadius: '14px',
+                background: '#1A1A1A',
+                color: '#FFFFFF',
+                border: '1px solid #2C2C2C',
+                borderRadius: '0',
                 fontFamily: 'Onest, sans-serif',
                 fontSize: '13px',
-                boxShadow: '0 8px 32px rgba(0, 0, 0, 0.45)',
+                boxShadow: '0 8px 32px rgba(0, 0, 0, 0.18)',
               },
               classNames: {
-                actionButton:
-                  '!bg-primary !text-secondary !font-semibold !rounded-md !text-xs',
+                actionButton: '!bg-primary-bright !text-primary !font-semibold !text-xs',
               },
             }}
           />
@@ -50,7 +46,6 @@ export function App() {
               <Route path="/agents" element={<AgentsPage />} />
               <Route path="/console" element={<ConsolePage />} />
               <Route path="/marketplace" element={<MarketplacePage />} />
-              <Route path="/feeds" element={<FeedsPage />} />
               <Route path="*" element={<Navigate to="/" replace />} />
             </Route>
           </Routes>

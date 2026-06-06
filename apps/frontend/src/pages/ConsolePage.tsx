@@ -1,16 +1,14 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { motion } from 'framer-motion'
-import { Loader2, Send, Sparkles } from 'lucide-react'
+import { SquarePen } from 'lucide-react'
 import { parseEther } from 'viem'
-import { AlertTriangle } from 'lucide-react'
-import { Button } from '@/components/ui/Button'
+import { TranscriptPanel } from '@/components/console/TranscriptPanel'
+import { CommandBar } from '@/components/console/CommandBar'
+import { BudgetWarningsBar } from '@/components/console/BudgetWarningsBar'
+import { SuggestedPrompts } from '@/components/console/SuggestedPrompts'
 import { AgentSelector } from '@/components/console/AgentSelector'
-import { PlanApproval } from '@/components/console/PlanApproval'
-import { TaskTimeline } from '@/components/console/TaskTimeline'
-import { TaskResult } from '@/components/console/TaskResult'
 import { TwiinAvatar } from '@/components/ui/TwiinAvatar'
-import { TextShimmer } from '@/components/ui/TextShimmer'
-import { ThinkingSpinner } from '@/components/ui/ThinkingSpinner'
+import { TextLoop } from '@/components/ui/TextLoop'
 import { useTwiinAgents } from '@/hooks/useTwiinAgents'
 import { useCreateTask } from '@/hooks/useCreateTask'
 import { useAgentPolicy } from '@/hooks/useAgentPolicy'
@@ -18,18 +16,99 @@ import { useTaskStream } from '@/hooks/useTaskStream'
 import { useTaskDetail } from '@/hooks/useTaskDetail'
 import { useWallet } from '@/hooks/useWallet'
 import { useUIStore } from '@/stores/ui'
-import { PlanBudgetRecovery, type PlanBudgetMismatch } from '@/components/console/PlanBudgetRecovery'
-import { requestPlan, isPlanOverBudgetError, type PlanResponse } from '@/lib/plan-api'
+import { type PlanBudgetMismatch } from '@/components/console/PlanBudgetRecovery'
+import { requestPlan, isPlanOverBudgetError } from '@/lib/plan-api'
 import { maxTaskBudgetStt } from '@/lib/agent-budget'
-import { somniaTestnet } from '@/config/chains'
+import { type AgentStatusPhase } from '@/lib/agent-status-copy'
+import {
+  createEntryId,
+  getPlanForExecution,
+  getPendingPlanForTurn,
+  removeStatusEntriesForTurn,
+  getLastUserGoal,
+  type SessionEntry,
+} from '@/lib/console-session'
+import { formatTaskResultForDisplay } from '@/lib/task-result-display'
 import { TaskState } from '@/config/contracts'
+import type { ChainTask, TaskStep } from '@/hooks/useTaskDetail'
+import { somniaTestnet } from '@/config/chains'
 import { toast } from 'sonner'
 
-const PROMPTS = [
-  'Fetch Somnia ecosystem stats via oracle. Budget: 0.75 STT',
-  'Research dreamDEX — should I LP?',
-  'Daily Somnia sentiment oracle',
+const PLAN_FETCH_TIMEOUT_MS = 45_000
+
+const LOW_SIGNAL_PROMPT_SUGGESTIONS = [
+  'Fetch Somnia ecosystem stats: price, 24h change, market cap, and 24h volume.',
+  'Research dreamDEX and tell me whether providing liquidity there is a good idea, including risks, opportunities, and any missing data.',
+  'Fetch current Somnia market sentiment and summarize the price, 24h change, market cap, and 24h volume.',
 ]
+
+function getLowSignalPromptNudge(rawInput: string): string | null {
+  const trimmed = rawInput.trim()
+  if (!trimmed) return null
+
+  const normalized = trimmed.toLowerCase()
+  const compact = normalized.replace(/[^a-z0-9? ]+/g, ' ').replace(/\s+/g, ' ').trim()
+  const words = compact ? compact.split(' ') : []
+
+  const hasIntentKeyword =
+    /\b(fetch|research|analyze|analyse|check|compare|price|tvl|volume|token|oracle|sentiment|swap|lp|liquidity|agent|task|deploy|budget|stats)\b/i.test(
+      normalized,
+    )
+
+  if (hasIntentKeyword) return null
+
+  const casualOnly =
+    /^(yo+|yo wassup|wassup|what'?s up|sup+|hey+|hi+|hello+|gm|gn|idk|hmm+|uh+|um+|test+|ping+|bro+|pls+|please+)\??$/i.test(
+      compact,
+    )
+  const punctuationOnly = /^[^a-z0-9]+$/i.test(trimmed)
+  const repeatedNoise = /(.)\1{4,}/.test(normalized)
+
+  if (!casualOnly && !punctuationOnly && !repeatedNoise) return null
+  if (words.length > 4 || trimmed.length > 24) return null
+
+  return `That prompt is too vague to plan. Maybe try: ${LOW_SIGNAL_PROMPT_SUGGESTIONS.join(' • ')}`
+}
+
+function appendResultForTask(
+  entries: SessionEntry[],
+  taskId: string,
+  chainTask: ChainTask,
+  chainSteps: TaskStep[],
+  rawResult: string | undefined,
+  abortReason: string | undefined,
+): SessionEntry[] {
+  if (entries.some((e) => e.kind === 'result' && e.taskId === taskId)) {
+    return entries
+  }
+
+  const planEntry = getPlanForExecution(entries, taskId)
+  const isAborted = chainTask.state === TaskState.Aborted
+  const displayText = isAborted
+    ? abortReason ?? 'Task aborted'
+    : rawResult
+      ? formatTaskResultForDisplay(
+          rawResult,
+          chainSteps,
+          planEntry?.kind === 'plan' ? planEntry.plan.steps : undefined,
+        )
+      : null
+
+  if (!displayText) return entries
+
+  return [
+    ...entries,
+    {
+      id: createEntryId(),
+      kind: 'result',
+      taskId,
+      text: displayText,
+      spent: Number(chainTask.spent).toFixed(4),
+      budget: Number(chainTask.budget).toFixed(4),
+      aborted: isAborted,
+    },
+  ]
+}
 
 export function ConsolePage() {
   const { isConnected } = useWallet()
@@ -37,10 +116,9 @@ export function ConsolePage() {
   const selectedAgentId = useUIStore((s) => s.selectedAgentId)
   const setSelectedAgentId = useUIStore((s) => s.setSelectedAgentId)
 
+  const [sessionEntries, setSessionEntries] = useState<SessionEntry[]>([])
   const [goal, setGoal] = useState('')
   const [budgetStt, setBudgetStt] = useState('1')
-  const [plan, setPlan] = useState<PlanResponse | null>(null)
-  const [planGoal, setPlanGoal] = useState('')
   const [planMismatch, setPlanMismatch] = useState<PlanBudgetMismatch | null>(null)
   const [isPlanning, setIsPlanning] = useState(false)
   const [isApproving, setIsApproving] = useState(false)
@@ -54,8 +132,23 @@ export function ConsolePage() {
   const { task: chainTask, steps: chainSteps, completion: taskCompletion } =
     useTaskDetail(activeTaskId, detailVersion)
 
+  const streamedCompletedResult =
+    [...events]
+      .reverse()
+      .find((event) => event.type === 'task_completed' && typeof event.data.result === 'string')
+      ?.data.result as string | undefined
+  const streamedAbortReason =
+    [...events]
+      .reverse()
+      .find((event) => event.type === 'task_aborted' && typeof event.data.reason === 'string')
+      ?.data.reason as string | undefined
+
   const agentId = selectedAgentId ?? agents[0]?.id.toString() ?? null
   const agent = agents.find((a) => a.id.toString() === agentId)
+  const hasPendingPlan = getPendingPlanForTurn(sessionEntries) != null
+  const taskRunning = chainTask?.state === TaskState.Running
+  const taskTerminal =
+    chainTask?.state === TaskState.Completed || chainTask?.state === TaskState.Aborted
 
   const budgetNum = Number(budgetStt)
   const maxPerTaskNum = agent ? Number(agent.maxPerTask) : 0
@@ -67,6 +160,46 @@ export function ConsolePage() {
     agent && !Number.isNaN(budgetNum) && maxPerTaskNum > 0 && budgetNum > maxPerTaskNum
   const overDailyCap =
     agent && !Number.isNaN(budgetNum) && dailyRemaining > 0 && budgetNum > dailyRemaining
+
+  const composerLocked =
+    isPlanning ||
+    isApproving ||
+    hasPendingPlan ||
+    Boolean(activeTaskId && taskRunning) ||
+    !agentId ||
+    agentsLoading ||
+    Boolean(agent?.killSwitch)
+
+  const hasBudgetIssue = Boolean(overPerTaskCap || overDailyCap || lowBalance)
+  const submitDisabled = composerLocked || hasBudgetIssue
+
+  const hasActivity = sessionEntries.length > 0
+
+  const appendEntry = useCallback((entry: SessionEntry) => {
+    setSessionEntries((prev) => [...prev, entry])
+  }, [])
+
+  const appendStatusForTurn = useCallback((phase: AgentStatusPhase) => {
+    setSessionEntries((prev) => [
+      ...removeStatusEntriesForTurn(prev),
+      { id: createEntryId(), kind: 'status', phase },
+    ])
+  }, [])
+
+  const removeStatusForTurn = useCallback(() => {
+    setSessionEntries((prev) => removeStatusEntriesForTurn(prev))
+  }, [])
+
+  const updatePlanStatus = useCallback(
+    (planEntryId: string, status: 'pending' | 'approved' | 'rejected' | 'expired') => {
+      setSessionEntries((prev) =>
+        prev.map((e) =>
+          e.id === planEntryId && e.kind === 'plan' ? { ...e, status } : e,
+        ),
+      )
+    },
+    [],
+  )
 
   useEffect(() => {
     const terminal = events.some(
@@ -82,36 +215,119 @@ export function ConsolePage() {
   }, [agents, selectedAgentId, setSelectedAgentId])
 
   useEffect(() => {
-    if (!agent) return
+    if (!agent || sessionEntries.length > 0) return
     const affordable = maxTaskBudgetStt(agent)
     if (affordable > 0) {
       setBudgetStt(Math.min(affordable, Number(agent.maxPerTask)).toFixed(2))
     }
-  }, [agent?.id.toString()])
+  }, [agent?.id.toString(), sessionEntries.length])
+
+  useEffect(() => {
+    const terminalEvent = events.some(
+      (e) => e.type === 'task_completed' || e.type === 'task_aborted',
+    )
+    if (!chainTask || (!taskTerminal && !terminalEvent)) return
+
+    const taskId = activeTaskId
+    if (!taskId) return
+
+    const rawResult = taskCompletion?.decoded ?? streamedCompletedResult
+    setSessionEntries((prev) =>
+      appendResultForTask(
+        prev,
+        taskId,
+        chainTask,
+        chainSteps,
+        rawResult,
+        streamedAbortReason,
+      ),
+    )
+  }, [
+    activeTaskId,
+    chainTask,
+    chainSteps,
+    taskTerminal,
+    taskCompletion,
+    streamedCompletedResult,
+    streamedAbortReason,
+    events,
+  ])
 
   async function runPlan(trimmedGoal: string, budget: string) {
     if (!agentId || !agent) return
     setIsPlanning(true)
-    setPlan(null)
     setPlanMismatch(null)
+    appendStatusForTurn('planning')
+
+    const controller = new AbortController()
+    const timeoutId = setTimeout(() => controller.abort(), PLAN_FETCH_TIMEOUT_MS)
+
     try {
       const budgetWei = parseEther(budget).toString()
       const result = await requestPlan({
         goal: trimmedGoal,
         personalAgentId: agentId,
         budgetWei,
+        signal: controller.signal,
       })
-      setPlan(result)
-      setPlanGoal(trimmedGoal)
+      removeStatusForTurn()
+      appendEntry({
+        id: createEntryId(),
+        kind: 'plan',
+        goal: trimmedGoal,
+        plan: result,
+        status: 'pending',
+      })
+      setGoal('')
       toast.success('Plan ready — review and approve')
     } catch (e) {
-      if (isPlanOverBudgetError(e)) {
+      removeStatusForTurn()
+      if (e instanceof Error && e.name === 'AbortError') {
+        appendEntry({
+          id: createEntryId(),
+          kind: 'error',
+          text: 'Planning timed out after 45s. Try again.',
+        })
+        toast.error('Planning timed out — try again')
+      } else if (isPlanOverBudgetError(e)) {
         setPlanMismatch({ estimatedStt: e.estimatedStt, budgetStt: e.budgetStt })
+      } else {
+        appendEntry({
+          id: createEntryId(),
+          kind: 'error',
+          text: e instanceof Error ? e.message : 'Planning failed',
+        })
+        toast.error(e instanceof Error ? e.message : 'Planning failed')
       }
-      toast.error(e instanceof Error ? e.message : 'Planning failed')
     } finally {
+      clearTimeout(timeoutId)
       setIsPlanning(false)
     }
+  }
+
+  function resolveGoalInput(
+    rawInput: string,
+  ): { goal: string; aliasUsed?: string; error?: string } | null {
+    const trimmed = rawInput.trim()
+    if (!trimmed) return null
+
+    const normalized = trimmed.toLowerCase()
+    const redoOnlyPattern =
+      /^(redo|retry|rerun|re-run|run that again|do that again|same again|again)\W*$/i
+
+    if (redoOnlyPattern.test(normalized)) {
+      const previousGoal = getLastUserGoal(sessionEntries)
+      if (!previousGoal) {
+        return {
+          goal: '',
+          aliasUsed: trimmed,
+          error: 'Nothing to redo yet. Run a task first or describe a new goal.',
+        }
+      }
+      return { goal: previousGoal, aliasUsed: trimmed }
+    }
+
+    return { goal: trimmed }
   }
 
   async function handlePlan() {
@@ -142,18 +358,59 @@ export function ConsolePage() {
       toast.error(`6551 wallet only has ${agent.tbaBalance} STT. Fund the agent or lower budget.`)
       return
     }
-    const trimmed = goal.trim()
-    if (!trimmed) {
+    const resolved = resolveGoalInput(goal)
+    if (!resolved) {
       toast.error('Describe a goal for your agent')
       return
     }
+    if (resolved.error) {
+      toast.error(resolved.error)
+      return
+    }
 
-    await runPlan(trimmed, budgetStt)
+    const lowSignalNudge = getLowSignalPromptNudge(resolved.goal)
+    if (lowSignalNudge) {
+      appendEntry({
+        id: createEntryId(),
+        kind: 'error',
+        text: lowSignalNudge,
+      })
+      toast.error('Prompt too vague to plan')
+      return
+    }
+
+    setPlanMismatch(null)
+
+    if (activeTaskId && chainTask && (taskTerminal || !taskRunning)) {
+      const rawResult = taskCompletion?.decoded ?? streamedCompletedResult
+      setSessionEntries((prev) =>
+        appendResultForTask(
+          prev,
+          activeTaskId,
+          chainTask,
+          chainSteps,
+          rawResult,
+          streamedAbortReason,
+        ),
+      )
+      setActiveTaskId(null)
+    }
+
+    appendEntry({
+      id: createEntryId(),
+      kind: 'user',
+      text: resolved.goal,
+      budgetStt,
+    })
+    if (resolved.aliasUsed) toast.success('Re-running the previous task')
+
+    await runPlan(resolved.goal, budgetStt)
   }
 
   async function handleSetBudgetAndRetry(nextBudget: string) {
     setBudgetStt(nextBudget)
-    const trimmed = goal.trim() || planGoal.trim()
+    const lastUser = [...sessionEntries].reverse().find((e) => e.kind === 'user')
+    const trimmed = lastUser?.kind === 'user' ? lastUser.text : goal.trim()
     if (!trimmed) {
       toast.error('Enter a goal first')
       return
@@ -184,7 +441,8 @@ export function ConsolePage() {
       toast.success(`Policy updated — ${taskCap.toFixed(1)} STT per task`)
       await refetchAgents()
       setBudgetStt(nextBudget)
-      const trimmed = goal.trim() || planGoal.trim()
+      const lastUser = [...sessionEntries].reverse().find((e) => e.kind === 'user')
+      const trimmed = lastUser?.kind === 'user' ? lastUser.text : goal.trim()
       if (trimmed) await runPlan(trimmed, nextBudget)
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Policy update failed')
@@ -193,25 +451,31 @@ export function ConsolePage() {
     }
   }
 
-  async function handleApprove() {
-    if (!plan || !agent) return
+  async function handleApprove(planEntryId: string) {
+    const planEntry = sessionEntries.find(
+      (e) => e.id === planEntryId && e.kind === 'plan',
+    )
+    if (!planEntry || planEntry.kind !== 'plan' || !agent) return
+
     setIsApproving(true)
     try {
       const { txHash, taskId } = await submitCreateTask({
         agent,
-        orchestrator: plan.orchestrator,
-        budgetWei: BigInt(plan.budgetWei),
-        createTaskCalldata: plan.createTaskCalldata,
+        orchestrator: planEntry.plan.orchestrator,
+        budgetWei: BigInt(planEntry.plan.budgetWei),
+        createTaskCalldata: planEntry.plan.createTaskCalldata,
       })
-      setPlan(null)
-      setPlanGoal('')
-      setGoal('')
+
+      updatePlanStatus(planEntryId, 'approved')
+
       if (taskId) {
         setActiveTaskId(taskId)
+        appendEntry({ id: createEntryId(), kind: 'execution', taskId })
         toast.success(`Task #${taskId} created`)
       } else {
         toast.success('Task submitted — watch backend for task id')
       }
+
       const explorer = somniaTestnet.blockExplorers.default.url
       toast.message(
         <a href={`${explorer}/tx/${txHash}`} target="_blank" rel="noopener noreferrer">
@@ -225,17 +489,30 @@ export function ConsolePage() {
     }
   }
 
-  function handleRejectPlan() {
-    setPlan(null)
-    setPlanGoal('')
+  function handleRejectPlan(planEntryId: string, reason: 'user' | 'expired') {
+    updatePlanStatus(planEntryId, reason === 'expired' ? 'expired' : 'rejected')
+  }
+
+  function handleNewTask() {
+    setSessionEntries([])
+    setActiveTaskId(null)
+    setGoal('')
+    setPlanMismatch(null)
+    setDetailVersion(0)
+  }
+
+  function handlePromptSelect(prompt: string) {
+    const match = prompt.match(/Budget:\s*([\d.]+)\s*STT/i)
+    if (match) setBudgetStt(match[1])
+    setGoal(prompt.replace(/\.\s*Budget:.*/i, '').trim())
   }
 
   if (!isConnected) {
     return (
-      <div className="-mx-4 flex h-full flex-col items-center justify-center px-4 text-center sm:-mx-6">
+      <div className="flex h-full flex-col items-center justify-center px-4 text-center">
         <TwiinAvatar name="janice" size="lg" className="mb-5" />
-        <h1 className="text-2xl font-bold text-text">Twiin Console</h1>
-        <p className="mt-2 max-w-sm text-sm text-text-muted">
+        <h1 className="text-2xl font-bold text-foreground">Twiin Console</h1>
+        <p className="mt-2 max-w-sm text-sm text-muted-foreground">
           Connect your wallet to plan tasks, approve steps, and watch live execution.
         </p>
       </div>
@@ -243,199 +520,177 @@ export function ConsolePage() {
   }
 
   return (
-    <div className="-mx-4 h-full overflow-hidden sm:-mx-6">
-      <div className="mx-auto flex h-full max-w-3xl flex-col px-4 sm:px-6">
-        <div className="mb-6 shrink-0 text-center">
-          <TwiinAvatar name={agent?.name ?? 'janice'} size="lg" className="mx-auto mb-3" />
-          <h1 className="text-2xl font-bold text-text">
-            {plan || isPlanning ? (
-              'Review your plan'
-            ) : activeTaskId ? (
-              chainTask?.state === TaskState.Aborted ? (
-                'Task aborted'
-              ) : chainTask?.state === TaskState.Completed ? (
-                'Task complete'
-              ) : (
-                'Task running'
-              )
-            ) : (
-              <TextShimmer>What should your agent do?</TextShimmer>
-            )}
-          </h1>
-          <p className="mt-1 text-sm text-text-muted">
-            Claude plans steps · you approve · keepers execute on Somnia
-          </p>
-        </div>
-
-        <div className="min-h-0 flex-1 space-y-4 overflow-y-auto pb-6">
-          {!plan && !activeTaskId && (
-            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-4">
-              <AgentSelector
-                agents={agents}
-                selectedId={agentId}
-                onSelect={setSelectedAgentId}
-                disabled={agentsLoading || isPlanning}
-              />
-
-              <div className="grid gap-2 sm:grid-cols-3">
-                {PROMPTS.map((prompt) => (
-                  <button
-                    key={prompt}
-                    type="button"
-                    disabled={isPlanning}
-                    onClick={() => {
-                      const match = prompt.match(/Budget:\s*([\d.]+)\s*STT/i)
-                      if (match) setBudgetStt(match[1])
-                      setGoal(prompt.replace(/\.\s*Budget:.*/i, '').trim())
-                    }}
-                    className="cursor-pointer rounded-xl border border-border bg-surface px-3 py-2.5 text-left text-xs text-text-muted transition-colors hover:border-primary/30 hover:bg-surface-alt disabled:opacity-50"
-                  >
-                    {prompt}
-                  </button>
-                ))}
+    <div className="flex h-full flex-col overflow-hidden">
+      <div className="mx-auto flex h-full w-full max-w-5xl flex-col px-4 sm:px-6">
+        {!hasActivity ? (
+          <div className="flex flex-1 flex-col items-center justify-center px-4">
+            <motion.div
+              initial={{ opacity: 0, y: 8 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.4, ease: [0.23, 1, 0.32, 1] }}
+              className="mb-6 w-full text-center"
+            >
+              <div className="mb-4 flex justify-center">
+                <AgentSelector
+                  agents={agents}
+                  selectedId={agentId}
+                  onSelect={setSelectedAgentId}
+                  loading={agentsLoading}
+                  disabled={isPlanning || isApproving}
+                />
               </div>
-
-              <label className="block">
-                <span className="mb-1.5 block text-[10px] font-bold uppercase tracking-wider text-text-faint">
-                  Goal
-                </span>
-                <textarea
-                  value={goal}
-                  onChange={(e) => setGoal(e.target.value)}
-                  disabled={isPlanning}
-                  rows={3}
-                  placeholder="Describe what you want your Twiin to accomplish…"
-                  className="w-full resize-none rounded-xl border border-border bg-surface-alt px-3 py-2.5 text-sm text-text outline-none placeholder:text-text-faint focus:border-primary/40 disabled:opacity-50"
-                />
-              </label>
-
-              <label className="block">
-                <span className="mb-1.5 block text-[10px] font-bold uppercase tracking-wider text-text-faint">
-                  Task budget
-                </span>
-                <div className="flex items-center rounded-xl border border-border bg-surface-alt focus-within:border-primary/40">
-                  <input
-                    type="text"
-                    inputMode="decimal"
-                    value={budgetStt}
-                    onChange={(e) => setBudgetStt(e.target.value.replace(/[^0-9.]/g, ''))}
-                    disabled={isPlanning}
-                    className="w-full bg-transparent px-3 py-2.5 text-sm text-text outline-none disabled:opacity-50"
-                  />
-                  <span className="shrink-0 pr-3 text-xs font-semibold text-text-muted">STT</span>
-                </div>
-                {lowBalance && agent && (
-                  <p className="mt-1.5 flex items-center gap-1 text-xs text-warning">
-                    <AlertTriangle size={12} />
-                    Agent wallet holds {agent.tbaBalance} STT — fund it or lower the budget
-                    before approving.
-                  </p>
-                )}
-                {overPerTaskCap && agent && (
-                  <p className="mt-1.5 flex items-center gap-1 text-xs text-danger">
-                    <AlertTriangle size={12} />
-                    Per-task cap is {agent.maxPerTask} STT — default policy limits each task to 1 STT.
-                  </p>
-                )}
-                {overDailyCap && agent && !overPerTaskCap && (
-                  <p className="mt-1.5 flex items-center gap-1 text-xs text-danger">
-                    <AlertTriangle size={12} />
-                    Only {dailyRemaining.toFixed(2)} STT left in today&apos;s cap ({agent.dailyCap} STT).
-                  </p>
-                )}
-                {agent?.killSwitch && (
-                  <p className="mt-1.5 flex items-center gap-1 text-xs text-danger">
-                    <AlertTriangle size={12} />
-                    Kill switch is ON — enable the agent on Agents before planning.
-                  </p>
-                )}
-                <p className="mt-1.5 text-xs text-text-faint">
-                  Default policy: 1 STT per task, 2 STT daily. Native steps need ~0.12–0.33 STT each.
-                </p>
-              </label>
-
-              {planMismatch && agent && (
-                <PlanBudgetRecovery
-                  agent={agent}
-                  mismatch={planMismatch}
-                  isRaisingCaps={isRaisingCaps}
-                  onSetBudgetAndRetry={(b) => void handleSetBudgetAndRetry(b)}
-                  onRaiseCapsAndRetry={(e) => void handleRaiseCapsAndRetry(e)}
-                  onDismiss={() => setPlanMismatch(null)}
-                />
-              )}
-
-              <Button
-                type="button"
-                className="w-full"
-                disabled={
-                  isPlanning ||
-                  !agentId ||
-                  agentsLoading ||
-                  Boolean(agent?.killSwitch) ||
-                  overPerTaskCap ||
-                  overDailyCap ||
-                  lowBalance
-                }
-                onClick={() => void handlePlan()}
-              >
-                {isPlanning ? (
-                  <>
-                    <ThinkingSpinner />
-                    Planning with Claude…
-                  </>
-                ) : (
-                  <>
-                    <Sparkles size={16} />
-                    Generate plan
-                  </>
-                )}
-              </Button>
+              <BudgetWarningsBar
+                agent={agent}
+                lowBalance={Boolean(lowBalance)}
+                overPerTaskCap={Boolean(overPerTaskCap)}
+                overDailyCap={Boolean(overDailyCap)}
+                dailyRemaining={dailyRemaining}
+                className="mb-4"
+              />
+              <h2 className="text-xl font-bold tracking-normal text-foreground sm:text-2xl">
+                Hey! What are we{' '}
+                <TextLoop
+                  interval={2.5}
+                  className="rounded-md bg-primary-bright/30 px-2 py-0.5 font-mono text-primary tabular-nums"
+                >
+                  <span>oracling-now</span>
+                  <span>speedrunning</span>
+                  <span>info-hunting</span>
+                  <span>chain-poking</span>
+                  <span>rpc-bullying</span>
+                  <span>task-routing</span>
+                  <span>sub-agenting</span>
+                  <span>re-deploying</span>
+                  <span>feed-reading</span>
+                  <span>feed-pushing</span>
+                  <span>gas-tracking</span>
+                  <span>goal-mapping</span>
+                  <span>tx-broadcast</span>
+                  <span>autonomizing</span>
+                  <span>alpha-mining</span>
+                  <span>budget-guard</span>
+                  <span>goal-chasing</span>
+                  <span>lane-routing</span>
+                  <span>cap-checking</span>
+                  <span>oracle-nudge</span>
+                  <span>market-sniff</span>
+                  <span>signal-sniff</span>
+                  <span>rpc-prodding</span>
+                </TextLoop>
+                {' '}today?
+              </h2>
+              <p className="mt-1.5 text-sm text-muted-foreground">
+                Twiin — your autonomous agent on Somnia
+              </p>
             </motion.div>
-          )}
 
-          {isPlanning && !plan && (
-            <div className="flex flex-col items-center py-12">
-              <Loader2 size={24} className="animate-spin text-primary" />
-              <p className="mt-3 text-sm text-text-muted">Haiku is drafting steps…</p>
+            <motion.div
+              initial={{ opacity: 0, y: 8 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.4, delay: 0.15, ease: [0.23, 1, 0.32, 1] }}
+              className="w-full"
+            >
+              <CommandBar
+                goal={goal}
+                budgetStt={budgetStt}
+                onGoalChange={setGoal}
+                onBudgetChange={setBudgetStt}
+                onSubmit={() => void handlePlan()}
+                disabled={composerLocked}
+                submitDisabled={submitDisabled}
+                isPlanning={isPlanning}
+              />
+              <SuggestedPrompts
+                disabled={composerLocked || isPlanning}
+                onSelect={handlePromptSelect}
+              />
+            </motion.div>
+          </div>
+        ) : (
+          <>
+            <div className="shrink-0 pt-2.5 pb-1">
+              <div className="flex items-center justify-between gap-2">
+                <button
+                  type="button"
+                  onClick={handleNewTask}
+                  className="flex cursor-pointer items-center gap-1.5 rounded-md border border-border-strong px-3 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:border-primary hover:bg-primary-bright/10 hover:text-primary"
+                >
+                  <SquarePen size={12} />
+                  New Session
+                </button>
+
+                <div className="flex items-center gap-2">
+                  {agent && (
+                    <div className="hidden items-center gap-2 rounded-md border border-border-strong px-3 py-1.5 text-xs sm:flex">
+                      <div className="flex items-center gap-1.5">
+                        <div
+                          className={`size-1.5 rounded-full ${Number(agent.tbaBalance) > 0 ? 'bg-success' : 'bg-destructive'}`}
+                        />
+                        <span className="font-medium tabular-nums text-foreground">
+                          {agent.tbaBalance} STT
+                        </span>
+                      </div>
+                      <div className="h-3 w-px bg-border-strong" />
+                      <span className="text-muted-foreground">
+                        {dailyRemaining.toFixed(2)} STT daily left
+                      </span>
+                    </div>
+                  )}
+                  <AgentSelector
+                    agents={agents}
+                    selectedId={agentId}
+                    onSelect={setSelectedAgentId}
+                    loading={agentsLoading}
+                    disabled={isPlanning || isApproving}
+                    compact
+                  />
+                </div>
+              </div>
+              <BudgetWarningsBar
+                agent={agent}
+                lowBalance={Boolean(lowBalance)}
+                overPerTaskCap={Boolean(overPerTaskCap)}
+                overDailyCap={Boolean(overDailyCap)}
+                dailyRemaining={dailyRemaining}
+                className="mt-2"
+              />
             </div>
-          )}
 
-          {plan && agent && (
-            <PlanApproval
-              plan={plan}
-              goal={planGoal}
+            <TranscriptPanel
+              sessionEntries={sessionEntries}
               agent={agent}
+              isApproving={isApproving}
+              planMismatch={planMismatch}
+              isRaisingCaps={isRaisingCaps}
+              activeTaskId={activeTaskId}
+              events={events}
+              connected={connected}
+              chainTask={chainTask}
+              chainSteps={chainSteps}
               onApprove={handleApprove}
               onReject={handleRejectPlan}
-              isSubmitting={isApproving}
+              onSetBudgetAndRetry={(b) => void handleSetBudgetAndRetry(b)}
+              onRaiseCapsAndRetry={(e) => void handleRaiseCapsAndRetry(e)}
+              onDismissMismatch={() => setPlanMismatch(null)}
             />
-          )}
 
-          {activeTaskId && (
-            <>
-              <TaskResult task={chainTask} steps={chainSteps} completion={taskCompletion} />
-              <TaskTimeline
-                taskId={activeTaskId}
-                events={events}
-                connected={connected}
-                taskState={chainTask?.state ?? null}
+            <div className="pointer-events-none relative z-10 -mt-12 h-12 bg-gradient-to-t from-background to-transparent" />
+
+            <div className="shrink-0 px-4 pt-1 pb-2">
+              <CommandBar
+                goal={goal}
+                budgetStt={budgetStt}
+                onGoalChange={setGoal}
+                onBudgetChange={setBudgetStt}
+                onSubmit={() => void handlePlan()}
+                disabled={composerLocked}
+                submitDisabled={submitDisabled}
+                isPlanning={isPlanning}
+                showHint={false}
               />
-              <Button
-                type="button"
-                variant="secondary"
-                className="w-full"
-                onClick={() => {
-                  setActiveTaskId(null)
-                  setGoal('')
-                }}
-              >
-                <Send size={14} />
-                New task
-              </Button>
-            </>
-          )}
-        </div>
+            </div>
+          </>
+        )}
       </div>
     </div>
   )
