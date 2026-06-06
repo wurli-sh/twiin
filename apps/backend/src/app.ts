@@ -16,6 +16,7 @@ import {
   createAgentsRouter,
   type AgentsRouterDeps,
 } from "./routes/agents";
+import { isUpstreamAvailabilityError, upstreamUnavailableMessage } from "./errors";
 
 export type AppDeps = {
   plan?: Partial<PlanRouterDeps>;
@@ -37,6 +38,10 @@ export function createApp(deps: AppDeps = {}): Hono {
   app.route("/api/agents", createAgentsRouter(deps.agents));
 
   app.onError((err, c) => {
+    if (isUpstreamAvailabilityError(err)) {
+      console.warn("[server] upstream unavailable:", err);
+      return c.json({ error: upstreamUnavailableMessage(err) }, 503);
+    }
     console.error("[server] unhandled error:", err);
     return c.json({ error: "internal server error" }, 500);
   });

@@ -1,5 +1,6 @@
 import { drizzle } from "drizzle-orm/libsql";
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
+import { StepState, TaskState } from "@twiin/shared";
 import * as schema from "./schema";
 import {
   externalAgents,
@@ -23,12 +24,12 @@ export const db = drizzle({
 let schemaReady: Promise<void> | null = null;
 
 async function ensureColumn(
-  _table: string,
+  table: string,
   _column: string,
   definition: string,
 ): Promise<void> {
   try {
-    await db.run(sql.raw(`ALTER TABLE external_agents ADD COLUMN ${definition}`));
+    await db.run(sql.raw(`ALTER TABLE ${table} ADD COLUMN ${definition}`));
   } catch (error) {
     const detail = `${String(error)} ${String((error as { cause?: unknown }).cause ?? "")}`;
     if (!detail.includes("duplicate column name")) {
@@ -63,6 +64,7 @@ export function ensureSchema(): Promise<void> {
           task_id text NOT NULL,
           step_idx integer NOT NULL,
           config_id text NOT NULL,
+          timeout_seconds integer,
           state integer NOT NULL DEFAULT 0,
           payload text NOT NULL DEFAULT '',
           req_id text,
@@ -116,6 +118,11 @@ export function ensureSchema(): Promise<void> {
           updated_at integer NOT NULL
         )
       `);
+      await ensureColumn(
+        "steps",
+        "timeout_seconds",
+        "timeout_seconds integer",
+      );
       await ensureColumn(
         "external_agents",
         "capabilities_json",
@@ -188,6 +195,32 @@ export async function updateTaskState(
   await db.update(tasks).set({ state }).where(eq(tasks.taskId, taskId));
 }
 
+export async function finalizeTaskSteps(
+  taskId: string,
+  terminalState: number,
+): Promise<void> {
+  const updatedAt = Math.floor(Date.now() / 1000);
+  await db
+    .update(steps)
+    .set({
+      state: terminalState,
+      deadline: null,
+      updatedAt,
+    })
+    .where(
+      and(
+        eq(steps.taskId, taskId),
+        inArray(steps.state, [
+          StepState.Pending,
+          StepState.RunningNative,
+          StepState.RunningExternal,
+          StepState.AwaitingRating,
+          StepState.Retrying,
+        ]),
+      ),
+    );
+}
+
 // ── Steps ─────────────────────────────────────────────────────────────────────
 
 /** Drop advisory step rows when a task id is reused after redeploy (Turso survives redeploys). */
@@ -199,6 +232,7 @@ export async function upsertStep(
   taskId: string,
   stepIdx: number,
   configId: string,
+  timeoutSeconds: number | null,
   state: number,
   payload: string,
   reqId: string | null,
@@ -213,6 +247,7 @@ export async function upsertStep(
       taskId,
       stepIdx,
       configId,
+      timeoutSeconds,
       state,
       payload,
       reqId,
@@ -227,10 +262,12 @@ export async function upsertStep(
         state: sql`excluded.state`,
         // Preserve non-empty/non-zero values already stored
         configId: sql`COALESCE(NULLIF(excluded.config_id, '0'), config_id)`,
+        timeoutSeconds: sql`COALESCE(excluded.timeout_seconds, timeout_seconds)`,
         payload: sql`COALESCE(NULLIF(excluded.payload, ''), payload)`,
         reqId: sql`COALESCE(excluded.req_id, req_id)`,
         resultHex: sql`COALESCE(excluded.result_hex, result_hex)`,
         score: sql`COALESCE(excluded.score, score)`,
+        deadline: sql`COALESCE(excluded.deadline, deadline)`,
         updatedAt: sql`excluded.updated_at`,
       },
     });
@@ -241,6 +278,7 @@ export async function getStep(
   stepIdx: number,
 ): Promise<{
   config_id: string;
+  timeout_seconds: number | null;
   state: number;
   payload: string;
   req_id: string | null;
@@ -250,6 +288,7 @@ export async function getStep(
   const [row] = await db
     .select({
       config_id: steps.configId,
+      timeout_seconds: steps.timeoutSeconds,
       state: steps.state,
       payload: steps.payload,
       req_id: steps.reqId,
@@ -266,6 +305,7 @@ export async function getStepsForTask(taskId: string): Promise<
   {
     step_idx: number;
     config_id: string;
+    timeout_seconds: number | null;
     state: number;
     payload: string;
     req_id: string | null;
@@ -278,6 +318,7 @@ export async function getStepsForTask(taskId: string): Promise<
     .select({
       step_idx: steps.stepIdx,
       config_id: steps.configId,
+      timeout_seconds: steps.timeoutSeconds,
       state: steps.state,
       payload: steps.payload,
       req_id: steps.reqId,
@@ -309,7 +350,18 @@ export async function getTimedOutSteps(
       deadline: steps.deadline,
     })
     .from(steps)
-    .where(sql`${steps.deadline} IS NOT NULL AND ${steps.deadline} <= ${nowSeconds}`);
+    .innerJoin(tasks, eq(tasks.taskId, steps.taskId))
+    .where(
+      and(
+        eq(tasks.state, TaskState.Running),
+        sql`${steps.deadline} IS NOT NULL AND ${steps.deadline} <= ${nowSeconds}`,
+        inArray(steps.state, [
+          StepState.RunningNative,
+          StepState.RunningExternal,
+          StepState.AwaitingRating,
+        ]),
+      ),
+    );
 }
 
 // ── Submitted results dedup ───────────────────────────────────────────────────

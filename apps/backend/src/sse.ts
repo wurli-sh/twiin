@@ -1,4 +1,5 @@
 import type { Context } from "hono";
+import { logTaskTimeline } from "./task-log";
 
 type SseConn = { write: (data: string) => void; close: () => void };
 type SseEvent = {
@@ -16,8 +17,16 @@ const MAX_HISTORY = 200;
 export function subscribe(taskId: string, conn: SseConn): () => void {
   if (!subscribers.has(taskId)) subscribers.set(taskId, new Set());
   subscribers.get(taskId)!.add(conn);
+  logTaskTimeline("stream_subscribed", {
+    taskId,
+    subscriberCount: subscribers.get(taskId)?.size ?? 0,
+  });
   return () => {
     subscribers.get(taskId)?.delete(conn);
+    logTaskTimeline("stream_unsubscribed", {
+      taskId,
+      subscriberCount: subscribers.get(taskId)?.size ?? 0,
+    });
     if (subscribers.get(taskId)?.size === 0) subscribers.delete(taskId);
   };
 }
@@ -27,6 +36,12 @@ export function publish(taskId: string, type: string, data: unknown): void {
   nextEventIds.set(taskId, id);
   const event = { id, taskId, type, data };
   pushHistory(event);
+  logTaskTimeline("task_event", {
+    taskId,
+    eventType: type,
+    eventId: id,
+    data,
+  });
 
   const conns = subscribers.get(taskId);
   if (!conns || conns.size === 0) return;

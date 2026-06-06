@@ -27,6 +27,7 @@ export const steps = sqliteTable(
     taskId: text("task_id").notNull(),
     stepIdx: integer("step_idx").notNull(),
     configId: text("config_id").notNull(),
+    timeoutSeconds: integer("timeout_seconds"),
     state: integer("state").notNull().default(0),
     payload: text("payload").notNull().default(""),
     reqId: text("req_id"),

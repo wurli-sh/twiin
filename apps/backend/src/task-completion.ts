@@ -34,9 +34,10 @@ export async function fetchTaskCompletion(
     let fallback: TaskCompletion | null = null;
     for (const log of logs) {
       if (!log?.data) continue;
+      const args = (log.args ?? {}) as { result?: string };
 
       const entry: TaskCompletion = {
-        result: (log.args?.result as string) ?? "",
+        result: args.result ?? "",
         decoded: decodeTaskCompletionFromLogData(log.data as Hex),
         blockNumber: (log.blockNumber ?? 0n).toString(),
         transactionHash: log.transactionHash ?? "",
