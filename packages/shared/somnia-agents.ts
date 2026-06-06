@@ -108,9 +108,9 @@ export const LlmInferenceAgentAbi = [
 ] as const;
 
 const ANALYSIS_SYSTEM =
-  "You are an analysis sub-agent. Analyze the provided text/data and return concise, factual insights.";
+  "You are an analysis sub-agent. Analyze the provided text/data and return concise, factual insights. Use only provided evidence. If a requested fact is missing, say unavailable instead of guessing.";
 const REPORTER_SYSTEM =
-  "You are a reporting sub-agent. Write a clear, well-structured final report from the provided data.";
+  "You are a reporting sub-agent. Write a clear, well-structured final report from the provided data. Use only provided evidence. Do not invent dates, prices, percentages, or other facts. If a requested fact is missing, say unavailable or omit it.";
 
 /** Returns true for native sub-agents whose payload needs Somnia ABI encoding. */
 export function isSomniaNativeConfigId(configId: number): boolean {
@@ -366,7 +366,7 @@ export function decodeTaskCompletionFromLogData(logData: Hex): string | null {
   if (hex.length < bodyEnd) return null;
 
   const body = `0x${hex.slice(128, bodyEnd)}` as Hex;
-  return decodeNativeAgentResult(body);
+  return normalizeDisplayText(decodeNativeAgentResult(body));
 }
 
 /**
@@ -379,7 +379,7 @@ export function decodeNativeAgentResult(resultHex: string | null | undefined): s
 
   try {
     const [text] = decodeAbiParameters([{ type: "string" }], resultHex as Hex);
-    return text;
+    return normalizeDisplayText(text);
   } catch {
     /* not a string */
   }
@@ -397,6 +397,45 @@ export function decodeNativeAgentResult(resultHex: string | null | undefined): s
   } catch {
     return null;
   }
+}
+
+/**
+ * Removes NUL/control noise from decoded task text while preserving line breaks.
+ * Returns null for empty or obviously corrupted strings.
+ */
+export function normalizeDisplayText(text: string | null | undefined): string | null {
+  if (text == null) return null;
+
+  const normalized = text
+    .replace(/\r\n/g, "\n")
+    .replace(/\u0000/g, "")
+    .replace(/[^\S\n]+/g, " ")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+
+  if (!normalized) return null;
+  if (normalized.includes("\uFFFD")) return null;
+
+  const printableChars = Array.from(normalized).filter((char) =>
+    char === "\n" || char === "\t" || (char >= " " && char !== "\u007f"),
+  ).length;
+
+  if (printableChars / normalized.length < 0.9) return null;
+  return normalized;
+}
+
+export function taskTextPreview(
+  text: string | null | undefined,
+  maxLength = 120,
+): string | null {
+  const normalized = normalizeDisplayText(text);
+  if (!normalized) return null;
+  const singleLine = normalized.replace(/\s*\n\s*/g, " ").trim();
+  if (!singleLine) return null;
+  return singleLine.length > maxLength
+    ? `${singleLine.slice(0, maxLength).trimEnd()}…`
+    : singleLine;
 }
 
 /** Human-readable STT amount for a native step (deposit + per-agent × 3). */

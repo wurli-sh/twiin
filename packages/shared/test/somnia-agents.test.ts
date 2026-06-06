@@ -62,6 +62,16 @@ describe("encodeNativeAgentPayload", () => {
     ).toThrow(/leaf selector/i);
   });
 
+  it("encodes negative 24h change as fetchString (not fetchUint)", () => {
+    const calldata = encodeNativeAgentPayload(
+      NativeConfigId.ORACLE,
+      `{"url":"${"https://api.coingecko.com/api/v3/simple/price?ids=somnia&vs_currencies=usd&include_24hr_change=true"}","selector":"somnia.usd_24h_change"}`,
+    );
+    const decoded = decodeFunctionData({ abi: JsonApiAgentAbi, data: calldata });
+    expect(decoded.functionName).toBe("fetchString");
+    expect(decoded.args?.[1]).toBe("somnia.usd_24h_change");
+  });
+
   it("validateOraclePlannerPayload flags array-index selectors", () => {
     expect(() =>
       validateOraclePlannerPayload(
