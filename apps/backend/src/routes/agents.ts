@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { capabilityNameById, agentRegistryContract } from "../contracts";
 import { listExternalAgents } from "../db";
+import { isUpstreamAvailabilityError } from "../errors";
 
 export type AgentsRouterDeps = {
   readNextConfigId: () => Promise<bigint>;
@@ -40,19 +41,43 @@ export function createAgentsRouter(
   router.get("/", async (c) => {
     const activeOnly = c.req.query("active") !== "false";
     const verifiedOnly = c.req.query("verified") === "true";
-    const cachedExternals = await deps.listExternalAgents({
-      activeOnly,
-      verifiedOnly,
-    });
+    let cachedExternals: Awaited<ReturnType<typeof deps.listExternalAgents>> = [];
+    let externalRegistryWarning: string | null = null;
+    try {
+      cachedExternals = await deps.listExternalAgents({
+        activeOnly,
+        verifiedOnly,
+      });
+    } catch (error) {
+      externalRegistryWarning =
+        "external registry unavailable; returning on-chain agents only";
+      console.error("[agents] external registry lookup failed:", error);
+    }
     const externalByConfigId = new Map(
       cachedExternals.map((agent) => [agent.config_id, agent] as const),
     );
-    const nextConfigId = await deps.readNextConfigId();
-    const chainAgents = await Promise.all(
-      Array.from({ length: Number(nextConfigId) }, (_, index) =>
-        deps.readAgent(BigInt(index)),
-      ),
-    );
+    let nextConfigId: bigint;
+    let chainAgents: Awaited<ReturnType<typeof deps.readAgent>>[];
+    try {
+      nextConfigId = await deps.readNextConfigId();
+      chainAgents = await Promise.all(
+        Array.from({ length: Number(nextConfigId) }, (_, index) =>
+          deps.readAgent(BigInt(index)),
+        ),
+      );
+    } catch (error) {
+      if (isUpstreamAvailabilityError(error)) {
+        console.warn("[agents] Somnia RPC unavailable:", error);
+        return c.json(
+          {
+            agents: [],
+            warning: "Somnia RPC unavailable; retry when the network recovers.",
+          },
+          503,
+        );
+      }
+      throw error;
+    }
 
     const agents = chainAgents
       .map((agent, index) => {
@@ -95,9 +120,14 @@ export function createAgentsRouter(
         return agent.lane !== "ExternalHTTP" || agent.isVerified;
       });
 
-    return c.json({
-      agents,
-    });
+    return c.json(
+      externalRegistryWarning
+        ? {
+            agents,
+            warning: externalRegistryWarning,
+          }
+        : { agents },
+    );
   });
 
   return router;

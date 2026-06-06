@@ -3,6 +3,7 @@ import { TaskState } from "@twiin/shared";
 import { orchestratorContract, addresses, defaultStartBlock } from "../contracts";
 import { publicClient } from "../clients";
 import { getStepsForTask } from "../db";
+import { logTaskApi, logTaskTimeline } from "../task-log";
 import {
   fetchTaskCompletion,
   type TaskCompletion,
@@ -44,6 +45,7 @@ export function createTasksRouter(
     if (!/^[0-9]+$/.test(taskId)) {
       return c.json({ error: "invalid taskId" }, 400);
     }
+    logTaskApi("/api/tasks/:taskId", { taskId });
 
     let task: {
       mode: number;
@@ -72,6 +74,14 @@ export function createTasksRouter(
     }
 
     const stateName = TaskState[task.state] ?? "Unknown";
+    logTaskTimeline("task_read", {
+      taskId,
+      state: task.state,
+      stateName,
+      cursor: task.cursor,
+      spentWei: task.spentWei,
+      budgetWei: task.budgetWei,
+    });
 
     return new Response(
       JSON.stringify(
@@ -99,6 +109,18 @@ export function createTasksRouter(
     }
 
     const steps = await deps.getStepsForTask(taskId);
+    if (steps.length > 0) {
+      logTaskTimeline("task_steps_read", {
+        taskId,
+        stepCount: steps.length,
+        steps: steps.map((step) => ({
+          stepIdx: step.step_idx,
+          configId: step.config_id,
+          state: step.state,
+          deadline: step.deadline,
+        })),
+      });
+    }
     return c.json({ taskId, steps });
   });
 
@@ -128,6 +150,11 @@ export function createTasksRouter(
     if (!completion) {
       return c.json({ error: "completion log not found" }, 404);
     }
+    logTaskTimeline("task_completion_read", {
+      taskId,
+      blockNumber: completion.blockNumber,
+      transactionHash: completion.transactionHash,
+    });
 
     return c.json({ taskId, ...completion });
   });

@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import { makeSseStream, sseHeaders } from "../sse";
+import { logTaskApi } from "../task-log";
 
 export type StreamRouterDeps = {
   makeSseStream: typeof makeSseStream;
@@ -21,6 +22,10 @@ export function createStreamRouter(
     if (!/^[0-9]+$/.test(taskId)) {
       return c.json({ error: "invalid taskId" }, 400);
     }
+    logTaskApi("/api/stream/:taskId", {
+      taskId,
+      lastEventId: c.req.header("last-event-id") ?? null,
+    });
 
     const stream = deps.makeSseStream(c, taskId, c.req.header("last-event-id"));
     return new Response(stream, { headers: deps.sseHeaders() });

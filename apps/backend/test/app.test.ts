@@ -1,6 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { decodeFunctionData, hexToString } from "viem";
-import { AgentOrchestratorAbi, PlanMode, TaskState } from "@twiin/shared";
+import {
+  AgentOrchestratorAbi,
+  JsonApiAgentAbi,
+  LlmInferenceAgentAbi,
+  ParseWebsiteAgentAbi,
+  PlanMode,
+  TaskState,
+} from "@twiin/shared";
 
 const baseEnv = {
   ANTHROPIC_API_KEY: "test-key",
@@ -331,9 +338,246 @@ describe("app routes", () => {
     expect(decoded.args?.[0]).toBe(1n);
     expect(decoded.args?.[2]).toBe(100n);
     expect(decoded.args?.[3]).toBe(PlanMode.ClaudePlan);
-    expect(hexToString(decoded.args?.[1][0].payload as `0x${string}`)).toBe(
+    expect(hexToString(decoded.args?.[1][0].payload as `0x${string}`)).toContain(
       "analyze previous results",
     );
+    expect(hexToString(decoded.args?.[1][0].payload as `0x${string}`)).toContain(
+      "Do not invent or assume the current date",
+    );
+  });
+
+  it("hardens analysis/reporter prompts against fabricated dates and values", async () => {
+    const { createApp } = await loadApp();
+    const create = vi.fn().mockResolvedValue({
+      ...anthropicReply(
+        JSON.stringify([
+          {
+            configId: 3,
+            payload: "Analyze previous results and score sentiment.",
+            maxCostWei: "1",
+            timeoutSeconds: 120,
+          },
+          {
+            configId: 4,
+            payload: "Write a report with a date and current price.",
+            maxCostWei: "1",
+            timeoutSeconds: 120,
+          },
+        ]),
+      ),
+      usage: { input_tokens: 1000, output_tokens: 100 },
+    });
+
+    const res = await createApp({
+      plan: {
+        anthropic: { messages: { create } } as never,
+        readRequestDeposit: vi.fn().mockResolvedValue(0n),
+        readNextConfigId: vi.fn().mockResolvedValue(10n),
+        readAgent: vi.fn(async (configId: bigint) => ({
+          lane: 0,
+          isActive: true,
+          suspended: false,
+          name: configId === 3n ? "analysis-bot@twiin" : "reporter-bot@twiin",
+          costWei: 1n,
+        })),
+        listExternalAgents: vi.fn().mockResolvedValue([]),
+        savePlanRequest: vi.fn().mockResolvedValue(undefined),
+      },
+    }).request("/api/plan", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        goal: "Produce a market brief from previous results",
+        personalAgentId: "1",
+        budgetWei: "1000000000000000000",
+      }),
+    });
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { createTaskCalldata: `0x${string}` };
+    const createTask = decodeFunctionData({
+      abi: AgentOrchestratorAbi,
+      data: body.createTaskCalldata,
+    });
+    const onChainSteps = createTask.args?.[1] ?? [];
+    const decodedPayloads = onChainSteps.map((step) => {
+      const decodedStep = decodeFunctionData({
+        abi: LlmInferenceAgentAbi,
+        data: step.payload as `0x${string}`,
+      });
+      return String(decodedStep.args?.[0] ?? "");
+    });
+    expect(decodedPayloads[0]).toContain("Use only facts present in previous step outputs");
+    expect(decodedPayloads[0]).toContain("Do not invent or assume the current date");
+    expect(decodedPayloads[1]).toContain('write "unavailable" instead of guessing');
+    expect(decodedPayloads[1]).toContain("Do not fabricate prices");
+  });
+
+  it("uses a deterministic somnia-oracle template for Somnia sentiment goals", async () => {
+    const { createApp } = await loadApp();
+    const create = vi.fn();
+    const savePlanRequest = vi.fn().mockResolvedValue(undefined);
+
+    const res = await createApp({
+      plan: {
+        anthropic: { messages: { create } } as never,
+        readRequestDeposit: vi.fn().mockResolvedValue(30000000000000000n),
+        readNextConfigId: vi.fn().mockResolvedValue(10n),
+        readAgent: vi.fn(async (configId: bigint) => ({
+          lane: 0,
+          isActive: true,
+          suspended: false,
+          name: configId === 2n ? "somnia-oracle@twiin" : "unused",
+          costWei: configId === 2n ? 30000000000000000n : 0n,
+        })),
+        listExternalAgents: vi.fn().mockResolvedValue([]),
+        savePlanRequest,
+      },
+    }).request("/api/plan", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        goal: "Daily Somnia sentiment oracle",
+        personalAgentId: "1",
+        budgetWei: "3000000000000000000",
+      }),
+    });
+
+    expect(res.status).toBe(200);
+    expect(create).not.toHaveBeenCalled();
+
+    const body = (await res.json()) as { createTaskCalldata: `0x${string}` };
+    const createTask = decodeFunctionData({
+      abi: AgentOrchestratorAbi,
+      data: body.createTaskCalldata,
+    });
+    const onChainSteps = createTask.args?.[1] ?? [];
+    expect(onChainSteps).toHaveLength(4);
+
+    const apiUrl =
+      "https://api.coingecko.com/api/v3/simple/price?ids=somnia&vs_currencies=usd&include_market_cap=true&include_24hr_vol=true&include_24hr_change=true";
+
+    const decodedSteps = onChainSteps.map((step) =>
+      decodeFunctionData({
+        abi: JsonApiAgentAbi,
+        data: step.payload as `0x${string}`,
+      }),
+    );
+    expect(decodedSteps.map((d) => d.args?.[0])).toEqual([
+      apiUrl,
+      apiUrl,
+      apiUrl,
+      apiUrl,
+    ]);
+    expect(decodedSteps[0].functionName).toBe("fetchUint");
+    expect(decodedSteps[0].args?.[1]).toBe("somnia.usd");
+    expect(decodedSteps[0].args?.[2]).toBe(8);
+    expect(decodedSteps[1].functionName).toBe("fetchString");
+    expect(decodedSteps[1].args?.[1]).toBe("somnia.usd_24h_change");
+    expect(decodedSteps[2].functionName).toBe("fetchUint");
+    expect(decodedSteps[2].args?.[1]).toBe("somnia.usd_market_cap");
+    expect(decodedSteps[3].functionName).toBe("fetchUint");
+    expect(decodedSteps[3].args?.[1]).toBe("somnia.usd_24h_vol");
+    expect(savePlanRequest).toHaveBeenCalledOnce();
+  });
+
+  it("uses the deterministic somnia-oracle template for Somnia ecosystem stats goals", async () => {
+    const { createApp } = await loadApp();
+    const create = vi.fn();
+
+    const res = await createApp({
+      plan: {
+        anthropic: { messages: { create } } as never,
+        readRequestDeposit: vi.fn().mockResolvedValue(30000000000000000n),
+        readNextConfigId: vi.fn().mockResolvedValue(10n),
+        readAgent: vi.fn(async (configId: bigint) => ({
+          lane: 0,
+          isActive: true,
+          suspended: false,
+          name: configId === 2n ? "somnia-oracle@twiin" : "unused",
+          costWei: configId === 2n ? 30000000000000000n : 0n,
+        })),
+        listExternalAgents: vi.fn().mockResolvedValue([]),
+        savePlanRequest: vi.fn().mockResolvedValue(undefined),
+      },
+    }).request("/api/plan", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        goal: "Fetch current Somnia ecosystem stats using the oracle, including price, 24h change, market cap, and 24h volume",
+        personalAgentId: "1",
+        budgetWei: "3000000000000000000",
+      }),
+    });
+
+    expect(res.status).toBe(200);
+    expect(create).not.toHaveBeenCalled();
+
+    const body = (await res.json()) as { createTaskCalldata: `0x${string}` };
+    const createTask = decodeFunctionData({
+      abi: AgentOrchestratorAbi,
+      data: body.createTaskCalldata,
+    });
+    const onChainSteps = createTask.args?.[1] ?? [];
+    expect(onChainSteps).toHaveLength(4);
+
+    const decodedSteps = onChainSteps.map((step) =>
+      decodeFunctionData({
+        abi: JsonApiAgentAbi,
+        data: step.payload as `0x${string}`,
+      }),
+    );
+    expect(decodedSteps.map((d) => d.functionName)).toEqual([
+      "fetchUint",
+      "fetchString",
+      "fetchUint",
+      "fetchUint",
+    ]);
+    expect(decodedSteps.map((d) => d.args?.[1])).toEqual([
+      "somnia.usd",
+      "somnia.usd_24h_change",
+      "somnia.usd_market_cap",
+      "somnia.usd_24h_vol",
+    ]);
+  });
+
+  it("rejects Somnia sentiment goals when the budget cannot support the oracle flow", async () => {
+    const { createApp } = await loadApp();
+    const create = vi.fn();
+
+    const res = await createApp({
+      plan: {
+        anthropic: { messages: { create } } as never,
+        readRequestDeposit: vi.fn().mockResolvedValue(30000000000000000n),
+        readNextConfigId: vi.fn().mockResolvedValue(10n),
+        readAgent: vi.fn(async (configId: bigint) => ({
+          lane: 0,
+          isActive: true,
+          suspended: false,
+          name: configId === 2n ? "somnia-oracle@twiin" : "unused",
+          costWei: configId === 2n ? 30000000000000000n : 0n,
+        })),
+        listExternalAgents: vi.fn().mockResolvedValue([]),
+        savePlanRequest: vi.fn().mockResolvedValue(undefined),
+      },
+    }).request("/api/plan", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        goal: "Daily Somnia sentiment oracle",
+        personalAgentId: "1",
+        budgetWei: "200000000000000000",
+      }),
+    });
+
+    expect(res.status).toBe(422);
+    await expect(res.json()).resolves.toEqual({
+      error: "somnia sentiment oracle requires a higher budget",
+      estimatedCostWei: "480000000000000000",
+      budgetWei: "200000000000000000",
+      requiredStepCount: 4,
+    });
+    expect(create).not.toHaveBeenCalled();
   });
 
   it("rejects over-budget planner output", async () => {

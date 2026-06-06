@@ -22,6 +22,7 @@ import {
 import { publicClient } from "../clients";
 import { listExternalAgents, savePlanRequest } from "../db";
 import { parsePlannerStepsJson } from "../planner-json";
+import { logTaskApi, logTaskTimeline } from "../task-log";
 
 // Fixed-window rate limiter — 10 req/min per IP, with expired-entry eviction
 const rateWindows = new Map<string, { count: number; resetAt: number }>();
@@ -81,6 +82,11 @@ type ExternalAgentRecord = Awaited<
   ReturnType<typeof listExternalAgents>
 >[number];
 
+type PlannerMessage = {
+  content: Array<{ type: string; text?: string }>;
+  usage?: unknown;
+};
+
 export type PlanRouterDeps = {
   anthropic: Pick<Anthropic, "messages">;
   env: Env;
@@ -127,6 +133,9 @@ Rules:
 - timeoutSeconds must be between 60 and 600.
 - maxCostWei will be normalized server-side to the exact contract-required authorization. Still return a reasonable decimal wei string.
 - Do NOT use configId 0 (janice) or configId 5 (executor) — they are reserved.
+- Never ask downstream agents to invent dates, prices, market caps, sentiment drivers, or any other facts that are not present in prior step outputs.
+- If the current date is not explicitly provided by a previous step, omit the date rather than guessing one.
+- If a required value is unavailable from previous results, instruct the downstream agent to say "unavailable" instead of fabricating it.
 - Return ONLY a valid JSON array with no markdown or explanation.
 `.trim();
 
@@ -223,6 +232,61 @@ If the user did not provide a concrete HTTPS URL, do not invent one. Prefer anal
 ${AGENT_CONTEXT_HEADER}
 `.trim();
 
+// CoinGecko simple/price with include_* returns e.g.:
+// { "somnia": { "usd": 0.12, "usd_market_cap": 20625522.85, "usd_24h_vol": 6207972.94, "usd_24h_change": -11.03 } }
+// fetchUint cannot represent negative usd_24h_change — use fetchString for that field.
+const SOMNIA_SENTIMENT_SOURCE_URL =
+  "https://api.coingecko.com/api/v3/simple/price?ids=somnia&vs_currencies=usd&include_market_cap=true&include_24hr_vol=true&include_24hr_change=true";
+
+function isSomniaSentimentGoal(goal: string): boolean {
+  const lower = goal.toLowerCase();
+  return lower.includes("somnia") && lower.includes("sentiment");
+}
+
+function isSomniaStatsGoal(goal: string): boolean {
+  const lower = goal.toLowerCase();
+  if (!lower.includes("somnia")) return false;
+
+  return (
+    lower.includes("stats") ||
+    lower.includes("ecosystem stats") ||
+    lower.includes("market snapshot") ||
+    lower.includes("price") ||
+    lower.includes("24h change") ||
+    lower.includes("market cap") ||
+    lower.includes("24h volume")
+  );
+}
+
+function somniaSentimentOracleStep(
+  selector: string,
+  opts?: { decimals?: number },
+): StepSpec {
+  const payload: Record<string, string | number> = {
+    url: SOMNIA_SENTIMENT_SOURCE_URL,
+    selector,
+  };
+  if (opts?.decimals !== undefined) {
+    payload.decimals = opts.decimals;
+  }
+  return {
+    configId: NativeConfigId.ORACLE,
+    payload: JSON.stringify(payload),
+    maxCostWei: "0",
+    timeoutSeconds: 90,
+  };
+}
+
+function buildSomniaSentimentTemplate(): StepSpec[] {
+  // Fast json.fetch steps (no LLM). Results appear per-step in the console.
+  return [
+    somniaSentimentOracleStep("somnia.usd", { decimals: 8 }),
+    somniaSentimentOracleStep("somnia.usd_24h_change"),
+    somniaSentimentOracleStep("somnia.usd_market_cap", { decimals: 8 }),
+    somniaSentimentOracleStep("somnia.usd_24h_vol", { decimals: 8 }),
+  ];
+}
+
 export function createPlanRouter(
   overrides: Partial<PlanRouterDeps> = {},
 ): Hono {
@@ -277,6 +341,11 @@ export function createPlanRouter(
     }
 
     const { goal, personalAgentId, budgetWei } = body;
+    logTaskApi("/api/plan", {
+      personalAgentId,
+      budgetWei,
+      goalPreview: goal.slice(0, 160),
+    });
     const budgetEth = formatEther(BigInt(budgetWei));
     const totalBudget = BigInt(budgetWei);
 
@@ -337,29 +406,8 @@ export function createPlanRouter(
     }[] | null = null;
     let totalEstimated = 0n;
 
-    for (let attempt = 0; attempt < 2; attempt++) {
-      const plannerGoal =
-        attempt === 0
-          ? goal
-          : `${goal}\n\n[Hard constraint: total step costs must be <= ${budgetEth} STT. Use at most ${Math.max(1, maxAffordableSteps)} step(s). Prefer the cheapest configId.]`;
-      const plannerSystem =
-        attempt === 0
-          ? systemPrompt
-          : `${systemPrompt}
-
-RETRY: Your previous plan exceeded the ${budgetEth} STT budget (cost was ${formatEther(totalEstimated)} STT).
-You MUST return fewer or cheaper steps. The sum of exact authorization costs cannot exceed ${budgetEth} STT.`;
-
-      try {
-        const msg = await createPlannerMessage(deps, plannerSystem, plannerGoal);
-        const raw =
-          msg.content[0].type === "text" ? msg.content[0].text.trim() : "";
-        steps = parsePlannerStepsJson(raw);
-      } catch (e) {
-        console.error("[plan] planner failed:", e);
-        return c.json({ error: "planner failed" }, 500);
-      }
-
+    if (isSomniaSentimentGoal(goal) || isSomniaStatsGoal(goal)) {
+      steps = buildSomniaSentimentTemplate();
       try {
         onChainSteps = await normalizePlanSteps(deps, steps);
       } catch (error) {
@@ -375,7 +423,65 @@ You MUST return fewer or cheaper steps. The sum of exact authorization costs can
       }
 
       totalEstimated = onChainSteps.reduce((sum, s) => sum + s.maxCostWei, 0n);
-      if (totalEstimated <= totalBudget) break;
+      if (totalEstimated > totalBudget) {
+        return c.json(
+          {
+            error: "somnia sentiment oracle requires a higher budget",
+            estimatedCostWei: totalEstimated.toString(),
+            budgetWei,
+            requiredStepCount: onChainSteps.length,
+          },
+          422,
+        );
+      }
+    }
+
+    if (!steps || !onChainSteps) {
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const plannerGoal =
+          attempt === 0
+            ? goal
+            : `${goal}\n\n[Hard constraint: total step costs must be <= ${budgetEth} STT. Use at most ${Math.max(1, maxAffordableSteps)} step(s). Prefer the cheapest configId.]`;
+        const plannerSystem =
+          attempt === 0
+            ? systemPrompt
+            : `${systemPrompt}
+
+RETRY: Your previous plan exceeded the ${budgetEth} STT budget (cost was ${formatEther(totalEstimated)} STT).
+You MUST return fewer or cheaper steps. The sum of exact authorization costs cannot exceed ${budgetEth} STT.`;
+
+        try {
+          steps = await parsePlannerStepsFromMessage(
+            deps,
+            plannerSystem,
+            plannerGoal,
+          );
+        } catch (e) {
+          console.error("[plan] planner failed:", e);
+          return c.json({ error: "planner failed" }, 500);
+        }
+
+        if (!steps) {
+          return c.json({ error: "planner failed" }, 500);
+        }
+
+        try {
+          onChainSteps = await normalizePlanSteps(deps, steps);
+        } catch (error) {
+          return c.json(
+            {
+              error:
+                error instanceof Error
+                  ? error.message
+                  : "planner selected invalid agents",
+            },
+            422,
+          );
+        }
+
+        totalEstimated = onChainSteps.reduce((sum, s) => sum + s.maxCostWei, 0n);
+        if (totalEstimated <= totalBudget) break;
+      }
     }
 
     if (!steps || !onChainSteps || totalEstimated > totalBudget) {
@@ -414,6 +520,20 @@ You MUST return fewer or cheaper steps. The sum of exact authorization costs can
       budgetWei,
     );
 
+    logTaskTimeline("plan_ready", {
+      personalAgentId,
+      budgetWei,
+      estimatedCostWei: totalEstimated.toString(),
+      stepCount: onChainSteps.length,
+      steps: onChainSteps.map((step, index) => ({
+        stepIdx: index,
+        configId: Number(step.subAgentConfigId),
+        timeoutSeconds: step.timeoutSeconds,
+        maxCostWei: step.maxCostWei.toString(),
+        payloadPreview: steps[index].payload.slice(0, 160),
+      })),
+    });
+
     return c.json({
       steps: onChainSteps.map((step, index) => ({
         configId: Number(step.subAgentConfigId),
@@ -429,6 +549,29 @@ You MUST return fewer or cheaper steps. The sum of exact authorization costs can
   });
 
   return router;
+}
+
+async function parsePlannerStepsFromMessage(
+  deps: PlanRouterDeps,
+  systemPrompt: string,
+  goal: string,
+): Promise<StepSpec[]> {
+  const msg = await createPlannerMessage(deps, systemPrompt, goal);
+  const raw = extractPlannerText(msg);
+  try {
+    return parsePlannerStepsJson(raw);
+  } catch (e) {
+    if (e instanceof SyntaxError) {
+      console.error("[plan] planner returned non-JSON output:", {
+        error: e.message,
+        goalPreview: goal.slice(0, 160),
+        rawPreview: raw.slice(0, 400),
+      });
+    } else {
+      console.error("[plan] planner failed while parsing output:", e);
+    }
+    throw e;
+  }
 }
 
 async function normalizePlanSteps(
@@ -467,10 +610,11 @@ async function normalizePlanSteps(
       const exactCostWei = isNative
         ? requestDeposit + agent.costWei * 3n
         : agent.costWei;
+      const payloadText = hardenPlannerPayload(step.configId, step.payload);
 
       // Native steps go straight to the Somnia Agents API and MUST be ABI-encoded
       // per the target base agent's signature; external agents keep raw UTF-8 bytes.
-      const payload = encodeStepPayload(step.configId, step.payload, isNative);
+      const payload = encodeStepPayload(step.configId, payloadText, isNative);
 
       return {
         subAgentConfigId: configId,
@@ -480,6 +624,26 @@ async function normalizePlanSteps(
       };
     }),
   );
+}
+
+function hardenPlannerPayload(configId: number, payload: string): string {
+  if (
+    configId !== NativeConfigId.ANALYSIS &&
+    configId !== NativeConfigId.REPORTER
+  ) {
+    return payload;
+  }
+
+  const guardrail = [
+    "",
+    "Hard rules:",
+    "- Use only facts present in previous step outputs.",
+    "- Do not invent or assume the current date. If no date is provided upstream, omit it.",
+    '- If a required value is missing, write "unavailable" instead of guessing.',
+    "- Do not fabricate prices, percentages, market cap, volume, sentiment drivers, or outlook catalysts.",
+  ].join("\n");
+
+  return `${payload.trim()}\n\n${guardrail}`;
 }
 
 async function renderExternalAgent(
@@ -504,7 +668,7 @@ async function createPlannerMessage(
   deps: PlanRouterDeps,
   systemPrompt: string,
   goal: string,
-) {
+): Promise<PlannerMessage> {
   const model = "claude-haiku-4-5-20251001";
   const maxAttempts = 3;
   let attempt = 0;
@@ -524,7 +688,7 @@ async function createPlannerMessage(
         (msg as { usage?: unknown }).usage,
         model,
       );
-      return msg;
+      return msg as PlannerMessage;
     } catch (error) {
       lastError = error;
       deps.plannerBudgetGuard.noteFailure(error);
@@ -534,4 +698,16 @@ async function createPlannerMessage(
   }
 
   throw lastError ?? new Error("planner failed");
+}
+
+function extractPlannerText(message: PlannerMessage): string {
+  return message.content
+    .filter(
+      (
+        block,
+      ): block is { type: "text"; text?: string } => block.type === "text",
+    )
+    .map((block) => block.text ?? "")
+    .join("\n")
+    .trim();
 }

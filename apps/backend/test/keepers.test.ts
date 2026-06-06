@@ -1,5 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildTwiinDigest, StepState, TaskState } from "@twiin/shared";
+import AgentOrchestratorAbi from "@twiin/shared/abis/AgentOrchestrator.json";
+import TwiinAccountAbi from "@twiin/shared/abis/TwiinAccount.json";
+import { encodeFunctionData } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 
 const baseEnv = {
@@ -49,11 +52,43 @@ afterEach(() => {
 });
 
 describe("indexer keeper", () => {
+  it("rewinds the indexer cursor when it is ahead of the chain tip", async () => {
+    const { createIndexer } = await loadKeepers();
+    const setCursor = vi.fn().mockResolvedValue(undefined);
+    const indexer = createIndexer({
+      getBlockNumber: vi.fn().mockResolvedValue(100n),
+      getCursor: vi.fn().mockResolvedValue(150n),
+      setCursor,
+      getLogs: vi.fn(),
+      getTransaction: vi.fn(),
+      getStep: vi.fn(),
+      getExternalAgent: vi.fn().mockResolvedValue(null),
+      upsertExternalAgent: vi.fn().mockResolvedValue(undefined),
+      deactivateExternalAgent: vi.fn().mockResolvedValue(undefined),
+      upsertTask: vi.fn().mockResolvedValue(undefined),
+      deleteStepsForTask: vi.fn().mockResolvedValue(undefined),
+      finalizeTaskSteps: vi.fn().mockResolvedValue(undefined),
+      upsertStep: vi.fn().mockResolvedValue(undefined),
+      updateTaskState: vi.fn().mockResolvedValue(undefined),
+      publish: vi.fn(),
+      addresses: {
+        orchestrator: "0x1234567890123456789012345678901234567890",
+        agentRegistry: "0x9999999999999999999999999999999999999999",
+      },
+      startBlock: 50n,
+    });
+
+    await indexer.tick();
+
+    expect(setCursor).toHaveBeenCalledWith("indexer", 50n);
+  });
+
   it("indexes task and step lifecycle events into the DB layer", async () => {
     const { createIndexer } = await loadKeepers();
     const upsertTask = vi.fn().mockResolvedValue(undefined);
     const upsertStep = vi.fn().mockResolvedValue(undefined);
     const updateTaskState = vi.fn().mockResolvedValue(undefined);
+    const finalizeTaskSteps = vi.fn().mockResolvedValue(undefined);
     const publish = vi.fn();
     const setCursor = vi.fn().mockResolvedValue(undefined);
     const upsertExternalAgent = vi.fn().mockResolvedValue(undefined);
@@ -122,6 +157,8 @@ describe("indexer keeper", () => {
       getCursor: vi.fn().mockResolvedValue(20n),
       setCursor,
       getLogs: getLogs as never,
+      deleteStepsForTask: vi.fn().mockResolvedValue(undefined),
+      finalizeTaskSteps,
       getExternalAgent: vi.fn().mockResolvedValue(null),
       upsertExternalAgent,
       deactivateExternalAgent: vi.fn().mockResolvedValue(undefined),
@@ -152,6 +189,7 @@ describe("indexer keeper", () => {
       "7",
       0,
       "6",
+      null,
       StepState.RunningExternal,
       "hello",
       "0x" + "11".repeat(32),
@@ -160,6 +198,7 @@ describe("indexer keeper", () => {
       500,
     );
     expect(updateTaskState).toHaveBeenCalledWith("7", TaskState.Completed);
+    expect(finalizeTaskSteps).toHaveBeenCalledWith("7", StepState.Succeeded);
     expect(upsertExternalAgent).toHaveBeenCalledWith(
       "6",
       externalAgentAccount.address,
@@ -171,12 +210,153 @@ describe("indexer keeper", () => {
     expect(publish).toHaveBeenCalledWith(
       "7",
       "task_completed",
-      expect.objectContaining({ taskId: "7", result: "done" }),
+      expect.objectContaining({
+        taskId: "7",
+        result: "done",
+        preview: "done",
+      }),
+    );
+  });
+
+  it("derives native step deadlines from createTask calldata", async () => {
+    const { createIndexer } = await loadKeepers();
+    const upsertStep = vi.fn().mockResolvedValue(undefined);
+    const createTaskCalldata = encodeFunctionData({
+      abi: AgentOrchestratorAbi,
+      functionName: "createTask",
+      args: [
+        9n,
+        [
+          {
+            subAgentConfigId: 2n,
+            payload: "0x",
+            maxCostWei: 1000n,
+            timeoutSeconds: 60,
+          },
+        ],
+        1000n,
+        1,
+      ],
+    });
+    const executeCalldata = encodeFunctionData({
+      abi: TwiinAccountAbi,
+      functionName: "execute",
+      args: [
+        "0x1234567890123456789012345678901234567890",
+        1000n,
+        createTaskCalldata,
+        0,
+      ],
+    });
+
+    const indexer = createIndexer({
+      getBlockNumber: vi.fn().mockResolvedValue(30n),
+      getBlockTimestamp: vi.fn().mockResolvedValue(1_000),
+      getCursor: vi.fn().mockResolvedValue(20n),
+      setCursor: vi.fn().mockResolvedValue(undefined),
+      getLogs: vi.fn(async ({ event }: { event: { name?: string } }) => {
+        switch (event.name) {
+          case "TaskCreated":
+            return [
+              {
+                blockNumber: 25n,
+                transactionHash: "0x" + "12".repeat(32),
+                args: {
+                  taskId: 7n,
+                  personalAgentId: 9n,
+                  mode: 1,
+                  budgetWei: 1000n,
+                },
+              },
+            ];
+          case "StepStateChanged":
+            return [
+              {
+                blockNumber: 25n,
+                args: {
+                  taskId: 7n,
+                  stepIdx: 0,
+                  state: StepState.RunningNative,
+                },
+              },
+            ];
+          default:
+            return [];
+        }
+      }) as never,
+      getTransaction: vi.fn().mockResolvedValue({ input: executeCalldata }),
+      getStep: vi.fn().mockResolvedValue({
+        config_id: "2",
+        timeout_seconds: 60,
+        state: StepState.Pending,
+        payload: "",
+        req_id: null,
+        result_hex: null,
+        score: null,
+      }),
+      getExternalAgent: vi.fn().mockResolvedValue(null),
+      upsertExternalAgent: vi.fn().mockResolvedValue(undefined),
+      deactivateExternalAgent: vi.fn().mockResolvedValue(undefined),
+      upsertTask: vi.fn().mockResolvedValue(undefined),
+      deleteStepsForTask: vi.fn().mockResolvedValue(undefined),
+      finalizeTaskSteps: vi.fn().mockResolvedValue(undefined),
+      upsertStep,
+      updateTaskState: vi.fn().mockResolvedValue(undefined),
+      publish: vi.fn(),
+      addresses: {
+        orchestrator: "0x1234567890123456789012345678901234567890",
+        agentRegistry: "0x9999999999999999999999999999999999999999",
+      },
+      startBlock: 0n,
+    });
+
+    await indexer.tick();
+
+    expect(upsertStep).toHaveBeenCalledWith(
+      "7",
+      0,
+      "0",
+      null,
+      StepState.RunningNative,
+      "",
+      null,
+      null,
+      null,
+      1060,
     );
   });
 });
 
 describe("relay keeper", () => {
+  it("rewinds the relay cursor when it is ahead of the chain tip", async () => {
+    const { createRelay } = await loadKeepers();
+    const setCursor = vi.fn().mockResolvedValue(undefined);
+    const relay = createRelay({
+      getBlockNumber: vi.fn().mockResolvedValue(100n),
+      getCursor: vi.fn().mockResolvedValue(150n),
+      setCursor,
+      getLogs: vi.fn(),
+      isResultSubmitted: vi.fn(),
+      saveSubmittedResult: vi.fn(),
+      deleteSubmittedResult: vi.fn(),
+      getStep: vi.fn(),
+      upsertStep: vi.fn(),
+      publish: vi.fn(),
+      getExternalAgent: vi.fn(),
+      setExternalAgentVerification: vi.fn(),
+      submitExternalResult: vi.fn(),
+      fetchImpl: vi.fn(),
+      addresses: { orchestrator: "0x1234567890123456789012345678901234567890" },
+      chainId: 50312n,
+      startBlock: 50n,
+      logger: { log: vi.fn(), error: vi.fn(), warn: vi.fn() },
+    });
+
+    await relay.tick();
+
+    expect(setCursor).toHaveBeenCalledWith("relay", 50n);
+  });
+
   it("submits external results and updates the step state", async () => {
     const { createRelay } = await loadKeepers();
     const saveSubmittedResult = vi.fn().mockResolvedValue(undefined);
@@ -258,6 +438,7 @@ describe("relay keeper", () => {
       "5",
       1,
       "6",
+      null,
       StepState.AwaitingRating,
       "instruction",
       reqId,
@@ -403,10 +584,14 @@ describe("timeout keeper", () => {
         { task_id: "2", step_idx: 1, state: StepState.AwaitingRating, deadline: 10 },
         { task_id: "3", step_idx: 2, state: StepState.RunningNative, deadline: 10 },
       ]),
-      listRunningTaskIds: vi.fn().mockResolvedValue(["4"]),
+      readNextTaskId: vi.fn().mockResolvedValue(4n),
       readTask: vi
-        .fn()
-        .mockResolvedValue([0, 1n, 0, 100n, 0n, 10n, TaskState.Running]),
+        .fn(async (taskId: bigint) => {
+          if (taskId === 4n) {
+            return [0, 1n, 0, 100n, 0n, 10n, TaskState.Running] as const;
+          }
+          return [0, 1n, 0, 100n, 0n, 999999n, TaskState.Completed] as const;
+        }),
       timeoutExternalStep,
       timeoutRating,
       timeoutNativeStep,
@@ -425,6 +610,32 @@ describe("timeout keeper", () => {
 });
 
 describe("rater keeper", () => {
+  it("rewinds the rater cursor when it is ahead of the chain tip", async () => {
+    const { createRater } = await loadKeepers();
+    const setCursor = vi.fn().mockResolvedValue(undefined);
+    const rater = createRater({
+      anthropic: { messages: { create: vi.fn() } } as never,
+      getBlockNumber: vi.fn().mockResolvedValue(100n),
+      getCursor: vi.fn().mockResolvedValue(150n),
+      setCursor,
+      getLogs: vi.fn(),
+      getStep: vi.fn(),
+      isRatingSubmitted: vi.fn(),
+      saveSubmittedRating: vi.fn(),
+      deleteSubmittedRating: vi.fn(),
+      upsertStep: vi.fn(),
+      publish: vi.fn(),
+      finalizeExternalStep: vi.fn(),
+      addresses: { orchestrator: "0x1234567890123456789012345678901234567890" },
+      startBlock: 50n,
+      logger: { log: vi.fn(), error: vi.fn(), warn: vi.fn() },
+    });
+
+    await rater.tick();
+
+    expect(setCursor).toHaveBeenCalledWith("rater", 50n);
+  });
+
   it("finalizes acceptable results and publishes approval", async () => {
     const { createRater } = await loadKeepers();
     const finalizeExternalStep = vi.fn().mockResolvedValue(undefined);
@@ -464,6 +675,7 @@ describe("rater keeper", () => {
       "8",
       2,
       "0",
+      null,
       StepState.Succeeded,
       "do analysis",
       null,
