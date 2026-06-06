@@ -28,6 +28,8 @@ src/
 ├── env.ts            — Zod-enforced env vars (KEEPER_PRIVATE_KEY, ANTHROPIC_API_KEY, SOMNIA_RPC_URL, TURSO_DB_URL, etc.)
 ├── sse.ts            — SSE pub/sub: subscribe(), publish(), publishAll(), makeSseStream(), heartbeat
 ├── budget.ts         — shared budget validation logic
+├── errors.ts         — typed error classes (UpstreamAvailabilityError)
+├── task-log.ts       — structured task timeline logging
 ├── routes/            — see src/routes/CLAUDE.md
 │   ├── plan.ts       — POST /api/plan — user goal → Claude Haiku → createTask calldata
 │   ├── tasks.ts      — GET /api/tasks/:taskId, GET /api/tasks/:taskId/steps

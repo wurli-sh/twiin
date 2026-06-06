@@ -48,6 +48,18 @@ packages/shared/
 - Plain enums mirroring `TwiinTypes.sol`: `TaskState`, `StepState`, `AgentLane`, `PlanMode`
 - `DEFAULT_DAILY_CAP_WEI = parseEther("2")`, `DEFAULT_MAX_PER_TASK_WEI = parseEther("1")`, `DEFAULT_MAX_TRUSTLESS_WEI = parseEther("2")`
 
+### `somnia-agents.ts` — Native Agent ABI + payload helpers
+
+- `encodeNativeAgentPayload(configId, payload)` — ABI-encodes Somnia native agent calldata per configId
+- `decodeNativeAgentResult(resultHex)` — decodes native agent result string from hex
+- `decodeTaskCompletionFromLogData(logData)` — extracts display text from TaskCompleted event log data (with normalize)
+- `normalizeDisplayText(text)` — strips NUL/control chars, collapses whitespace, returns null for corrupted strings
+- `taskTextPreview(text, maxLength?)` — single-line preview with ellipsis
+- `isSomniaNativeConfigId(configId)` — returns true for configIds 0–5
+- `formatNativeStepAuthorizationStt(depositWei, costWei)` — human-readable STT amount
+- `validateOraclePlannerPayload(payload)` — Zod schema for oracle step payloads
+- ABIs: `JsonApiAgentAbi`, `LlmInferenceAgentAbi`, `WebScraperAgentAbi`
+
 ### `digest.ts` — `buildTwiinDigest(params): Hex`
 
 Returns the **inner keccak256** (pre-EIP-191) matching `AgentOrchestrator.submitExternalResult`:

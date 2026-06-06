@@ -6,7 +6,7 @@
 
 | Keeper | File | Poll | Watches | Action |
 |--------|------|------|---------|--------|
-| Indexer | `indexer.ts` | 4s | 10+ event types (TaskCreated, StepStateChanged, external lifecycle) | Upserts to SQLite, publishes SSE updates |
+| Indexer | `indexer.ts` | 4s | TaskCreated, StepStateChanged, ExternalAgentRequest, ExternalResultPending, ExternalStepApproved, external lifecycle | Decodes task steps from createTransaction; upserts to SQLite; publishes SSE; fast-forward on large lag; rewind on cursor-ahead |
 | Relay | `relay.ts` | 4s | `ExternalAgentRequest` | HTTP POST to external agent or Claude Sonnet (native); submits ECDSA-signed result on-chain |
 | Rater | `rater.ts` | 6s | `ExternalResultPending` | Rates via Claude Haiku; submits `rateStep` if score ≥ 40 |
 | Externals | `externals.ts` | 4s | `ExternalAgentRegistered`, `ExternalEndpointUpdated`, `ExternalDeregistered` | Syncs external agent metadata into SQLite; bootstraps cache from historical logs |

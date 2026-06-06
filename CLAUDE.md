@@ -23,6 +23,7 @@ Somnia Agentathon (Encode Club, May 18 – Jun 11 2026). Somnia Testnet chainId 
 | `pnpm test`          | runs `@twiin/contracts` tests (Hardhat)                      |
 | `pnpm test:shared`   | runs `@twiin/shared` tests (vitest)                          |
 | `pnpm test:backend`  | runs `@twiin/backend` tests (vitest)                         |
+| `pnpm test:frontend` | runs `@twiin/frontend` tests (vitest)                       |
 | `pnpm test:discord-bot` | runs `@twiin/discord-bot` tests (vitest)                 |
 | `pnpm test:all`      | runs contracts + shared + backend + discord-bot tests        |
 | `pnpm compile`       | compiles `@twiin/contracts` (Hardhat)                        |
@@ -85,27 +86,28 @@ twiin/
 | Path | Purpose |
 |------|---------|
 | `src/` | All backend source |
-| `src/routes/` | `plan.ts` (Claude planning), `stream.ts` (SSE), `tasks.ts` (task CRUD) |
-| `src/keepers/` | `relay.ts` (task relay keeper), `rater.ts` (Claude Haiku rating keeper), `indexer.ts` (event indexer) |
-| Top-level `src/` files | `index.ts` (entry), `clients.ts` (viem clients), `contracts.ts` (contract instances), `db.ts` (SQLite/Drizzle), `schema.ts` (DB schema), `sse.ts` (SSE helpers), `env.ts` (env vars) |
+| `src/routes/` | `plan.ts` (Claude planning), `stream.ts` (SSE), `tasks.ts` (task CRUD), `agents.ts` (agent listing) |
+| `src/keepers/` | `relay.ts` (task relay keeper), `rater.ts` (Claude Haiku rating keeper), `indexer.ts` (event indexer), `externals.ts` (external agent dispatcher), `timeouts.ts` (step timeout handler) |
+| Top-level `src/` files | `index.ts` (entry), `app.ts` (app factory), `clients.ts` (viem clients), `contracts.ts` (contract instances), `db.ts` (SQLite/Drizzle), `schema.ts` (DB schema), `sse.ts` (SSE helpers), `env.ts` (env vars), `budget.ts` (budget validation), `errors.ts` (error types), `task-log.ts` (structured logging) |
 | Config | `drizzle.config.ts`, `tsconfig.json`, `.env.example` |
 
 ### `apps/frontend/` — React/Vite Frontend
 
 | Path | Purpose |
 |------|---------|
-| `src/pages/` | 5 pages: `HomePage`, `AgentsPage`, `ConsolePage`, `FeedsPage`, `MarketplacePage` |
-| `src/components/home/` | `HeroSection`, `HowItWorks`, `ConsoleSection`, `CallToAction` |
-| `src/components/agents/` | `DeployAgentPanel`, `AgentList`, `AgentRow` |
-| `src/components/console/` | `AgentSelector`, `PlanApproval`, `TaskTimeline` |
-| `src/components/feeds/` | `FeedCard`, `FeedTopicLookup` |
+| `src/pages/` | 4 pages: `HomePage`, `AgentsPage`, `ConsolePage`, `MarketplacePage` |
+| `src/components/home/` | `Hero`, `GatewayBento`, `HeroConsolePreview`, `HowItWorks`, `Ecosystem`, `DeploymentCTA`, `CinematicFooter` |
+| `src/components/agents/` | `DeployAgentPanel`, `AgentList`, `AgentTable`, `AgentStatusLabel`, `AgentKillSwitchControl`, `AddAgentPanel`, `ExternalAgentPanel`, `PolicyPanel`, `TaskActivity` |
+| `src/components/console/` | `AgentSelector`, `AgentStatusLine`, `PlanApproval`, `PlanStepList`, `PlanBudgetRecovery`, `CommandBar`, `SuggestedPrompts`, `BudgetWarningsBar`, `TaskProgressBar`, `TaskResultCard`, `TranscriptPanel` |
 | `src/components/marketplace/` | `SubAgentTable`, `SubAgentRow` |
-| `src/components/layout/` | `Navbar`, `Footer`, `MainLayout` |
-| `src/components/ui/` | `Button`, `Badge`, `Tabs`, `TextLoop`, `TextShimmer`, `ThinkingSpinner`, `TwiinAvatar` |
-| `src/hooks/` | 10 hooks: `useWallet`, `useTwiinAgents`, `useSubAgents`, `useTaskStream`, `useTaskDetail`, `useAgentTasks`, `useCreateTask`, `useOracleFeeds`, `usePageReady`, `useNetworkGuard` |
+| `src/components/layout/` | `Navbar`, `MainLayout`, `NetworkBanner` |
+| `src/components/spell/` | Animated paper/shader components: `animated-checkbox`, `blur-reveal`, `highlighted-text`, `light-rays`, `logos-carousel`, `tilt-card` |
+| `src/components/ui/` | `Button`, `Badge`, `Tabs`, `ConfirmDialog`, `TextLoop`, `TextShimmer`, `ThinkingSpinner`, `TwiinAvatar` |
+| `src/hooks/` | 11 hooks: `useWallet`, `useTwiinAgents`, `useSubAgents`, `useTaskStream`, `useTaskDetail`, `useAgentTasks`, `useCreateTask`, `useAgentPolicy`, `useRotatingPhrase`, `usePageReady`, `useNetworkGuard` |
 | `src/config/` | `wagmi.ts`, `chains.ts`, `contracts.ts` |
-| `src/lib/` | `cn.ts`, `animations.ts`, `agent-name.ts`, `config-names.ts`, `plan-api.ts`, `read-contract.ts`, `sub-agent-status.ts`, `task-state.ts`, `feed-topics.ts`, `format-time.ts` |
-| Config | `vite.config.ts`, `tsconfig.json`, `eslint.config.js`, `index.html` |
+| `src/lib/` | `cn.ts`, `utils.ts`, `animations.ts`, `agent-name.ts`, `agent-budget.ts`, `agent-status-copy.ts`, `config-names.ts`, `console-session.ts`, `feed-topics.ts`, `format-time.ts`, `plan-api.ts`, `plan-step-display.ts`, `preflight-create-task.ts`, `read-contract.ts`, `report-display.ts`, `sentiment-oracle-display.ts`, `sub-agent-status.ts`, `task-result-display.ts`, `task-state.ts` |
+| `src/stores/` | `ui.ts` — zustand UI state |
+| Config | `vite.config.ts`, `tsconfig.json`, `eslint.config.js`, `components.json`, `index.html` |
 
 ### `apps/discord-bot/` — Discord Bot
 
