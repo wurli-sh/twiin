@@ -1,11 +1,11 @@
 import { useEffect, useState, useRef, useMemo } from 'react'
-import { motion } from 'framer-motion'
 import { AlertTriangle, Check, Clock, Loader2, X } from 'lucide-react'
 import { formatEther } from 'viem'
 import { Button } from '@/components/ui/Button'
-import { configIdLabel } from '@/lib/config-names'
+import { PlanStepList } from './PlanStepList'
 import type { PlanResponse } from '@/lib/plan-api'
 import type { TwiinAgentInfo } from '@/hooks/useTwiinAgents'
+import type { PlanStatus } from '@/lib/console-session'
 import { cn } from '@/lib/cn'
 
 const APPROVAL_SECONDS = 60
@@ -14,8 +14,9 @@ type PlanApprovalProps = {
   plan: PlanResponse
   goal: string
   agent: TwiinAgentInfo
+  status?: PlanStatus
   onApprove: () => Promise<void>
-  onReject: () => void
+  onReject: (reason: 'user' | 'expired') => void
   isSubmitting: boolean
 }
 
@@ -23,15 +24,16 @@ export function PlanApproval({
   plan,
   goal,
   agent,
+  status = 'pending',
   onApprove,
   onReject,
   isSubmitting,
 }: PlanApprovalProps) {
   const [secondsLeft, setSecondsLeft] = useState(APPROVAL_SECONDS)
-
   const expiredRef = useRef(false)
 
   useEffect(() => {
+    if (status !== 'pending') return
     expiredRef.current = false
     setSecondsLeft(APPROVAL_SECONDS)
     const t = window.setInterval(() => {
@@ -44,18 +46,19 @@ export function PlanApproval({
       })
     }, 1000)
     return () => window.clearInterval(t)
-  }, [plan])
+  }, [plan, status])
 
   useEffect(() => {
-    if (secondsLeft !== 0 || expiredRef.current) return
+    if (status !== 'pending' || secondsLeft !== 0 || expiredRef.current) return
     expiredRef.current = true
-    onReject()
-  }, [secondsLeft, onReject])
+    onReject('expired')
+  }, [secondsLeft, onReject, status])
 
   const pct = (secondsLeft / APPROVAL_SECONDS) * 100
   const expired = secondsLeft === 0
-
+  const estStt = Number(formatEther(BigInt(plan.estimatedCostWei))).toFixed(4)
   const budgetStt = Number(formatEther(BigInt(plan.budgetWei)))
+
   const blockReason = useMemo(() => {
     if (agent.killSwitch) return 'Kill switch is ON — enable the agent on Agents first.'
     if (budgetStt > Number(agent.maxPerTask)) {
@@ -71,23 +74,35 @@ export function PlanApproval({
     return null
   }, [agent, budgetStt, plan.budgetWei])
 
+  if (status === 'approved') {
+    return (
+      <div className="border border-primary/30 border-l-4 border-l-primary bg-success-soft/60 px-3 py-2.5 text-sm text-primary">
+        Plan approved · {plan.steps.length} steps · {estStt} STT est.
+      </div>
+    )
+  }
+
+  if (status === 'rejected' || status === 'expired') {
+    return (
+      <div className="border border-border-strong bg-muted/40 px-3 py-2.5 text-sm text-muted-foreground">
+        Plan {status === 'expired' ? 'expired' : 'rejected'} — send a new goal to continue.
+      </div>
+    )
+  }
+
   return (
-    <motion.div
-      initial={{ opacity: 0, y: 8 }}
-      animate={{ opacity: 1, y: 0 }}
-      className="rounded-xl border border-primary/30 bg-surface p-5"
-    >
-      <div className="mb-4 flex items-start justify-between gap-3">
-        <div>
-          <p className="text-[10px] font-bold uppercase tracking-wider text-primary">
-            Plan ready — approve within 60s
-          </p>
-          <p className="mt-1 text-sm text-text-muted line-clamp-2">{goal}</p>
+    <div className="max-w-[92%] overflow-hidden border border-border-strong bg-card">
+      <div className="flex items-center justify-between gap-2 border-b border-border px-3 py-2.5">
+        <div className="min-w-0">
+          <p className="text-sm font-semibold text-foreground">Ready to execute</p>
+          <p className="truncate text-sm text-muted-foreground">{goal}</p>
         </div>
         <div
           className={cn(
-            'flex shrink-0 items-center gap-1 rounded-lg px-2 py-1 text-xs font-bold tabular-nums',
-            secondsLeft <= 10 ? 'bg-danger/15 text-danger' : 'bg-primary/15 text-primary',
+            'flex shrink-0 items-center gap-1 px-2 py-0.5 text-xs font-bold tabular-nums',
+            secondsLeft <= 10
+              ? 'bg-destructive/15 text-destructive'
+              : 'bg-primary-bright/30 text-primary',
           )}
         >
           <Clock size={12} />
@@ -95,85 +110,72 @@ export function PlanApproval({
         </div>
       </div>
 
-      <div className="mb-4 h-1 overflow-hidden rounded-full bg-surface-alt">
+      <div className="h-px bg-muted">
         <div
           className={cn(
             'h-full transition-all duration-1000 ease-linear',
-            secondsLeft <= 10 ? 'bg-danger' : 'bg-primary',
+            secondsLeft <= 10 ? 'bg-destructive' : 'bg-primary',
           )}
           style={{ width: `${pct}%` }}
         />
       </div>
 
-      <ol className="mb-4 space-y-2">
-        {plan.steps.map((step, i) => (
-          <li
-            key={`${step.configId}-${i}`}
-            className="rounded-lg border border-border bg-surface-alt/80 px-3 py-2.5"
-          >
-            <div className="flex items-center justify-between gap-2">
-              <span className="text-xs font-bold text-text">
-                {i + 1}. {configIdLabel(step.configId)}
-              </span>
-              <span className="shrink-0 text-[10px] font-semibold text-text-faint">
-                max {Number(formatEther(BigInt(step.maxCostWei))).toFixed(3)} STT
-              </span>
-            </div>
-            <p className="mt-1 line-clamp-2 text-[11px] text-text-muted">{step.payload}</p>
-          </li>
-        ))}
-      </ol>
+      <div className="px-3 py-2.5">
+        <p className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+          Planned steps
+        </p>
+        <PlanStepList steps={plan.steps} compact />
+      </div>
 
-      <div className="mb-4 flex justify-between text-xs text-text-muted">
+      <div className="flex gap-2 border-t border-border px-3 py-2 text-sm text-muted-foreground">
         <span>
-          Estimated{' '}
-          <strong className="text-text">
-            {Number(formatEther(BigInt(plan.estimatedCostWei))).toFixed(4)} STT
-          </strong>
+          est <strong className="text-foreground">{estStt}</strong>
         </span>
         <span>
-          Budget{' '}
-          <strong className="text-text">
-            {Number(formatEther(BigInt(plan.budgetWei))).toFixed(4)} STT
-          </strong>
+          budget <strong className="text-foreground">{budgetStt.toFixed(2)}</strong>
         </span>
+        <span>{plan.steps.length} steps</span>
       </div>
 
       {blockReason && (
-        <p className="mb-4 flex items-start gap-2 rounded-lg border border-danger/30 bg-danger/10 px-3 py-2 text-xs text-danger">
-          <AlertTriangle size={14} className="mt-0.5 shrink-0" />
+        <p className="mx-3 mb-2 flex items-start gap-1.5 border border-destructive/30 bg-destructive/10 px-2 py-1.5 text-sm text-destructive">
+          <AlertTriangle size={12} className="mt-0.5 shrink-0" />
           {blockReason}
         </p>
       )}
 
-      <div className="flex gap-2">
+      <div className="flex gap-1.5 border-t border-border p-2">
         <Button
           type="button"
-          className="flex-1"
+          size="sm"
+          className="h-9 flex-1 text-sm"
           disabled={expired || isSubmitting || Boolean(blockReason)}
           onClick={() => void onApprove()}
         >
           {isSubmitting ? (
             <>
-              <Loader2 size={16} className="animate-spin" />
-              Signing createTask…
+              <Loader2 size={14} className="animate-spin" />
+              Signing…
             </>
           ) : (
             <>
-              <Check size={16} />
-              Approve & create task
+              <Check size={14} />
+              Approve
             </>
           )}
         </Button>
-        <Button type="button" variant="outline" disabled={isSubmitting} onClick={onReject}>
-          <X size={16} />
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          className="h-9 text-sm"
+          disabled={isSubmitting}
+          onClick={() => onReject('user')}
+        >
+          <X size={14} />
           Reject
         </Button>
       </div>
-
-      {expired && (
-        <p className="mt-2 text-center text-xs text-danger">Plan expired — request a new one.</p>
-      )}
-    </motion.div>
+    </div>
   )
 }

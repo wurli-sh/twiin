@@ -17,9 +17,14 @@ const DEFAULT_DEPOSIT = '5'
 type ExternalAgentPanelProps = {
   agents: SubAgentInfo[]
   onUpdated: () => void
+  embedded?: boolean
 }
 
-export function ExternalAgentPanel({ agents, onUpdated }: ExternalAgentPanelProps) {
+export function ExternalAgentPanel({
+  agents,
+  onUpdated,
+  embedded = false,
+}: ExternalAgentPanelProps) {
   const { address, isConnected } = useAccount()
   const { writeContractAsync } = useWriteContract()
   const [name, setName] = useState(DEFAULT_NAME)
@@ -138,25 +143,9 @@ export function ExternalAgentPanel({ agents, onUpdated }: ExternalAgentPanelProp
     }
   }
 
-  return (
-    <div className="rounded-xl border border-border bg-surface p-5">
-      <div className="mb-4 flex items-center gap-2">
-        <div className="flex size-8 items-center justify-center rounded-lg bg-warning/15">
-          <Globe size={16} className="text-warning" />
-        </div>
-        <div>
-          <h2 className="text-sm font-bold text-text">External Agent</h2>
-          <p className="text-xs text-text-faint">Register or update your HTTP competitor</p>
-        </div>
-      </div>
-
-      <p className="text-sm leading-relaxed text-text-muted">
-        This wires a public HTTP worker into the registry with
-        <code className="mx-1 rounded bg-surface-alt px-1 py-0.5 text-xs">web.scrape.discord</code>
-        capability and a 5 STT deposit.
-      </p>
-
-      <div className="mt-4 flex flex-wrap items-center gap-2">
+  const formBody = (
+    <>
+      <div className="flex flex-wrap items-center gap-2">
         <Badge variant={existingAgent ? 'default' : 'warning'}>
           {existingAgent ? `Config #${existingAgent.configId}` : 'Not registered'}
         </Badge>
@@ -168,14 +157,14 @@ export function ExternalAgentPanel({ agents, onUpdated }: ExternalAgentPanelProp
       </div>
 
       {existingAgent?.lastError && (
-        <div className="mt-3 rounded-lg border border-danger/20 bg-danger/5 px-3 py-2 text-xs text-danger">
+        <div className="mt-3 border border-danger/20 bg-danger/5 px-3 py-2 text-xs text-danger">
           Last verify error: {existingAgent.lastError}
         </div>
       )}
 
-      <div className="mt-5 space-y-4">
+      <div className="mt-4 space-y-4">
         <label className="block">
-          <span className="mb-1.5 block text-[10px] font-bold uppercase tracking-wider text-text-faint">
+          <span className="mb-1.5 block text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
             Agent name
           </span>
           <input
@@ -183,12 +172,12 @@ export function ExternalAgentPanel({ agents, onUpdated }: ExternalAgentPanelProp
             value={name}
             onChange={(e) => setName(e.target.value)}
             disabled={!isConnected || !!existingAgent || busy}
-            className="w-full rounded-xl border border-border bg-surface-alt px-3 py-2.5 text-sm text-text outline-none disabled:opacity-50"
+            className="w-full border border-border bg-muted px-3 py-2.5 text-sm text-foreground outline-none disabled:opacity-50"
           />
         </label>
 
         <label className="block">
-          <span className="mb-1.5 block text-[10px] font-bold uppercase tracking-wider text-text-faint">
+          <span className="mb-1.5 block text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
             Public endpoint
           </span>
           <input
@@ -197,30 +186,30 @@ export function ExternalAgentPanel({ agents, onUpdated }: ExternalAgentPanelProp
             onChange={(e) => setEndpointUrl(e.target.value)}
             placeholder="https://discord-bot-twiin.onrender.com"
             disabled={!isConnected || busy}
-            className="w-full rounded-xl border border-border bg-surface-alt px-3 py-2.5 text-sm text-text outline-none disabled:opacity-50"
+            className="w-full border border-border bg-muted px-3 py-2.5 text-sm text-foreground outline-none disabled:opacity-50"
           />
           {endpointError && <p className="mt-1 text-xs text-danger">{endpointError}</p>}
         </label>
 
         <label className="block">
-          <span className="mb-1.5 block text-[10px] font-bold uppercase tracking-wider text-text-faint">
+          <span className="mb-1.5 block text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
             Cost per step
           </span>
-          <div className="flex items-center rounded-xl border border-border bg-surface-alt">
+          <div className="flex items-center border border-border bg-muted">
             <input
               type="text"
               inputMode="decimal"
               value={costStt}
               onChange={(e) => setCostStt(e.target.value.replace(/[^0-9.]/g, ''))}
               disabled={!isConnected || busy}
-              className="w-full bg-transparent px-3 py-2.5 text-sm text-text outline-none disabled:opacity-50"
+              className="w-full bg-transparent px-3 py-2.5 text-sm text-foreground outline-none disabled:opacity-50"
             />
-            <span className="pr-3 text-xs font-semibold text-text-muted">STT</span>
+            <span className="pr-3 text-xs font-semibold text-muted-foreground">STT</span>
           </div>
           {costError && <p className="mt-1 text-xs text-danger">{costError}</p>}
         </label>
 
-        <div className="rounded-xl border border-border bg-surface-alt/70 px-3 py-3 text-xs text-text-muted">
+        <div className="border border-border bg-muted/70 px-3 py-3 text-xs text-muted-foreground">
           <div className="flex items-center gap-2">
             {existingAgent?.isVerified ? (
               <ShieldCheck size={14} className="text-success" />
@@ -228,9 +217,9 @@ export function ExternalAgentPanel({ agents, onUpdated }: ExternalAgentPanelProp
               <ShieldAlert size={14} className="text-warning" />
             )}
             Backend verification is driven by
-            <code className="mx-1 rounded bg-surface px-1 py-0.5">GET /health</code>
+            <code className="mx-1 rounded bg-card px-1 py-0.5">GET /health</code>
             and a signed
-            <code className="mx-1 rounded bg-surface px-1 py-0.5">POST /execute</code>
+            <code className="mx-1 rounded bg-card px-1 py-0.5">POST /execute</code>
             probe.
           </div>
           {existingAgent?.lastVerifiedAt && (
@@ -257,7 +246,39 @@ export function ExternalAgentPanel({ agents, onUpdated }: ExternalAgentPanelProp
             `Register External Agent · ${DEFAULT_DEPOSIT} STT deposit`
           )}
         </Button>
+
+        {!isConnected && (
+          <p className="text-center text-xs text-muted-foreground">
+            Connect wallet to register
+          </p>
+        )}
       </div>
+    </>
+  )
+
+  if (embedded) {
+    return formBody
+  }
+
+  return (
+    <div className="border border-border bg-card p-5">
+      <div className="mb-4 flex items-center gap-2">
+        <div className="flex size-8 items-center justify-center bg-warning/15">
+          <Globe size={16} className="text-warning" />
+        </div>
+        <div>
+          <h2 className="text-sm font-bold text-foreground">External Agent</h2>
+          <p className="text-xs text-muted-foreground">Register or update your HTTP competitor</p>
+        </div>
+      </div>
+
+      <p className="text-sm leading-relaxed text-muted-foreground">
+        This wires a public HTTP worker into the registry with
+        <code className="mx-1 rounded bg-muted px-1 py-0.5 text-xs">web.scrape.discord</code>
+        capability and a 5 STT deposit.
+      </p>
+
+      <div className="mt-4">{formBody}</div>
     </div>
   )
 }

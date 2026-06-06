@@ -1,20 +1,20 @@
 import { useState } from 'react'
 import { Bot, Loader2, RefreshCw } from 'lucide-react'
-import { toast } from 'sonner'
-import { AgentRow } from './AgentRow'
+import { AgentTable } from './AgentTable'
 import type { TwiinAgentInfo } from '@/hooks/useTwiinAgents'
 import { useUIStore } from '@/stores/ui'
 import { cn } from '@/lib/cn'
 
 function SkeletonRow() {
   return (
-    <div className="flex items-center gap-4 p-4">
-      <div className="size-10 animate-pulse rounded-xl bg-surface-alt" />
-      <div className="flex flex-1 flex-col gap-2">
-        <div className="h-3.5 w-32 animate-pulse rounded bg-surface-alt" />
-        <div className="h-2.5 w-48 animate-pulse rounded bg-surface-alt" />
-      </div>
-    </div>
+    <tr className="border-b border-border/40">
+      <td colSpan={6} className="px-3 py-4">
+        <div className="flex items-center gap-4">
+          <div className="size-8 animate-pulse bg-muted" />
+          <div className="h-3 w-48 animate-pulse bg-muted" />
+        </div>
+      </td>
+    </tr>
   )
 }
 
@@ -40,22 +40,21 @@ export function AgentList({
     setTogglingId(agentId)
     try {
       await onToggleKillSwitch(agentId, current)
-      toast.success(current ? 'Agent enabled' : 'Agent frozen')
     } finally {
       setTogglingId(null)
     }
   }
 
   return (
-    <div className="overflow-hidden rounded-xl border border-border">
-      <div className="flex items-center justify-between border-b border-border bg-surface-alt/60 px-4 py-3">
-        <span className="text-xs font-medium uppercase tracking-widest text-text-faint">
+    <div>
+      <div className="mb-3 flex items-center justify-between">
+        <span className="text-xs font-bold uppercase tracking-widest text-primary/80">
           Your Twiins
         </span>
         <button
           type="button"
           onClick={onRefresh}
-          className="inline-flex cursor-pointer items-center gap-1 text-xs font-semibold text-text-muted hover:text-text"
+          className="inline-flex cursor-pointer items-center gap-1 text-xs font-semibold text-muted-foreground hover:text-primary"
         >
           <RefreshCw size={12} className={cn(isLoading && 'animate-spin')} />
           Refresh
@@ -63,47 +62,47 @@ export function AgentList({
       </div>
 
       {error && (
-        <div className="border-b border-danger/20 bg-danger/5 px-4 py-2 text-xs text-danger">
+        <div className="mb-3 border border-destructive/30 bg-destructive/10 px-3 py-2 font-mono text-xs text-destructive">
           {error}
         </div>
       )}
 
       {isLoading && agents.length === 0 && (
-        <div className="divide-y divide-border/40">
-          {Array.from({ length: 2 }).map((_, i) => (
-            <SkeletonRow key={i} />
-          ))}
+        <div className="overflow-x-auto border border-border">
+          <table className="w-full">
+            <tbody>
+              <SkeletonRow />
+              <SkeletonRow />
+            </tbody>
+          </table>
         </div>
       )}
 
       {!isLoading && agents.length === 0 && (
-        <div className="py-16 text-center">
-          <Bot size={24} className="mx-auto mb-3 text-text-faint" />
-          <p className="text-sm font-medium text-text-muted">No agents yet</p>
-          <p className="mt-1 text-xs text-text-faint">
-            Deploy your first Twiin from the panel on the left.
+        <div className="border border-border py-16 text-center">
+          <Bot size={24} className="mx-auto mb-3 text-muted-foreground" />
+          <p className="text-sm font-medium text-muted-foreground">No agents yet</p>
+          <p className="mt-1 text-xs text-muted-foreground">
+            Deploy your first Twiin from the banner above.
           </p>
         </div>
       )}
 
       {agents.length > 0 && (
-        <div>
+        <>
           {isLoading && (
-            <div className="flex items-center gap-2 border-b border-border/40 px-4 py-2 text-xs text-text-faint">
-              <Loader2 size={12} className="animate-spin" />
+            <div className="mb-2 flex items-center gap-2 font-mono text-[10px] text-muted-foreground">
+              <Loader2 size={11} className="animate-spin" />
               Updating…
             </div>
           )}
-          {agents.map((agent) => (
-            <AgentRow
-              key={agent.id.toString()}
-              agent={agent}
-              onSelect={setSelectedAgentId}
-              onToggleKillSwitch={handleToggle}
-              togglingId={togglingId}
-            />
-          ))}
-        </div>
+          <AgentTable
+            agents={agents}
+            onSelect={setSelectedAgentId}
+            onToggleKillSwitch={handleToggle}
+            togglingId={togglingId}
+          />
+        </>
       )}
     </div>
   )
