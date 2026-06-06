@@ -43,20 +43,23 @@ export async function requestPlan(input: {
   goal: string
   personalAgentId: string
   budgetWei: string
+  signal?: AbortSignal
 }): Promise<PlanResponse> {
   const secret = import.meta.env.VITE_PLAN_SECRET as string | undefined
   const headers: Record<string, string> = { 'Content-Type': 'application/json' }
   if (secret) headers['x-plan-secret'] = secret
 
+  const { signal, ...payload } = input
   const res = await fetch('/api/plan', {
     method: 'POST',
     headers,
-    body: JSON.stringify(input),
+    body: JSON.stringify(payload),
+    signal,
   })
 
-  const body = (await res.json()) as PlanResponse | PlanError
+  const responseBody = (await res.json()) as PlanResponse | PlanError
   if (!res.ok) {
-    const err = body as PlanError
+    const err = responseBody as PlanError
     if (
       res.status === 422 &&
       err.estimatedCostWei &&
@@ -67,5 +70,5 @@ export async function requestPlan(input: {
     }
     throw new Error(err.error ?? `Plan failed (${res.status})`)
   }
-  return body as PlanResponse
+  return responseBody as PlanResponse
 }
