@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import { TaskState } from "@twiin/shared";
 import { orchestratorContract, addresses, defaultStartBlock } from "../contracts";
 import { publicClient } from "../clients";
-import { getStepsForTask } from "../db";
+import { getStepsForTask, getTaskMeta } from "../db";
 import { logTaskApi, logTaskTimeline } from "../task-log";
 import {
   fetchTaskCompletion,
@@ -14,6 +14,7 @@ export type TasksRouterDeps = {
     readonly [number, bigint, number, bigint, bigint, bigint, number]
   >;
   getStepsForTask: (taskId: string) => ReturnType<typeof getStepsForTask>;
+  getTaskMeta: (taskId: string) => ReturnType<typeof getTaskMeta>;
   fetchTaskCompletion: (
     taskId: bigint,
   ) => Promise<TaskCompletion | null>;
@@ -29,6 +30,7 @@ export function createTasksRouter(
   const deps: TasksRouterDeps = {
     readTask: (taskId) => orchestratorContract.read.tasks([taskId]),
     getStepsForTask,
+    getTaskMeta,
     fetchTaskCompletion: (taskId) =>
       fetchTaskCompletion(
         publicClient,
@@ -74,6 +76,12 @@ export function createTasksRouter(
     }
 
     const stateName = TaskState[task.state] ?? "Unknown";
+    let taskMeta: Awaited<ReturnType<typeof deps.getTaskMeta>> = null;
+    try {
+      taskMeta = await deps.getTaskMeta(taskId);
+    } catch (error) {
+      console.warn(`[tasks] metadata lookup failed task=${taskId}: ${String(error)}`);
+    }
     logTaskTimeline("task_read", {
       taskId,
       state: task.state,
@@ -81,6 +89,7 @@ export function createTasksRouter(
       cursor: task.cursor,
       spentWei: task.spentWei,
       budgetWei: task.budgetWei,
+      lastAbortReason: taskMeta?.last_abort_reason ?? null,
     });
 
     return new Response(
@@ -95,6 +104,7 @@ export function createTasksRouter(
           deadline: task.deadline,
           state: task.state,
           stateName,
+          lastAbortReason: taskMeta?.last_abort_reason ?? null,
         },
         bigintToStr,
       ),

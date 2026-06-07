@@ -13,6 +13,7 @@ import { listExternalAgents } from "../db";
 import { env, type Env } from "../env";
 import {
   buildTrustlessAgentContext,
+  buildTrustlessIntentGoal,
   computeJaniceCostWei,
   estimateTrustlessBudget,
   exactNativeStepCostWei,
@@ -146,12 +147,13 @@ export function createTrustlessPreflightRouter(
       // Registry context is helpful but non-fatal.
     }
 
+    const intentGoal = buildTrustlessIntentGoal(goal, contextMessage);
+
     return c.json({
       orchestrator: deps.orchestrator,
       createTaskCalldata: encodeCreateTrustlessTask({
         personalAgentId: BigInt(personalAgentId),
-        goal,
-        contextMessage,
+        goal: intentGoal,
         budgetWei: budget,
       }),
       budgetWei,

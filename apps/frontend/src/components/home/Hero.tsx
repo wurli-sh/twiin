@@ -53,10 +53,10 @@ export function Hero() {
             className="mt-6 max-w-lg text-pretty text-base text-muted-foreground sm:text-lg"
             variants={fadeInLeft}
           >
-            Mint a Twiin NFT with its own wallet, approve a Claude plan once, and let keepers run
-            every step on Somnia —{' '}
+            Mint a Twiin NFT with its own wallet, approve a Claude plan once, and hire
+            Somnia-native sub-agents —{' '}
             <HighlightedText from="bottom" variant="ink">
-              consensus oracle feeds included
+              every step is consensus-verified on-chain
             </HighlightedText>
             .
           </motion.p>

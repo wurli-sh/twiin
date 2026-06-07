@@ -10,12 +10,16 @@ import { publicClient } from "../clients";
 import { deployment, orchestratorContract, agentRegistryContract } from "../contracts";
 import {
   getStepsForTask,
+  listTrustlessTasksAwaitingJanice,
   listTrustlessTasksAwaitingResume,
+  patchTrustlessTask,
   listTrustlessTurns,
 } from "../db";
+import { logTaskTimeline } from "../task-log";
 import { computeJaniceCostWei } from "../trustless";
 
 const POLL_MS = 5_000;
+const JANICE_STUCK_AFTER_MS = 30_000;
 
 const AgentsApiAbi = [
   {
@@ -28,9 +32,11 @@ const AgentsApiAbi = [
 ] as const;
 
 type ResumeDeps = {
+  listTrustlessTasksAwaitingJanice: typeof listTrustlessTasksAwaitingJanice;
   listTrustlessTasksAwaitingResume: typeof listTrustlessTasksAwaitingResume;
   listTrustlessTurns: typeof listTrustlessTurns;
   getStepsForTask: typeof getStepsForTask;
+  patchTrustlessTask: typeof patchTrustlessTask;
   readTask: (
     taskId: bigint,
   ) => Promise<readonly [number, bigint, number, bigint, bigint, bigint, number]>;
@@ -48,9 +54,11 @@ export function createTrustlessResumeKeeper(
   overrides: Partial<ResumeDeps> = {},
 ) {
   const deps: ResumeDeps = {
+    listTrustlessTasksAwaitingJanice,
     listTrustlessTasksAwaitingResume,
     listTrustlessTurns,
     getStepsForTask,
+    patchTrustlessTask,
     readTask: (taskId) => orchestratorContract.read.tasks([taskId]),
     readTrustlessContext: (taskId) => orchestratorContract.read.trustlessCtx([taskId]),
     readJaniceCost: async () => {
@@ -70,26 +78,162 @@ export function createTrustlessResumeKeeper(
 
   let running = false;
 
-  async function tick(): Promise<void> {
-    const tasks = await deps.listTrustlessTasksAwaitingResume();
+  async function scanJaniceStalls(): Promise<void> {
+    const tasks = await deps.listTrustlessTasksAwaitingJanice();
     if (tasks.length === 0) return;
-    const janiceCostWei = await deps.readJaniceCost();
+    const now = Date.now();
 
     for (const task of tasks) {
+      const taskId = task.task_id;
       try {
-        const chainTask = await deps.readTask(BigInt(task.task_id));
+        const chainTask = await deps.readTask(BigInt(taskId));
         const deadline = Number(chainTask[5]);
         const state = Number(chainTask[6]);
-        if (state !== TaskState.Running) continue;
-        if (deadline > 0 && deadline <= Math.floor(Date.now() / 1000)) continue;
-        const trustlessCtx = await deps.readTrustlessContext(BigInt(task.task_id));
+        if (state !== TaskState.Running) {
+          await deps.patchTrustlessTask(taskId, {
+            awaiting: TrustlessAwaiting.Done,
+            lastResumeReason: "janice_watch_stopped_task_not_running",
+          });
+          continue;
+        }
+
+        const trustlessCtx = await deps.readTrustlessContext(BigInt(taskId));
         const chainAwaiting = Number(trustlessCtx[3]);
         const chainIterations = Number(trustlessCtx[1]);
         const chainMaxIterations = Number(trustlessCtx[2]);
-        if (chainAwaiting !== TrustlessAwaiting.Resume) continue;
-        if (chainIterations >= chainMaxIterations) continue;
+        const chainRequestId = trustlessCtx[4]?.toString?.() ?? null;
 
-        const turns = (await deps.listTrustlessTurns(task.task_id)).map<TrustlessTurnInput>(
+        if (chainAwaiting !== TrustlessAwaiting.Janice) {
+          await deps.patchTrustlessTask(taskId, {
+            awaiting:
+              chainAwaiting >= TrustlessAwaiting.Janice &&
+                chainAwaiting <= TrustlessAwaiting.Done
+                ? chainAwaiting
+                : TrustlessAwaiting.Done,
+            janiceRequestId: chainRequestId,
+            lastResumeReason: "janice_watch_chain_not_awaiting_janice",
+          });
+          continue;
+        }
+
+        const ageMs = Math.max(0, now - task.updated_at * 1000);
+        if (ageMs < JANICE_STUCK_AFTER_MS) continue;
+
+        await deps.patchTrustlessTask(taskId, {
+          janiceRequestId: chainRequestId,
+          lastResumeReason: "janice_callback_stuck",
+        });
+        logTaskTimeline("trustless_janice_stuck", {
+          taskId,
+          chainIterations,
+          chainMaxIterations,
+          chainRequestId,
+          ageMs,
+          taskDeadline: deadline,
+          note: "No JaniceIteration observed after trustless_janice_pending; upstream Somnia Agents callback may be stalled.",
+        });
+      } catch (error) {
+        logTaskTimeline("trustless_janice_watch_error", {
+          taskId,
+          error: String(error),
+        });
+        deps.logger.warn(
+          `[trustless-resume] janice watch skipped task=${taskId}: ${String(error)}`,
+        );
+      }
+    }
+  }
+
+  async function tick(): Promise<void> {
+    await scanJaniceStalls();
+
+    const tasks = await deps.listTrustlessTasksAwaitingResume();
+    if (tasks.length === 0) return;
+    const janiceCostWei = await deps.readJaniceCost();
+    logTaskTimeline("trustless_resume_scan", {
+      taskCount: tasks.length,
+      janiceCostWei: janiceCostWei.toString(),
+    });
+
+    for (const task of tasks) {
+      const taskId = task.task_id;
+      try {
+        const chainTask = await deps.readTask(BigInt(taskId));
+        const deadline = Number(chainTask[5]);
+        const state = Number(chainTask[6]);
+        const now = Math.floor(Date.now() / 1000);
+        logTaskTimeline("trustless_resume_task_scan", {
+          taskId,
+          dbAwaiting: task.awaiting,
+          dbIterations: task.iterations,
+          dbMaxIterations: task.max_iterations,
+          lastResumeReason: task.last_resume_reason,
+          chainState: state,
+          deadline,
+          now,
+        });
+        if (state !== TaskState.Running) {
+          await deps.patchTrustlessTask(taskId, {
+            awaiting: TrustlessAwaiting.Done,
+            lastResumeReason: "resume_stopped_task_not_running",
+          });
+          logTaskTimeline("trustless_resume_skip", {
+            taskId,
+            reason: "task_not_running",
+            chainState: state,
+          });
+          continue;
+        }
+        if (deadline > 0 && deadline <= now) {
+          await deps.patchTrustlessTask(taskId, {
+            awaiting: TrustlessAwaiting.Done,
+            lastResumeReason: "resume_stopped_task_deadline_elapsed",
+          });
+          logTaskTimeline("trustless_resume_skip", {
+            taskId,
+            reason: "task_deadline_elapsed",
+            deadline,
+            now,
+          });
+          continue;
+        }
+        const trustlessCtx = await deps.readTrustlessContext(BigInt(taskId));
+        const chainAwaiting = Number(trustlessCtx[3]);
+        const chainIterations = Number(trustlessCtx[1]);
+        const chainMaxIterations = Number(trustlessCtx[2]);
+        if (chainAwaiting !== TrustlessAwaiting.Resume) {
+          await deps.patchTrustlessTask(taskId, {
+            awaiting:
+              chainAwaiting >= TrustlessAwaiting.Janice &&
+                chainAwaiting <= TrustlessAwaiting.Done
+                ? chainAwaiting
+                : TrustlessAwaiting.Done,
+            lastResumeReason: "resume_stopped_chain_not_awaiting_resume",
+          });
+          logTaskTimeline("trustless_resume_skip", {
+            taskId,
+            reason: "chain_not_awaiting_resume",
+            chainAwaiting,
+            chainIterations,
+            chainMaxIterations,
+          });
+          continue;
+        }
+        if (chainIterations >= chainMaxIterations) {
+          await deps.patchTrustlessTask(taskId, {
+            awaiting: TrustlessAwaiting.Done,
+            lastResumeReason: "resume_stopped_max_iterations_reached",
+          });
+          logTaskTimeline("trustless_resume_skip", {
+            taskId,
+            reason: "max_iterations_reached",
+            chainIterations,
+            chainMaxIterations,
+          });
+          continue;
+        }
+
+        const turns = (await deps.listTrustlessTurns(taskId)).map<TrustlessTurnInput>(
           (turn) => ({
             iteration: turn.iteration,
             finishReason: turn.finish_reason,
@@ -97,7 +241,7 @@ export function createTrustlessResumeKeeper(
             ...safeParseTurnContext(turn.tool_calls_json),
           }),
         );
-        const steps = (await deps.getStepsForTask(task.task_id)).map<TrustlessStepInput>(
+        const steps = (await deps.getStepsForTask(taskId)).map<TrustlessStepInput>(
           (step) => ({
             stepIdx: step.step_idx,
             state: step.state,
@@ -106,20 +250,54 @@ export function createTrustlessResumeKeeper(
             score: step.score,
           }),
         );
+        logTaskTimeline("trustless_resume_build", {
+          taskId,
+          turnCount: turns.length,
+          stepCount: steps.length,
+          chainIterations,
+          chainMaxIterations,
+          lastTurnFinishReason: turns.at(-1)?.finishReason ?? null,
+          stepStates: steps.map((step) => ({
+            stepIdx: step.stepIdx,
+            state: step.state,
+            score: step.score,
+            hasResult: step.resultHex != null,
+          })),
+        });
 
         const resumePayload = buildTrustlessResumePayload({
           goal: task.goal,
           turns,
           steps,
         });
+        logTaskTimeline("trustless_resume_submitting", {
+          taskId,
+          payloadBytes: (resumePayload.length - 2) / 2,
+          janiceCostWei: janiceCostWei.toString(),
+        });
         await deps.resumeTrustlessTask([
-          BigInt(task.task_id),
+          BigInt(taskId),
           resumePayload,
           janiceCostWei,
         ]);
+        logTaskTimeline("trustless_resume_submitted", {
+          taskId,
+          chainIterations,
+          chainMaxIterations,
+        });
       } catch (error) {
+        if (isBudgetExhaustedError(error)) {
+          await deps.patchTrustlessTask(taskId, {
+            awaiting: TrustlessAwaiting.Done,
+            lastResumeReason: "resume_budget_exhausted",
+          });
+        }
+        logTaskTimeline("trustless_resume_error", {
+          taskId,
+          error: String(error),
+        });
         deps.logger.warn(
-          `[trustless-resume] resume skipped task=${task.task_id}: ${String(error)}`,
+          `[trustless-resume] resume skipped task=${taskId}: ${String(error)}`,
         );
       }
     }
@@ -144,6 +322,10 @@ export function createTrustlessResumeKeeper(
     },
     tick,
   };
+}
+
+function isBudgetExhaustedError(error: unknown): boolean {
+  return String(error).includes("BudgetExhausted()");
 }
 
 function safeParseTurnContext(raw: string): Pick<

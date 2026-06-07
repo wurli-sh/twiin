@@ -11,6 +11,7 @@ export type PlanResponse = {
   orchestrator: `0x${string}`
   estimatedCostWei: string
   budgetWei: string
+  verificationTier?: 'corroborated' | 'single'
 }
 
 export type PlanError = {

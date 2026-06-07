@@ -1,4 +1,4 @@
-import { SquarePen } from 'lucide-react'
+import { ListChecks, SquarePen } from 'lucide-react'
 import { ENABLE_TRUSTLESS_JANICE, type ExecutionMode } from '@/config/features'
 import type { TwiinAgentInfo } from '@/hooks/useTwiinAgents'
 import { AgentSelector } from '@/components/console/AgentSelector'
@@ -23,6 +23,10 @@ type Props = {
   maxPerTaskNum: number
   modeToggleDisabled?: boolean
   agentSelectorDisabled?: boolean
+  showStepsToggle?: boolean
+  stepsToggleActive?: boolean
+  stepProgressLabel?: string | null
+  onStepsToggle?: () => void
 }
 
 export function ConsoleTopBar({
@@ -42,6 +46,10 @@ export function ConsoleTopBar({
   maxPerTaskNum,
   modeToggleDisabled = false,
   agentSelectorDisabled = false,
+  showStepsToggle = false,
+  stepsToggleActive = false,
+  stepProgressLabel = null,
+  onStepsToggle,
 }: Props) {
   return (
     <div className="sticky top-0 z-30 shrink-0 border-b border-border/80 bg-background/95 pb-2 backdrop-blur-sm">
@@ -64,6 +72,28 @@ export function ConsoleTopBar({
         </div>
 
         <div className="flex shrink-0 items-center gap-2">
+          {showStepsToggle && onStepsToggle && (
+            <button
+              type="button"
+              onClick={onStepsToggle}
+              aria-pressed={stepsToggleActive}
+              className={cn(
+                'flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-xs font-medium transition-colors',
+                stepsToggleActive
+                  ? 'border-primary/40 bg-primary-bright/15 text-primary'
+                  : 'border-border-strong text-muted-foreground hover:border-primary hover:bg-primary-bright/10 hover:text-primary',
+              )}
+            >
+              <ListChecks size={12} />
+              <span className="hidden sm:inline">Steps</span>
+              {stepProgressLabel && (
+                <span className="rounded bg-muted px-1 py-px font-mono text-[10px] tabular-nums">
+                  {stepProgressLabel}
+                </span>
+              )}
+            </button>
+          )}
+
           {ENABLE_TRUSTLESS_JANICE && (
             <ExecutionModeToggle
               mode={executionMode}

@@ -2,6 +2,8 @@ import { useState, useEffect, useCallback } from 'react'
 import { motion } from 'framer-motion'
 import { formatEther, parseEther } from 'viem'
 import { TranscriptPanel } from '@/components/console/TranscriptPanel'
+import { ExecutionSidebar } from '@/components/console/ExecutionSidebar'
+import { getExecutionStepSummary } from '@/components/console/ExecutionPanel'
 import { CommandBar } from '@/components/console/CommandBar'
 import { ConsoleTopBar } from '@/components/console/ConsoleTopBar'
 import { SuggestedPrompts } from '@/components/console/SuggestedPrompts'
@@ -22,8 +24,8 @@ import {
   isTrustlessBudgetTooLowError,
 } from '@/lib/trustless-api'
 import { maxTaskBudgetStt, perTaskCapStt } from '@/lib/agent-budget'
-import { ENABLE_TRUSTLESS_JANICE, type ExecutionMode } from '@/config/features'
-import { executionModeTheme } from '@/lib/execution-mode-theme'
+import type { ExecutionMode } from '@/config/features'
+import { consolePageTheme } from '@/lib/execution-mode-theme'
 import { cn } from '@/lib/cn'
 import { type AgentStatusPhase } from '@/lib/agent-status-copy'
 import {
@@ -32,9 +34,10 @@ import {
   getPendingPlanForTurn,
   removeStatusEntriesForTurn,
   getLastUserGoal,
+  getCurrentTurnExecution,
   type SessionEntry,
 } from '@/lib/console-session'
-import { formatTaskResultForDisplay } from '@/lib/task-result-display'
+import { resolveTaskReportText } from '@/lib/task-result-display'
 import { TaskState } from '@/config/contracts'
 import type { ChainTask, TaskStep } from '@/hooks/useTaskDetail'
 import { somniaTestnet } from '@/config/chains'
@@ -89,19 +92,25 @@ function appendResultForTask(
   }
 
   const planEntry = getPlanForExecution(entries, taskId)
+  const planSteps = planEntry?.kind === 'plan' ? planEntry.plan.steps : undefined
   const isAborted = chainTask.state === TaskState.Aborted
-  const displayText = isAborted
-    ? abortReason ?? 'Task aborted'
-    : rawResult
-      ? formatTaskResultForDisplay(
-          rawResult,
-          chainSteps,
-          planEntry?.kind === 'plan' ? planEntry.plan.steps : undefined,
-        )
-      : chainTask.state === TaskState.Completed
-        ? 'Task completed.'
-        : null
 
+  if (isAborted) {
+    return [
+      ...entries,
+      {
+        id: createEntryId(),
+        kind: 'result',
+        taskId,
+        text: abortReason ?? 'Task aborted',
+        spent: Number(chainTask.spent).toFixed(4),
+        budget: Number(chainTask.budget).toFixed(4),
+        aborted: true,
+      },
+    ]
+  }
+
+  const displayText = resolveTaskReportText(rawResult, chainSteps, planSteps)
   if (!displayText) return entries
 
   return [
@@ -131,11 +140,11 @@ export function ConsolePage() {
   const [isPlanning, setIsPlanning] = useState(false)
   const [isApproving, setIsApproving] = useState(false)
   const [isRaisingCaps, setIsRaisingCaps] = useState(false)
-  const [executionMode, setExecutionMode] = useState<ExecutionMode>(
-    ENABLE_TRUSTLESS_JANICE ? 'trustless' : 'claude',
-  )
+  const [executionMode, setExecutionMode] = useState<ExecutionMode>('claude')
   const [activeTaskId, setActiveTaskId] = useState<string | null>(null)
   const [detailVersion, setDetailVersion] = useState(0)
+  const [executionPanelOpen, setExecutionPanelOpen] = useState(true)
+  const [mobileExecutionPanelOpen, setMobileExecutionPanelOpen] = useState(false)
 
   const { submitCreateTask } = useCreateTask()
   const { submitCreateTrustlessTask } = useCreateTrustlessTask()
@@ -189,7 +198,16 @@ export function ConsolePage() {
   const submitDisabled = composerLocked || hasBudgetIssue
 
   const hasActivity = sessionEntries.length > 0
-  const modeTheme = executionModeTheme(executionMode)
+  const currentTurnExecution = getCurrentTurnExecution(sessionEntries)
+  const stepSummary = getExecutionStepSummary(
+    sessionEntries,
+    chainSteps,
+    currentTurnExecution?.taskId,
+    activeTaskId,
+  )
+  const stepProgressLabel =
+    stepSummary && taskRunning ? `${stepSummary.done}/${stepSummary.total}` : null
+  const modeTheme = consolePageTheme()
   const modeToggleDisabled = isPlanning || isApproving || hasActivity
 
   const appendEntry = useCallback((entry: SessionEntry) => {
@@ -269,6 +287,48 @@ export function ConsolePage() {
     streamedCompletedResult,
     streamedAbortReason,
     events,
+  ])
+
+  useEffect(() => {
+    if (!activeTaskId || !chainTask || chainTask.state !== TaskState.Completed) return
+    if (sessionEntries.some((e) => e.kind === 'result' && e.taskId === activeTaskId)) return
+
+    const planEntry = getPlanForExecution(sessionEntries, activeTaskId)
+    const planSteps = planEntry?.kind === 'plan' ? planEntry.plan.steps : undefined
+    const rawResult = taskCompletion?.decoded ?? streamedCompletedResult
+    if (resolveTaskReportText(rawResult, chainSteps, planSteps)) return
+
+    const timeout = window.setTimeout(() => {
+      setSessionEntries((prev) => {
+        if (prev.some((e) => e.kind === 'result' && e.taskId === activeTaskId)) return prev
+        const plan = getPlanForExecution(prev, activeTaskId)
+        const steps = plan?.kind === 'plan' ? plan.plan.steps : undefined
+        const text =
+          resolveTaskReportText(rawResult, chainSteps, steps) ??
+          '### Task complete\n\n_Report is still syncing from chain. Check the execution panel for step outputs._'
+        return [
+          ...prev,
+          {
+            id: createEntryId(),
+            kind: 'result',
+            taskId: activeTaskId,
+            text,
+            spent: Number(chainTask.spent).toFixed(4),
+            budget: Number(chainTask.budget).toFixed(4),
+            aborted: false,
+          },
+        ]
+      })
+    }, 48_000)
+
+    return () => window.clearTimeout(timeout)
+  }, [
+    activeTaskId,
+    chainTask,
+    chainSteps,
+    taskCompletion,
+    streamedCompletedResult,
+    sessionEntries,
   ])
 
   async function runPlan(trimmedGoal: string, budget: string) {
@@ -605,6 +665,16 @@ export function ConsolePage() {
     setGoal('')
     setPlanMismatch(null)
     setDetailVersion(0)
+    setExecutionPanelOpen(true)
+    setMobileExecutionPanelOpen(false)
+  }
+
+  function handleStepsToggle() {
+    if (window.matchMedia('(min-width: 1024px)').matches) {
+      setExecutionPanelOpen((open) => !open)
+      return
+    }
+    setMobileExecutionPanelOpen((open) => !open)
   }
 
   function handlePromptSelect(prompt: string) {
@@ -627,7 +697,7 @@ export function ConsolePage() {
 
   return (
     <div className="flex h-full flex-col overflow-hidden">
-      <div className="mx-auto flex h-full w-full max-w-5xl flex-col">
+      <div className="flex h-full w-full flex-col">
         <ConsoleTopBar
           hasActivity={hasActivity}
           executionMode={executionMode}
@@ -645,6 +715,10 @@ export function ConsolePage() {
           maxPerTaskNum={maxPerTaskNum}
           modeToggleDisabled={modeToggleDisabled}
           agentSelectorDisabled={isPlanning || isApproving}
+          showStepsToggle={hasActivity}
+          stepsToggleActive={executionPanelOpen || mobileExecutionPanelOpen}
+          stepProgressLabel={stepProgressLabel}
+          onStepsToggle={handleStepsToggle}
         />
 
         {!hasActivity ? (
@@ -691,9 +765,7 @@ export function ConsolePage() {
                 {' '}today?
               </h2>
               <p className={cn('mt-1.5 text-sm', modeTheme.subtitle)}>
-                {executionMode === 'trustless'
-                  ? 'Trustless mode submits directly after preflight and bypasses plan approval.'
-                  : 'Claude plans your steps — you approve, then keepers execute on Somnia.'}
+                Plan your steps, approve on-chain, and let keepers execute on Somnia.
               </p>
             </motion.div>
 
@@ -720,42 +792,56 @@ export function ConsolePage() {
             </motion.div>
           </div>
         ) : (
-          <>
-            <TranscriptPanel
-              sessionEntries={sessionEntries}
-              agent={agent}
-              isApproving={isApproving}
-              planMismatch={planMismatch}
-              isRaisingCaps={isRaisingCaps}
-              activeTaskId={activeTaskId}
-              events={events}
-              connected={connected}
-              chainTask={chainTask}
+          <div className="flex min-h-0 flex-1">
+            <div className="flex min-w-0 flex-1 flex-col">
+              <TranscriptPanel
+                sessionEntries={sessionEntries}
+                agent={agent}
+                isApproving={isApproving}
+                planMismatch={planMismatch}
+                isRaisingCaps={isRaisingCaps}
+                activeTaskId={activeTaskId}
+                events={events}
+                connected={connected}
+                chainTask={chainTask}
+                chainSteps={chainSteps}
+                onApprove={handleApprove}
+                onReject={handleRejectPlan}
+                onSetBudgetAndRetry={(b) => void handleSetBudgetAndRetry(b)}
+                onRaiseCapsAndRetry={(e) => void handleRaiseCapsAndRetry(e)}
+                onDismissMismatch={() => setPlanMismatch(null)}
+                executionMode={executionMode}
+              />
+
+              <div className="pointer-events-none relative z-10 -mt-12 h-12 bg-gradient-to-t from-background to-transparent" />
+
+              <div className="shrink-0 px-4 pt-1 pb-2">
+                <CommandBar
+                  goal={goal}
+                  budgetStt={budgetStt}
+                  onGoalChange={setGoal}
+                  onBudgetChange={setBudgetStt}
+                  onSubmit={() => void handlePlan()}
+                  disabled={composerLocked}
+                  submitDisabled={submitDisabled}
+                  isPlanning={isPlanning}
+                  showHint={false}
+                />
+              </div>
+            </div>
+
+            <ExecutionSidebar
+              open={executionPanelOpen}
+              mobileOpen={mobileExecutionPanelOpen}
+              onMobileClose={() => setMobileExecutionPanelOpen(false)}
+              entries={sessionEntries}
               chainSteps={chainSteps}
-              onApprove={handleApprove}
-              onReject={handleRejectPlan}
-              onSetBudgetAndRetry={(b) => void handleSetBudgetAndRetry(b)}
-              onRaiseCapsAndRetry={(e) => void handleRaiseCapsAndRetry(e)}
-              onDismissMismatch={() => setPlanMismatch(null)}
+              chainTaskState={chainTask?.state}
+              activeExecutionTaskId={currentTurnExecution?.taskId}
+              hookTaskId={activeTaskId}
               executionMode={executionMode}
             />
-
-            <div className="pointer-events-none relative z-10 -mt-12 h-12 bg-gradient-to-t from-background to-transparent" />
-
-            <div className="shrink-0 px-4 pt-1 pb-2">
-              <CommandBar
-                goal={goal}
-                budgetStt={budgetStt}
-                onGoalChange={setGoal}
-                onBudgetChange={setBudgetStt}
-                onSubmit={() => void handlePlan()}
-                disabled={composerLocked}
-                submitDisabled={submitDisabled}
-                isPlanning={isPlanning}
-                showHint={false}
-              />
-            </div>
-          </>
+          </div>
         )}
       </div>
     </div>

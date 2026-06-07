@@ -6,6 +6,7 @@ import {
   NativeConfigId,
 } from "@twiin/shared";
 import {
+  buildTrustlessIntentGoal,
   computeJaniceCostWei,
   estimateTrustlessBudget,
   exactNativeStepCostWei,
@@ -74,5 +75,17 @@ describe("trustless helpers", () => {
     };
     expect(toolMessage.tool_call_id).toBe("call_resume_1");
     expect(toolMessage.content).toContain("Step 0");
+  });
+
+  it("builds a compact deterministic trustless intent for Somnia stats goals", () => {
+    const goal = buildTrustlessIntentGoal(
+      "Fetch Somnia ecosystem stats: price, 24h change, market cap, and 24h volume",
+      "very long agent catalog here",
+    );
+
+    expect(goal).toContain("Round 1: call hireSubAgent with configId 2.");
+    expect(goal).toContain("completeTrustlessTask");
+    expect(goal).not.toContain("Available sub-agents");
+    expect(goal).not.toContain("very long agent catalog here");
   });
 });

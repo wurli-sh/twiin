@@ -2,14 +2,14 @@ import { useRef, useEffect } from 'react'
 import { motion } from 'framer-motion'
 import { PlanApproval } from './PlanApproval'
 import { PlanBudgetRecovery, type PlanBudgetMismatch } from './PlanBudgetRecovery'
-import { TaskProgressBar } from './TaskProgressBar'
 import { TaskResultCard } from './TaskResultCard'
+import { ReportPendingCard } from './ReportPendingCard'
 import { AgentStatusLine } from './AgentStatusLine'
 import { TrustlessPreflightCard } from './TrustlessPreflightCard'
 import { TrustlessEventLine } from './TrustlessEventLine'
 import { isTrustlessStreamEvent } from '@/hooks/useTaskStream'
 import type { ExecutionMode } from '@/config/features'
-import { executionModeTheme } from '@/lib/execution-mode-theme'
+import { consolePageTheme } from '@/lib/execution-mode-theme'
 import { cn } from '@/lib/cn'
 import { TaskState } from '@/config/contracts'
 import {
@@ -88,11 +88,18 @@ export function TranscriptPanel({
   onDismissMismatch,
   executionMode = 'claude',
 }: Props) {
-  const modeTheme = executionModeTheme(executionMode)
+  const modeTheme = consolePageTheme()
   const bottomRef = useRef<HTMLDivElement>(null)
   const activeExecutionId = sessionEntries.findLast((e) => e.kind === 'execution')?.id
   const currentTurnExecution = getCurrentTurnExecution(sessionEntries)
   const trustlessEvents = events.filter((ev) => isTrustlessStreamEvent(ev.type))
+  const pendingReportTaskId =
+    activeTaskId &&
+    currentTurnExecution?.taskId === activeTaskId &&
+    chainTask?.state === TaskState.Completed &&
+    !sessionEntries.some((e) => e.kind === 'result' && e.taskId === activeTaskId)
+      ? activeTaskId
+      : null
 
   useEffect(() => {
     requestAnimationFrame(() => {
@@ -102,18 +109,7 @@ export function TranscriptPanel({
 
   return (
     <div className={cn('flex-1 overflow-y-auto scrollbar-custom', modeTheme.transcript)}>
-      {sessionEntries.length > 0 && (
-        <TaskProgressBar
-          entries={sessionEntries}
-          chainSteps={chainSteps}
-          chainTaskState={chainTask?.state}
-          activeExecutionTaskId={currentTurnExecution?.taskId}
-          hookTaskId={activeTaskId}
-          executionMode={executionMode}
-        />
-      )}
-
-      <div className="mx-auto max-w-5xl px-3 pt-1.5 pb-3 sm:px-4">
+      <div className="mx-auto max-w-3xl px-3 pt-1.5 pb-3 sm:px-4">
         {sessionEntries.map((entry, index) => {
           const prevEntry = index > 0 ? sessionEntries[index - 1] : null
           const showTurnDivider = entry.kind === 'user' && prevEntry?.kind === 'result'
@@ -260,6 +256,12 @@ export function TranscriptPanel({
             <TrustlessEventLine event={ev} />
           </AgentBlock>
         ))}
+
+        {pendingReportTaskId && (
+          <AgentBlock>
+            <ReportPendingCard taskId={pendingReportTaskId} />
+          </AgentBlock>
+        )}
 
         {isApproving && !sessionEntries.some((e) => e.kind === 'execution') && (
           <AgentBlock>

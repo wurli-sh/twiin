@@ -58,6 +58,11 @@ export function executionModeTheme(mode: ExecutionMode): ExecutionModeTheme {
   return mode === 'trustless' ? TRUSTLESS_THEME : CLAUDE_THEME
 }
 
+/** Console UI always uses the Janice (trustless) palette; Claude tokens remain in CSS. */
+export function consolePageTheme(): ExecutionModeTheme {
+  return TRUSTLESS_THEME
+}
+
 export function executionModeClasses(
   mode: ExecutionMode,
   active: boolean,

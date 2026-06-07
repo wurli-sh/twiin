@@ -12,7 +12,7 @@ import {
   TrendingUp,
 } from 'lucide-react'
 import type { ExecutionMode } from '@/config/features'
-import { executionModeTheme } from '@/lib/execution-mode-theme'
+import { consolePageTheme } from '@/lib/execution-mode-theme'
 import { cn } from '@/lib/cn'
 import {
   budgetUsagePercent,
@@ -174,9 +174,10 @@ export function TaskResultCard({
   budget,
   aborted,
   taskId,
-  executionMode = 'claude',
+  executionMode: _executionMode = 'claude',
 }: Props) {
-  const modeTheme = executionModeTheme(executionMode)
+  void _executionMode
+  const modeTheme = consolePageTheme()
 
   if (aborted) {
     return (

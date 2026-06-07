@@ -229,6 +229,8 @@ Available sub-agents (use their configId):
 For research / "should I LP" / unknown-token goals without a known CoinGecko id: use analysis-bot then reporter-bot (2 steps). Do NOT invent CoinGecko search URLs.
 If the user did not provide a concrete HTTPS URL, do not invent one. Prefer analysis/reporter or a verified external agent instead.
 
+For verification goals (stats, sentiment, market snapshots): never rely on a single source. Corroborate across web-intel (parse) + somnia-oracle (JSON) + analysis-bot synthesis.
+
 ${AGENT_CONTEXT_HEADER}
 `.trim();
 
@@ -277,13 +279,95 @@ function somniaSentimentOracleStep(
   };
 }
 
-function buildSomniaSentimentTemplate(): StepSpec[] {
-  // Fast json.fetch steps (no LLM). Results appear per-step in the console.
+type SomniaTemplate = {
+  steps: StepSpec[];
+  verificationTier: "corroborated" | "single";
+};
+
+/** Tsugu-inspired M-of-N corroboration: Parse + JSON + analysis + report. */
+function buildSomniaCorroboratedTemplate(): SomniaTemplate {
+  return {
+    verificationTier: "corroborated",
+    steps: [
+      {
+        configId: NativeConfigId.WEB_INTEL,
+        payload: JSON.stringify({
+          url: "https://somnia.network",
+          prompt:
+            "Extract any live Somnia network metrics shown on the page (TPS, validators, ecosystem stats). Return concise facts only.",
+        }),
+        maxCostWei: "0",
+        timeoutSeconds: 120,
+      },
+      somniaSentimentOracleStep("somnia.usd", { decimals: 8 }),
+      somniaSentimentOracleStep("somnia.usd_24h_change"),
+      somniaSentimentOracleStep("somnia.usd_market_cap", { decimals: 8 }),
+      somniaSentimentOracleStep("somnia.usd_24h_vol", { decimals: 8 }),
+      {
+        configId: NativeConfigId.ANALYSIS,
+        payload:
+          "Corroborate ONLY prior step outputs (web scrape + JSON oracle fields). Compare sources on price, 24h change, market cap, and volume. If key numerics disagree materially, set confidence <= 50. If they agree, confidence >= 85. Output JSON: {confidence, priceUsd, change24h, marketCapUsd, volume24hUsd, agreementNotes}.",
+        maxCostWei: "0",
+        timeoutSeconds: 120,
+      },
+      {
+        configId: NativeConfigId.REPORTER,
+        payload:
+          "Write a concise Somnia stats/sentiment snapshot for the user using ONLY prior step outputs. Include the confidence score from the analysis step.",
+        maxCostWei: "0",
+        timeoutSeconds: 120,
+      },
+    ],
+  };
+}
+
+function buildSomniaSentimentFallbackTemplate(): SomniaTemplate {
+  return {
+    verificationTier: "single",
+    steps: [
+      somniaSentimentOracleStep("somnia.usd", { decimals: 8 }),
+      somniaSentimentOracleStep("somnia.usd_24h_change"),
+      {
+        configId: NativeConfigId.REPORTER,
+        payload:
+          'Write a concise Somnia sentiment snapshot for the user using ONLY prior step outputs. Include price and 24h change. State clearly that this is a lower-budget single-source oracle summary and avoid implying multi-source verification.',
+        maxCostWei: "0",
+        timeoutSeconds: 120,
+      },
+    ],
+  };
+}
+
+function buildSomniaStatsFallbackTemplate(): SomniaTemplate {
+  return {
+    verificationTier: "single",
+    steps: [
+      somniaSentimentOracleStep("somnia.usd", { decimals: 8 }),
+      somniaSentimentOracleStep("somnia.usd_24h_change"),
+      somniaSentimentOracleStep("somnia.usd_market_cap", { decimals: 8 }),
+      somniaSentimentOracleStep("somnia.usd_24h_vol", { decimals: 8 }),
+      {
+        configId: NativeConfigId.REPORTER,
+        payload:
+          "Write a concise Somnia stats snapshot for the user using ONLY prior step outputs. Include price, 24h change, market cap, and 24h volume. State clearly that this is a lower-budget single-source oracle summary.",
+        maxCostWei: "0",
+        timeoutSeconds: 120,
+      },
+    ],
+  };
+}
+
+function buildSomniaTemplates(goal: string): SomniaTemplate[] {
+  if (isSomniaSentimentGoal(goal)) {
+    return [
+      buildSomniaCorroboratedTemplate(),
+      buildSomniaSentimentFallbackTemplate(),
+    ];
+  }
+
   return [
-    somniaSentimentOracleStep("somnia.usd", { decimals: 8 }),
-    somniaSentimentOracleStep("somnia.usd_24h_change"),
-    somniaSentimentOracleStep("somnia.usd_market_cap", { decimals: 8 }),
-    somniaSentimentOracleStep("somnia.usd_24h_vol", { decimals: 8 }),
+    buildSomniaCorroboratedTemplate(),
+    buildSomniaStatsFallbackTemplate(),
   ];
 }
 
@@ -406,30 +490,47 @@ export function createPlanRouter(
     }[] | null = null;
     let totalEstimated = 0n;
 
+    let verificationTier: "corroborated" | "single" = "single";
+
     if (isSomniaSentimentGoal(goal) || isSomniaStatsGoal(goal)) {
-      steps = buildSomniaSentimentTemplate();
-      try {
-        onChainSteps = await normalizePlanSteps(deps, steps);
-      } catch (error) {
-        return c.json(
-          {
-            error:
-              error instanceof Error
-                ? error.message
-                : "planner selected invalid agents",
-          },
-          422,
-        );
+      let cheapestEstimate: bigint | null = null;
+      let cheapestStepCount = 0;
+
+      for (const candidate of buildSomniaTemplates(goal)) {
+        try {
+          const normalized = await normalizePlanSteps(deps, candidate.steps);
+          const estimated = normalized.reduce((sum, s) => sum + s.maxCostWei, 0n);
+          if (cheapestEstimate == null || estimated < cheapestEstimate) {
+            cheapestEstimate = estimated;
+            cheapestStepCount = normalized.length;
+          }
+          if (estimated <= totalBudget) {
+            steps = candidate.steps;
+            onChainSteps = normalized;
+            totalEstimated = estimated;
+            verificationTier = candidate.verificationTier;
+            break;
+          }
+        } catch (error) {
+          return c.json(
+            {
+              error:
+                error instanceof Error
+                  ? error.message
+                  : "planner selected invalid agents",
+            },
+            422,
+          );
+        }
       }
 
-      totalEstimated = onChainSteps.reduce((sum, s) => sum + s.maxCostWei, 0n);
-      if (totalEstimated > totalBudget) {
+      if (!steps || !onChainSteps) {
         return c.json(
           {
             error: "somnia sentiment oracle requires a higher budget",
-            estimatedCostWei: totalEstimated.toString(),
+            estimatedCostWei: (cheapestEstimate ?? 0n).toString(),
             budgetWei,
-            requiredStepCount: onChainSteps.length,
+            requiredStepCount: cheapestStepCount,
           },
           422,
         );
@@ -545,6 +646,7 @@ You MUST return fewer or cheaper steps. The sum of exact authorization costs can
       orchestrator: deps.addresses.orchestrator,
       estimatedCostWei: totalEstimated.toString(),
       budgetWei,
+      verificationTier,
     });
   });
 

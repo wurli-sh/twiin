@@ -132,9 +132,19 @@ export async function deployAll(
     agentsApiAddr = await mockApi.getAddress();
   }
 
-  // Stub agentsApi at zero address unless a live mock is requested.
-  const AgentOrchestratorF =
-    await ethers.getContractFactory("AgentOrchestrator");
+  const AgentConsensusLibF = await ethers.getContractFactory("AgentConsensusLib");
+  const agentConsensusLib = await AgentConsensusLibF.deploy();
+  await agentConsensusLib.waitForDeployment();
+  const AgentJaniceLibF = await ethers.getContractFactory("AgentJaniceLib");
+  const agentJaniceLib = await AgentJaniceLibF.deploy();
+  await agentJaniceLib.waitForDeployment();
+
+  const AgentOrchestratorF = await ethers.getContractFactory("AgentOrchestrator", {
+    libraries: {
+      AgentConsensusLib: await agentConsensusLib.getAddress(),
+      AgentJaniceLib: await agentJaniceLib.getAddress(),
+    },
+  });
   const orchestrator = (await AgentOrchestratorF.deploy(
     await registry6551.getAddress(),
     twiinAccountImpl,

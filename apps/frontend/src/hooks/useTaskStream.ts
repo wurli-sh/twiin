@@ -16,6 +16,7 @@ export const STREAM_EVENT_LABELS: Record<string, string> = {
   step_approved: 'Step approved',
   step_rejected: 'Step rejected',
   step_rated: 'Step rated',
+  step_consensus: 'Somnia consensus reached',
   trustless_intent: 'Trustless task intent',
   trustless_step_appended: 'Trustless step appended',
   janice_iteration: 'Janice iteration',

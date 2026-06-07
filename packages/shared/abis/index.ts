@@ -3769,6 +3769,49 @@ export const AgentOrchestratorAbi = [
         "type": "uint256"
       },
       {
+        "indexed": true,
+        "internalType": "uint8",
+        "name": "stepIdx",
+        "type": "uint8"
+      },
+      {
+        "indexed": true,
+        "internalType": "uint256",
+        "name": "requestId",
+        "type": "uint256"
+      },
+      {
+        "indexed": false,
+        "internalType": "uint64",
+        "name": "validators",
+        "type": "uint64"
+      },
+      {
+        "indexed": false,
+        "internalType": "uint256",
+        "name": "receiptId",
+        "type": "uint256"
+      },
+      {
+        "indexed": false,
+        "internalType": "uint256",
+        "name": "medianExecutionCost",
+        "type": "uint256"
+      }
+    ],
+    "name": "StepConsensusReached",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      {
+        "indexed": true,
+        "internalType": "uint256",
+        "name": "taskId",
+        "type": "uint256"
+      },
+      {
         "indexed": false,
         "internalType": "uint8",
         "name": "stepIdx",
@@ -4314,7 +4357,7 @@ export const AgentOrchestratorAbi = [
             "type": "bytes"
           },
           {
-            "internalType": "enum ResponseStatus",
+            "internalType": "uint8",
             "name": "status",
             "type": "uint8"
           },
@@ -4334,12 +4377,12 @@ export const AgentOrchestratorAbi = [
             "type": "uint256"
           }
         ],
-        "internalType": "struct Response[]",
+        "internalType": "struct ResponseWire[]",
         "name": "responses",
         "type": "tuple[]"
       },
       {
-        "internalType": "enum ResponseStatus",
+        "internalType": "uint8",
         "name": "status",
         "type": "uint8"
       },
@@ -4383,7 +4426,7 @@ export const AgentOrchestratorAbi = [
                 "type": "bytes"
               },
               {
-                "internalType": "enum ResponseStatus",
+                "internalType": "uint8",
                 "name": "status",
                 "type": "uint8"
               },
@@ -4403,7 +4446,7 @@ export const AgentOrchestratorAbi = [
                 "type": "uint256"
               }
             ],
-            "internalType": "struct Response[]",
+            "internalType": "struct ResponseWire[]",
             "name": "responses",
             "type": "tuple[]"
           },
@@ -4433,12 +4476,12 @@ export const AgentOrchestratorAbi = [
             "type": "uint256"
           },
           {
-            "internalType": "enum ResponseStatus",
+            "internalType": "uint8",
             "name": "status",
             "type": "uint8"
           },
           {
-            "internalType": "enum ConsensusType",
+            "internalType": "uint8",
             "name": "consensusType",
             "type": "uint8"
           },
@@ -4453,8 +4496,8 @@ export const AgentOrchestratorAbi = [
             "type": "uint256"
           }
         ],
-        "internalType": "struct Request",
-        "name": "",
+        "internalType": "struct RequestWire",
+        "name": "details",
         "type": "tuple"
       }
     ],
@@ -4562,6 +4605,91 @@ export const AgentOrchestratorAbi = [
     "name": "setRefreshManager",
     "outputs": [],
     "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint256",
+        "name": "taskId",
+        "type": "uint256"
+      },
+      {
+        "internalType": "uint8",
+        "name": "stepIdx",
+        "type": "uint8"
+      }
+    ],
+    "name": "stepConsensusOf",
+    "outputs": [
+      {
+        "components": [
+          {
+            "internalType": "uint64",
+            "name": "validators",
+            "type": "uint64"
+          },
+          {
+            "internalType": "uint64",
+            "name": "finalizedAt",
+            "type": "uint64"
+          },
+          {
+            "internalType": "uint256",
+            "name": "receiptId",
+            "type": "uint256"
+          },
+          {
+            "internalType": "uint256",
+            "name": "executionCost",
+            "type": "uint256"
+          }
+        ],
+        "internalType": "struct AgentConsensusLib.Receipt",
+        "name": "",
+        "type": "tuple"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint256",
+        "name": "",
+        "type": "uint256"
+      },
+      {
+        "internalType": "uint8",
+        "name": "",
+        "type": "uint8"
+      }
+    ],
+    "name": "stepReceipts",
+    "outputs": [
+      {
+        "internalType": "uint64",
+        "name": "validators",
+        "type": "uint64"
+      },
+      {
+        "internalType": "uint64",
+        "name": "finalizedAt",
+        "type": "uint64"
+      },
+      {
+        "internalType": "uint256",
+        "name": "receiptId",
+        "type": "uint256"
+      },
+      {
+        "internalType": "uint256",
+        "name": "executionCost",
+        "type": "uint256"
+      }
+    ],
+    "stateMutability": "view",
     "type": "function"
   },
   {

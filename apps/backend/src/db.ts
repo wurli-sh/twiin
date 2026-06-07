@@ -162,6 +162,26 @@ export function ensureSchema(): Promise<void> {
         "last_resume_reason",
         "last_resume_reason text",
       );
+      await ensureColumn(
+        "tasks",
+        "last_abort_reason",
+        "last_abort_reason text",
+      );
+      await ensureColumn(
+        "steps",
+        "consensus_validators",
+        "consensus_validators integer",
+      );
+      await ensureColumn(
+        "steps",
+        "consensus_receipt_id",
+        "consensus_receipt_id text",
+      );
+      await ensureColumn(
+        "steps",
+        "consensus_median_cost_wei",
+        "consensus_median_cost_wei text",
+      );
     })().catch((error) => {
       schemaReady = null;
       throw error;
@@ -225,8 +245,24 @@ export async function upsertTask(
 export async function updateTaskState(
   taskId: string,
   state: number,
+  lastAbortReason?: string | null,
 ): Promise<void> {
-  await db.update(tasks).set({ state }).where(eq(tasks.taskId, taskId));
+  const next: { state: number; lastAbortReason?: string | null } = { state };
+  if (lastAbortReason !== undefined) next.lastAbortReason = lastAbortReason;
+  await db.update(tasks).set(next).where(eq(tasks.taskId, taskId));
+}
+
+export async function getTaskMeta(taskId: string): Promise<{
+  last_abort_reason: string | null;
+} | null> {
+  const [row] = await db
+    .select({
+      last_abort_reason: tasks.lastAbortReason,
+    })
+    .from(tasks)
+    .where(eq(tasks.taskId, taskId))
+    .limit(1);
+  return row ?? null;
 }
 
 export async function finalizeTaskSteps(
@@ -357,6 +393,27 @@ export async function getStep(
   return row ?? null;
 }
 
+export async function patchStepConsensus(
+  taskId: string,
+  stepIdx: number,
+  consensus: {
+    validators: number;
+    receiptId: string;
+    medianCostWei: string;
+  },
+): Promise<void> {
+  const updatedAt = Math.floor(Date.now() / 1000);
+  await db
+    .update(steps)
+    .set({
+      consensusValidators: consensus.validators,
+      consensusReceiptId: consensus.receiptId,
+      consensusMedianCostWei: consensus.medianCostWei,
+      updatedAt,
+    })
+    .where(and(eq(steps.taskId, taskId), eq(steps.stepIdx, stepIdx)));
+}
+
 export async function getStepsForTask(taskId: string): Promise<
   {
     step_idx: number;
@@ -368,6 +425,9 @@ export async function getStepsForTask(taskId: string): Promise<
     result_hex: string | null;
     score: number | null;
     deadline: number | null;
+    consensus_validators: number | null;
+    consensus_receipt_id: string | null;
+    consensus_median_cost_wei: string | null;
   }[]
 > {
   const rows = await db
@@ -381,6 +441,9 @@ export async function getStepsForTask(taskId: string): Promise<
       result_hex: steps.resultHex,
       score: steps.score,
       deadline: steps.deadline,
+      consensus_validators: steps.consensusValidators,
+      consensus_receipt_id: steps.consensusReceiptId,
+      consensus_median_cost_wei: steps.consensusMedianCostWei,
     })
     .from(steps)
     .where(eq(steps.taskId, taskId))
@@ -620,13 +683,16 @@ export async function getTrustlessTask(taskId: string): Promise<{
   return row ?? null;
 }
 
-export async function listTrustlessTasksAwaitingResume(): Promise<
+export async function listTrustlessTasksAwaitingJanice(): Promise<
   Array<{
     task_id: string;
     goal: string;
     iterations: number;
     max_iterations: number;
     awaiting: number;
+    janice_request_id: string | null;
+    last_resume_reason: string | null;
+    updated_at: number;
   }>
 > {
   return db
@@ -636,6 +702,32 @@ export async function listTrustlessTasksAwaitingResume(): Promise<
       iterations: trustlessTasks.iterations,
       max_iterations: trustlessTasks.maxIterations,
       awaiting: trustlessTasks.awaiting,
+      janice_request_id: trustlessTasks.janiceRequestId,
+      last_resume_reason: trustlessTasks.lastResumeReason,
+      updated_at: trustlessTasks.updatedAt,
+    })
+    .from(trustlessTasks)
+    .where(eq(trustlessTasks.awaiting, TrustlessAwaiting.Janice));
+}
+
+export async function listTrustlessTasksAwaitingResume(): Promise<
+  Array<{
+    task_id: string;
+    goal: string;
+    iterations: number;
+    max_iterations: number;
+    awaiting: number;
+    last_resume_reason: string | null;
+  }>
+> {
+  return db
+    .select({
+      task_id: trustlessTasks.taskId,
+      goal: trustlessTasks.goal,
+      iterations: trustlessTasks.iterations,
+      max_iterations: trustlessTasks.maxIterations,
+      awaiting: trustlessTasks.awaiting,
+      last_resume_reason: trustlessTasks.lastResumeReason,
     })
     .from(trustlessTasks)
     .where(eq(trustlessTasks.awaiting, TrustlessAwaiting.Resume));

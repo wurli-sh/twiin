@@ -20,6 +20,7 @@ import {
   getStep,
   getStepsForTask,
   patchTrustlessTask,
+  patchStepConsensus,
   setCursor,
   updateTaskState,
   upsertTrustlessTask,
@@ -48,6 +49,9 @@ const externalAgentRequestEvent = parseAbiItem(
 ) as AbiEvent;
 const stepStateChangedEvent = parseAbiItem(
   "event StepStateChanged(uint256 indexed taskId, uint8 stepIdx, uint8 state)",
+) as AbiEvent;
+const stepConsensusReachedEvent = parseAbiItem(
+  "event StepConsensusReached(uint256 indexed taskId, uint8 indexed stepIdx, uint256 indexed requestId, uint64 validators, uint256 receiptId, uint256 medianExecutionCost)",
 ) as AbiEvent;
 const externalResultPendingEvent = parseAbiItem(
   "event ExternalResultPending(uint256 indexed taskId, uint8 stepIdx, address registrant, bytes result)",
@@ -135,6 +139,7 @@ type IndexerDeps = {
   deleteTaskArtifactsForTask: typeof deleteTaskArtifactsForTask;
   finalizeTaskSteps: typeof finalizeTaskSteps;
   upsertStep: typeof upsertStep;
+  patchStepConsensus: typeof patchStepConsensus;
   updateTaskState: typeof updateTaskState;
   upsertTrustlessTask: typeof upsertTrustlessTask;
   patchTrustlessTask: typeof patchTrustlessTask;
@@ -173,6 +178,7 @@ export function createIndexer(overrides: Partial<IndexerDeps> = {}) {
     deleteTaskArtifactsForTask,
     finalizeTaskSteps,
     upsertStep,
+    patchStepConsensus,
     updateTaskState,
     upsertTrustlessTask,
     patchTrustlessTask,
@@ -357,13 +363,30 @@ export function createIndexer(overrides: Partial<IndexerDeps> = {}) {
       const { taskId, stepIdx, state } = log.args;
       if (taskId == null || stepIdx == null) continue;
       const stepState = Number(state ?? 0);
+      const needsExisting =
+        stepState === StepState.RunningNative ||
+        stepState === StepState.Succeeded ||
+        stepState === StepState.Failed;
+      const existing = needsExisting
+        ? await deps.getStep(taskId.toString(), Number(stepIdx))
+        : null;
       let deadline: number | null = null;
       if (stepState === StepState.RunningNative && log.blockNumber != null) {
-        const existing = await deps.getStep(taskId.toString(), Number(stepIdx));
         if (existing?.timeout_seconds != null) {
           deadline =
             (await deps.getBlockTimestamp(log.blockNumber)) + existing.timeout_seconds;
         }
+      }
+      let resultHex: `0x${string}` | null = null;
+      if (
+        (stepState === StepState.Succeeded || stepState === StepState.Failed) &&
+        existing?.state === StepState.RunningNative
+      ) {
+        const callback = await loadTrustlessCallbackFromTransaction(
+          deps,
+          log.transactionHash ?? null,
+        );
+        resultHex = callback?.resultHex ?? null;
       }
       await deps.upsertStep(
         taskId.toString(),
@@ -373,7 +396,7 @@ export function createIndexer(overrides: Partial<IndexerDeps> = {}) {
         stepState,
         "",
         null,
-        null,
+        resultHex,
         null,
         deadline,
       );
@@ -382,6 +405,38 @@ export function createIndexer(overrides: Partial<IndexerDeps> = {}) {
         stepIdx,
         state,
         stateName: StepState[stepState] ?? "Unknown",
+      });
+    }
+
+    const stepConsensusReachedLogs = await load(stepConsensusReachedEvent);
+    logIndexerLogs(
+      "StepConsensusReached",
+      stepConsensusReachedLogs.length,
+      from,
+      to,
+    );
+    for (const log of stepConsensusReachedLogs) {
+      const { taskId, stepIdx, requestId, validators, receiptId, medianExecutionCost } =
+        log.args;
+      if (taskId == null || stepIdx == null) continue;
+      await deps.patchStepConsensus(taskId.toString(), Number(stepIdx), {
+        validators: Number(validators ?? 0),
+        receiptId: (receiptId ?? 0n).toString(),
+        medianCostWei: (medianExecutionCost ?? 0n).toString(),
+      });
+      deps.publish(taskId.toString(), "step_consensus", {
+        taskId: taskId.toString(),
+        stepIdx,
+        requestId: requestId?.toString(),
+        validators: Number(validators ?? 0),
+        receiptId: (receiptId ?? 0n).toString(),
+        medianExecutionCostWei: (medianExecutionCost ?? 0n).toString(),
+      });
+      logTaskTimeline("step_consensus_reached", {
+        taskId: taskId.toString(),
+        stepIdx: Number(stepIdx),
+        requestId: requestId?.toString(),
+        validators: Number(validators ?? 0),
       });
     }
 
@@ -497,16 +552,24 @@ export function createIndexer(overrides: Partial<IndexerDeps> = {}) {
     for (const log of taskAbortedLogs) {
       const { taskId, reason } = log.args;
       if (taskId == null) continue;
-      await deps.updateTaskState(taskId.toString(), TaskState.Aborted);
+      const taskIdStr = taskId.toString();
+      const abortReason = typeof reason === "string" ? reason : null;
+      await deps.updateTaskState(taskIdStr, TaskState.Aborted, abortReason);
       await deps.finalizeTaskSteps(
-        taskId.toString(),
+        taskIdStr,
         abortReasonToStepState(reason),
       );
-      await deps.patchTrustlessTask(taskId.toString(), {
+      await deps.patchTrustlessTask(taskIdStr, {
         awaiting: TrustlessAwaiting.Done,
       });
-      deps.publish(taskId.toString(), "task_aborted", {
-        taskId: taskId.toString(),
+      logTaskTimeline("trustless_abort_diagnosed", {
+        taskId: taskIdStr,
+        reason: abortReason,
+        normalizedReason: normalizeAbortReason(abortReason),
+        terminalStepState: abortReasonToStepState(reason),
+      });
+      deps.publish(taskIdStr, "task_aborted", {
+        taskId: taskIdStr,
         reason,
       });
     }
@@ -523,6 +586,17 @@ export function createIndexer(overrides: Partial<IndexerDeps> = {}) {
       const decoded = callback?.resultHex
         ? decodeTrustlessJaniceResult(callback.resultHex)
         : null;
+      logTaskTimeline("janice_callback_decoded", {
+        taskId: taskId.toString(),
+        iteration: Number(iteration),
+        requestId: requestId.toString(),
+        finishReason: typeof finishReason === "string" ? finishReason : decoded?.finishReason ?? null,
+        assistantMessagePreview: decoded?.assistantMessage?.slice(0, 160) ?? "",
+        toolCallCount: decoded?.toolCalls.length ?? 0,
+        toolNames: decoded?.toolCalls.map((tool) => tool.toolName) ?? [],
+        updatedRoleCount: decoded?.updatedRoles.length ?? 0,
+        updatedMessageCount: decoded?.updatedMessages.length ?? 0,
+      });
       await deps.upsertTrustlessTurn({
         taskId: taskId.toString(),
         iteration: Number(iteration),
@@ -763,6 +837,21 @@ function abortReasonToStepState(reason: unknown): number {
     return StepState.TimedOut;
   }
   return StepState.Failed;
+}
+
+function normalizeAbortReason(reason: string | null): string {
+  if (!reason) return "unknown";
+  const lower = reason.toLowerCase();
+  if (lower.includes("janice failed")) return "janice_callback_failed";
+  if (lower.includes("max iterations")) return "janice_max_iterations";
+  if (lower.includes("unsupported janice response")) return "janice_response_unsupported";
+  if (lower.includes("unsupported post-pause tool")) return "janice_post_pause_tool_unsupported";
+  if (lower.includes("publish oracle failed")) return "publish_oracle_failed";
+  if (lower.includes("unknown trustless tool")) return "unknown_trustless_tool";
+  if (lower.includes("task timed out")) return "task_timeout";
+  if (lower.includes("step timed out")) return "step_timeout";
+  if (lower.includes("step failed")) return "step_failed";
+  return "other";
 }
 
 function logIndexerLogs(

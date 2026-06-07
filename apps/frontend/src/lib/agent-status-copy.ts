@@ -38,7 +38,12 @@ const STATUS_PHRASES: Record<AgentStatusPhase, string[]> = {
   waiting_janice: ['Waiting for Janice on Somnia…'],
   executing: ['Running the plan…', 'Agents at work…'],
   waiting_result: ['Waiting on external result…', 'Awaiting sub-agent response…'],
-  completing: ['Wrapping up…', 'Finalizing task…'],
+  completing: [
+    'Wrapping up…',
+    'Finalizing task…',
+    'Tinkering with the report…',
+    'Almost there…',
+  ],
 }
 
 const STEP_PHRASES: Record<number, string> = {

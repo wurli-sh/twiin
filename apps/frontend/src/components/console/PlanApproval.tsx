@@ -7,7 +7,7 @@ import type { PlanResponse } from '@/lib/plan-api'
 import type { TwiinAgentInfo } from '@/hooks/useTwiinAgents'
 import type { PlanStatus } from '@/lib/console-session'
 import type { ExecutionMode } from '@/config/features'
-import { executionModeTheme } from '@/lib/execution-mode-theme'
+import { consolePageTheme } from '@/lib/execution-mode-theme'
 import { cn } from '@/lib/cn'
 
 const APPROVAL_SECONDS = 60
@@ -33,7 +33,7 @@ export function PlanApproval({
   onReject,
   isSubmitting,
 }: PlanApprovalProps) {
-  const modeTheme = executionModeTheme(executionMode)
+  const modeTheme = consolePageTheme()
   const [secondsLeft, setSecondsLeft] = useState(APPROVAL_SECONDS)
   const expiredRef = useRef(false)
 
@@ -99,7 +99,14 @@ export function PlanApproval({
     <div className={cn('max-w-[92%] overflow-hidden', modeTheme.agentCard)}>
       <div className="flex items-center justify-between gap-2 border-b border-border px-3 py-2.5">
         <div className="min-w-0">
-          <p className="text-sm font-semibold text-foreground">Ready to execute</p>
+          <div className="flex flex-wrap items-center gap-2">
+            <p className="text-sm font-semibold text-foreground">Ready to execute</p>
+            {plan.verificationTier === 'corroborated' ? (
+              <span className="rounded border border-success/30 bg-success/10 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-success">
+                Corroborated
+              </span>
+            ) : null}
+          </div>
           <p className="truncate text-sm text-muted-foreground">{goal}</p>
         </div>
         <div
@@ -121,9 +128,7 @@ export function PlanApproval({
             'h-full transition-all duration-1000 ease-linear',
             secondsLeft <= 10
               ? 'bg-destructive'
-              : executionMode === 'trustless'
-                ? 'bg-[var(--mode-trustless-accent)]'
-                : 'bg-[var(--mode-claude)]',
+              : 'bg-[var(--mode-trustless-accent)]',
           )}
           style={{ width: `${pct}%` }}
         />

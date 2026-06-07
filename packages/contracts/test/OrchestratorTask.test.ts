@@ -361,4 +361,128 @@ describe("AgentOrchestrator — task lifecycle", () => {
       d.orchestrator.timeoutNativeStep(999n, 0),
     ).to.be.revertedWithCustomError(d.orchestrator, "TaskNotRunning");
   });
+
+  it("records consensus receipt on 3-validator native callback", async () => {
+    const d = await deployAll({ useMockApi: true });
+    const { user, agentId, acct } = await setupLiveAgent(d);
+    const mockApi = d.mockApi!;
+
+    await createTaskThroughAccount(
+      d,
+      agentId,
+      acct.connect(user),
+      ethers.parseEther("0.5"),
+    );
+
+    const costs = [ethers.parseEther("0.08"), ethers.parseEther("0.10"), ethers.parseEther("0.12")];
+    await mockApi.fulfillConsensus(1n, ethers.toUtf8Bytes("consensus-ok"), costs, 100n);
+
+    const receipt = await d.orchestrator.stepConsensusOf(1n, 0);
+    expect(receipt.validators).to.equal(3n);
+    expect(receipt.receiptId).to.equal(100n);
+    expect(receipt.executionCost).to.equal(ethers.parseEther("0.10"));
+
+    const task = await d.orchestrator.tasks(1n);
+    expect(task.state).to.equal(2n);
+  });
+
+  it("emits StepConsensusReached on successful native callback", async () => {
+    const d = await deployAll({ useMockApi: true });
+    const { user, agentId, acct } = await setupLiveAgent(d);
+    const mockApi = d.mockApi!;
+
+    await createTaskThroughAccount(
+      d,
+      agentId,
+      acct.connect(user),
+      ethers.parseEther("0.5"),
+    );
+
+    const costs = [ethers.parseEther("0.08"), ethers.parseEther("0.10"), ethers.parseEther("0.12")];
+    await expect(mockApi.fulfillConsensus(1n, ethers.toUtf8Bytes("emit-check"), costs, 77n))
+      .to.emit(d.orchestrator, "StepConsensusReached")
+      .withArgs(1n, 0, 1n, 3n, 77n, ethers.parseEther("0.10"));
+  });
+
+  it("fails native step when validator participation is below threshold", async () => {
+    const d = await deployAll({ useMockApi: true });
+    const { user, agentId, acct } = await setupLiveAgent(d);
+    const mockApi = d.mockApi!;
+
+    await createTaskThroughAccount(
+      d,
+      agentId,
+      acct.connect(user),
+      ethers.parseEther("0.5"),
+    );
+
+    await mockApi.fulfillUnderParticipation(1n, ethers.toUtf8Bytes("under"));
+
+    const receipt = await d.orchestrator.stepConsensusOf(1n, 0);
+    expect(receipt.validators).to.equal(0n);
+
+    const task = await d.orchestrator.tasks(1n);
+    expect(task.state).to.equal(3n);
+    expect((await d.agentRegistry.get(2n)).tasksFailed).to.equal(1n);
+  });
+
+  it("injects prior native outputs into downstream reporter payloads", async () => {
+    const d = await deployAll({ useMockApi: true });
+    const { user, agentId, acct } = await setupLiveAgent(d);
+    const mockApi = d.mockApi!;
+    const budget = ethers.parseEther("1");
+    const orchAddr = await d.orchestrator.getAddress();
+    const oracleIface = new ethers.Interface([
+      "function fetchUint(string url,string selector,uint8 decimals)",
+    ]);
+    const llmIface = new ethers.Interface([
+      "function inferString(string prompt,string system,bool chainOfThought,string[] allowedValues)",
+    ]);
+
+    const createCalldata = d.orchestrator.interface.encodeFunctionData(
+      "createTask",
+      [
+        agentId,
+        [
+          {
+            subAgentConfigId: 2n,
+            payload: oracleIface.encodeFunctionData("fetchUint", [
+              "https://api.coingecko.com/api/v3/simple/price?ids=somnia&vs_currencies=usd",
+              "somnia.usd",
+              8,
+            ]),
+            maxCostWei: ethers.parseEther("0.5"),
+            timeoutSeconds: 90,
+          },
+          {
+            subAgentConfigId: 4n,
+            payload: llmIface.encodeFunctionData("inferString", [
+              "Write a concise Somnia stats snapshot for the user using ONLY prior step outputs.",
+              "system",
+              false,
+              [],
+            ]),
+            maxCostWei: ethers.parseEther("0.5"),
+            timeoutSeconds: 120,
+          },
+        ],
+        budget,
+        0,
+      ],
+    );
+
+    await acct.connect(user).execute(orchAddr, budget, createCalldata, 0);
+
+    const oracleResult = ethers.AbiCoder.defaultAbiCoder().encode(
+      ["uint256"],
+      [12915400n],
+    );
+    await mockApi.fulfill(1n, oracleResult);
+
+    const reporterPayload = await mockApi.requestPayloads(2n);
+    const decoded = llmIface.decodeFunctionData("inferString", reporterPayload);
+    const prompt = String(decoded[0]);
+    expect(prompt).to.contain("Previous step outputs:");
+    expect(prompt).to.contain("oracle somnia.usd (decimals=8): 12915400");
+  });
 });

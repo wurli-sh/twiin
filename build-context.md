@@ -10,7 +10,8 @@ Named ERC-6551 NFT agents on Somnia Shannon (`50312`). Hire sub-agents from open
 | 2 `@twiin/shared` | ✅ ABIs, addresses, digest, 6551 helper |
 | 3 Backend | ✅ plan, keepers, SSE, SQLite; minor gaps below |
 | 4 Frontend | ✅ ~90% demo-ready |
-| 5 TrustlessJanice | ❌ gated (T2–T4) |
+| 5 TrustlessJanice | ⏸ deprioritized — Claude Plan + consensus receipts is default |
+| 6 Consensus receipts | ✅ per native step (tsugu-inspired); redeploy orchestrator for live chain |
 
 ## Addresses (`packages/shared/addresses.json`)
 `factory` `0x1d90…5544` · `orchestrator` `0xC10D…C6Be` · `twiinAgent` `0x6a78…1682` · `agentRegistry` `0xE572…248d` · `policy` `0xcEa1…10AC` · `oracleFeed` `0x9eE6…8F87` · RPC `https://dream-rpc.somnia.network/`

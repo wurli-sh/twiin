@@ -771,6 +771,63 @@ describe("rater keeper", () => {
   });
 });
 
+describe("consensus indexer", () => {
+  it("indexes StepConsensusReached into step consensus fields", async () => {
+    const { createIndexer } = await loadKeepers();
+    const patchStepConsensus = vi.fn().mockResolvedValue(undefined);
+    const publish = vi.fn();
+    const getLogs = vi.fn(async ({ event }: { event: { name?: string } }) => {
+      if (event.name === "StepConsensusReached") {
+        return [
+          {
+            args: {
+              taskId: 3n,
+              stepIdx: 1,
+              requestId: 9n,
+              validators: 3n,
+              receiptId: 100n,
+              medianExecutionCost: 50_000_000_000_000_000n,
+            },
+          },
+        ];
+      }
+      return [];
+    });
+
+    const indexer = createIndexer({
+      getBlockNumber: vi.fn().mockResolvedValue(50n),
+      getCursor: vi.fn().mockResolvedValue(20n),
+      setCursor: vi.fn().mockResolvedValue(undefined),
+      getLogs: getLogs as never,
+      getTransaction: vi.fn(),
+      patchStepConsensus,
+      publish,
+      addresses: {
+        orchestrator: "0x1234567890123456789012345678901234567890",
+        agentRegistry: "0x1234567890123456789012345678901234567890",
+      },
+      startBlock: 0n,
+    });
+
+    await indexer.tick();
+
+    expect(patchStepConsensus).toHaveBeenCalledWith("3", 1, {
+      validators: 3,
+      receiptId: "100",
+      medianCostWei: "50000000000000000",
+    });
+    expect(publish).toHaveBeenCalledWith(
+      "3",
+      "step_consensus",
+      expect.objectContaining({
+        taskId: "3",
+        stepIdx: 1,
+        validators: 3,
+      }),
+    );
+  });
+});
+
 describe("trustless indexer", () => {
   it("decodes Janice callback results from Agents API fulfill transactions", async () => {
     const { createIndexer } = await loadKeepers();
@@ -865,6 +922,7 @@ describe("trustless resume keeper", () => {
     const { createTrustlessResumeKeeper } = await loadKeepers();
     const resumeTrustlessTask = vi.fn().mockResolvedValue(undefined);
     const keeper = createTrustlessResumeKeeper({
+      listTrustlessTasksAwaitingJanice: vi.fn().mockResolvedValue([]),
       listTrustlessTasksAwaitingResume: vi.fn().mockResolvedValue([
         {
           task_id: "11",
@@ -927,6 +985,7 @@ describe("trustless resume keeper", () => {
     const { createTrustlessResumeKeeper } = await loadKeepers();
     const resumeTrustlessTask = vi.fn().mockResolvedValue(undefined);
     const keeper = createTrustlessResumeKeeper({
+      listTrustlessTasksAwaitingJanice: vi.fn().mockResolvedValue([]),
       listTrustlessTasksAwaitingResume: vi.fn().mockResolvedValue([
         {
           task_id: "11",

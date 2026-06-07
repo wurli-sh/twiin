@@ -8,12 +8,15 @@ import { useSubAgents } from '@/hooks/useSubAgents'
 import type { PlanStep } from '@/lib/plan-api'
 import type { StepProgress } from '@/lib/console-session'
 import type { ExecutionMode } from '@/config/features'
-import { executionModeTheme } from '@/lib/execution-mode-theme'
+import { consolePageTheme } from '@/lib/execution-mode-theme'
+import { ConsensusBadge } from '@/components/console/ConsensusBadge'
+import type { TaskStep } from '@/hooks/useTaskDetail'
 import { cn } from '@/lib/cn'
 
 type Props = {
   steps: PlanStep[]
   stepProgress?: (index: number) => StepProgress
+  chainSteps?: TaskStep[]
   executionMode?: ExecutionMode
   compact?: boolean
 }
@@ -21,20 +24,30 @@ type Props = {
 function StepIcon({
   progress,
   accentClass,
+  compact,
 }: {
   progress?: StepProgress
   accentClass: string
+  compact?: boolean
 }) {
+  const size = compact ? 10 : 12
   if (progress === 'loading') {
-    return <Loader2 size={12} className={cn('animate-spin', accentClass)} />
+    return <Loader2 size={size} className={cn('animate-spin', accentClass)} />
   }
   if (progress === 'done') {
-    return <Check size={12} className={accentClass} strokeWidth={2.5} />
+    return <Check size={size} className={accentClass} strokeWidth={2.5} />
   }
   if (progress === 'error') {
-    return <X size={12} className="text-destructive" strokeWidth={2.5} />
+    return <X size={size} className="text-destructive" strokeWidth={2.5} />
   }
-  return <span className="size-2 rounded-full border border-muted-foreground/40" />
+  return (
+    <span
+      className={cn(
+        'rounded-full border border-muted-foreground/40',
+        compact ? 'size-1.5' : 'size-2',
+      )}
+    />
+  )
 }
 
 function SubAgentBadge({
@@ -43,29 +56,37 @@ function SubAgentBadge({
   lane,
   accentClass,
   nativeBadgeClass,
+  compact,
 }: {
   label: string
   configId: number
   lane?: 'SomniaNative' | 'ExternalHTTP'
   accentClass: string
   nativeBadgeClass: string
+  compact?: boolean
 }) {
   const isExternal = lane === 'ExternalHTTP'
 
   return (
-    <span className="inline-flex flex-wrap items-center gap-1.5 text-xs">
+    <span
+      className={cn(
+        'inline-flex flex-wrap items-center',
+        compact ? 'gap-0.5 text-[10px] leading-none' : 'gap-1.5 text-xs',
+      )}
+    >
       <span className={cn('font-medium', accentClass)}>{label}</span>
       <span className="text-muted-foreground">· config #{configId}</span>
       {lane && (
         <span
           className={cn(
-            'inline-flex items-center gap-0.5 border px-1 py-px text-[10px] font-semibold uppercase tracking-wide',
+            'inline-flex items-center gap-0.5 border font-semibold uppercase tracking-wide',
+            compact ? 'px-0.5 py-px text-[9px]' : 'px-1 py-px text-[10px]',
             isExternal
               ? 'border-warning/40 bg-warning/10 text-warning-foreground'
               : nativeBadgeClass,
           )}
         >
-          {isExternal ? <Globe size={9} /> : <Server size={9} />}
+          {isExternal ? <Globe size={compact ? 8 : 9} /> : <Server size={compact ? 8 : 9} />}
           {isExternal ? 'External' : 'Native'}
         </span>
       )}
@@ -76,10 +97,12 @@ function SubAgentBadge({
 export function PlanStepList({
   steps,
   stepProgress,
-  executionMode = 'claude',
+  chainSteps,
+  executionMode: _executionMode = 'claude',
   compact,
 }: Props) {
-  const modeTheme = executionModeTheme(executionMode)
+  void _executionMode
+  const modeTheme = consolePageTheme()
   const { subAgents } = useSubAgents()
 
   return (
@@ -91,23 +114,30 @@ export function PlanStepList({
         const progress = stepProgress?.(i)
         const done = progress === 'done'
         const loading = progress === 'loading'
+        const chainStep = chainSteps?.find((s) => s.stepIdx === i)
 
         return (
           <li
             key={i}
             className={cn(
-              'flex items-start gap-2.5 border-b border-border/60 py-2 last:border-0',
-              compact && 'py-1.5',
+              'flex items-start border-b border-border/60 py-2 last:border-0',
+              compact ? 'gap-1.5 py-0.5' : 'gap-2.5',
               loading && cn('border-l-2 pl-2', modeTheme.progressActiveBg),
             )}
           >
-            <div className="mt-0.5 flex size-4 shrink-0 items-center justify-center">
-              <StepIcon progress={progress} accentClass={modeTheme.icon} />
+            <div
+              className={cn(
+                'flex shrink-0 items-center justify-center',
+                compact ? 'size-3' : 'mt-0.5 size-4',
+              )}
+            >
+              <StepIcon progress={progress} accentClass={modeTheme.icon} compact={compact} />
             </div>
-            <div className="min-w-0 flex-1 space-y-0.5">
+            <div className={cn('min-w-0 flex-1', compact ? 'space-y-0' : 'space-y-0.5')}>
               <p
                 className={cn(
-                  'text-sm font-medium leading-tight',
+                  'font-medium leading-tight',
+                  compact ? 'text-xs' : 'text-sm',
                   done && 'text-muted-foreground',
                   loading && 'text-foreground',
                   !done && !loading && 'text-foreground',
@@ -115,15 +145,37 @@ export function PlanStepList({
               >
                 <span className="text-muted-foreground">{i + 1}.</span> {title}
               </p>
-              <SubAgentBadge
-                label={subAgent.label}
-                configId={subAgent.configId}
-                lane={subAgent.lane}
-                accentClass={modeTheme.text}
-                nativeBadgeClass={modeTheme.badge}
-              />
+              <div
+                className={cn(
+                  'flex flex-wrap items-center',
+                  compact ? 'gap-0.5 text-[10px] leading-none' : 'gap-1.5',
+                )}
+              >
+                <SubAgentBadge
+                  label={subAgent.label}
+                  configId={subAgent.configId}
+                  lane={subAgent.lane}
+                  accentClass={modeTheme.text}
+                  nativeBadgeClass={modeTheme.badge}
+                  compact={compact}
+                />
+                {chainStep?.consensusValidators ? (
+                  <ConsensusBadge
+                    validators={chainStep.consensusValidators}
+                    medianCostWei={chainStep.consensusMedianCostWei}
+                    compact={compact}
+                  />
+                ) : null}
+              </div>
               {taskDetail && (
-                <p className="truncate text-xs leading-snug text-muted-foreground">{taskDetail}</p>
+                <p
+                  className={cn(
+                    'truncate leading-snug text-muted-foreground',
+                    compact ? 'text-[9px]' : 'text-xs',
+                  )}
+                >
+                  {taskDetail}
+                </p>
               )}
             </div>
           </li>

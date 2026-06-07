@@ -2,6 +2,7 @@ import {
   AgentLane,
   buildInitialJaniceConversation,
   buildTrustlessResumePayload,
+  encodeNativeAgentPayload,
   encodeTrustlessJanicePayload,
   JANICE_ROUND_BUFFER_MULTIPLIER,
   MIN_TRUSTLESS_BUDGET_MULTIPLIER,
@@ -42,6 +43,68 @@ Rules:
 - Use completeTrustlessTask when the goal is satisfied.
 - Never invent URLs, prices, or facts not present in prior step outputs.
 `.trim();
+
+const SOMNIA_STATS_API_URL =
+  "https://api.coingecko.com/api/v3/simple/price?ids=somnia&vs_currencies=usd&include_market_cap=true&include_24hr_vol=true&include_24hr_change=true";
+
+const SOMNIA_PRICE_PAYLOAD = encodeNativeAgentPayload(
+  NativeConfigId.ORACLE,
+  JSON.stringify({
+    url: SOMNIA_STATS_API_URL,
+    selector: "somnia.usd",
+    decimals: 8,
+  }),
+);
+
+const SOMNIA_CHANGE_PAYLOAD = encodeNativeAgentPayload(
+  NativeConfigId.ORACLE,
+  JSON.stringify({
+    url: SOMNIA_STATS_API_URL,
+    selector: "somnia.usd_24h_change",
+  }),
+);
+
+const SOMNIA_MARKET_CAP_PAYLOAD = encodeNativeAgentPayload(
+  NativeConfigId.ORACLE,
+  JSON.stringify({
+    url: SOMNIA_STATS_API_URL,
+    selector: "somnia.usd_market_cap",
+    decimals: 8,
+  }),
+);
+
+const SOMNIA_VOLUME_PAYLOAD = encodeNativeAgentPayload(
+  NativeConfigId.ORACLE,
+  JSON.stringify({
+    url: SOMNIA_STATS_API_URL,
+    selector: "somnia.usd_24h_vol",
+    decimals: 8,
+  }),
+);
+
+const SOMNIA_STATS_TRUSTLESS_GOAL = [
+  "Fetch Somnia ecosystem stats using the native oracle only.",
+  `Round 1: call hireSubAgent with configId ${NativeConfigId.ORACLE}.`,
+  `Use this exact ABI bytes payload in round 1: ${SOMNIA_PRICE_PAYLOAD}.`,
+  `After round 1 succeeds, if 24h change has not been fetched yet, call hireSubAgent with configId ${NativeConfigId.ORACLE} and this exact ABI bytes payload: ${SOMNIA_CHANGE_PAYLOAD}.`,
+  `After that succeeds, if market cap has not been fetched yet, call hireSubAgent with configId ${NativeConfigId.ORACLE} and this exact ABI bytes payload: ${SOMNIA_MARKET_CAP_PAYLOAD}.`,
+  `After that succeeds, if 24h volume has not been fetched yet, call hireSubAgent with configId ${NativeConfigId.ORACLE} and this exact ABI bytes payload: ${SOMNIA_VOLUME_PAYLOAD}.`,
+  "Once all four values exist in prior step results, call completeTrustlessTask with a concise summary covering: price USD, 24h change, market cap USD, and 24h volume USD.",
+  "For native oracle hires, pass the ABI bytes payload exactly as provided above. Do not convert it to JSON or plain text.",
+  "Do not hire any other agent. Do not ask follow-up questions. Do not emit any text before the tool call.",
+].join("\n");
+
+const SOMNIA_SENTIMENT_TRUSTLESS_GOAL = [
+  "Produce a Somnia sentiment snapshot using the native oracle only.",
+  `Round 1: call hireSubAgent with configId ${NativeConfigId.ORACLE}.`,
+  `Use this exact ABI bytes payload in round 1: ${SOMNIA_PRICE_PAYLOAD}.`,
+  `After round 1 succeeds, if 24h change has not been fetched yet, call hireSubAgent with configId ${NativeConfigId.ORACLE} and this exact ABI bytes payload: ${SOMNIA_CHANGE_PAYLOAD}.`,
+  `After that succeeds, if market cap has not been fetched yet, call hireSubAgent with configId ${NativeConfigId.ORACLE} and this exact ABI bytes payload: ${SOMNIA_MARKET_CAP_PAYLOAD}.`,
+  `After that succeeds, if 24h volume has not been fetched yet, call hireSubAgent with configId ${NativeConfigId.ORACLE} and this exact ABI bytes payload: ${SOMNIA_VOLUME_PAYLOAD}.`,
+  "Once all fetched values exist in prior step results, call completeTrustlessTask with a concise sentiment summary grounded only in those values.",
+  "For native oracle hires, pass the ABI bytes payload exactly as provided above. Do not convert it to JSON or plain text.",
+  "Do not hire any other agent. Do not ask follow-up questions. Do not emit any text before the tool call.",
+].join("\n");
 
 export function exactNativeStepCostWei(
   requestDepositWei: bigint,
@@ -107,7 +170,7 @@ export function estimateTrustlessBudget(input: {
 type ExternalAgentRow = {
   config_id: string;
   endpoint_url: string;
-  caps: string[];
+  capabilities: string[];
 };
 
 export async function buildTrustlessAgentContext(
@@ -139,7 +202,7 @@ export async function buildTrustlessAgentContext(
       try {
         const agent = await readAgent(BigInt(ext.config_id));
         if (!agent.isActive || agent.suspended) continue;
-        const capNames = ext.caps
+        const capNames = ext.capabilities
           .map((cap) => capabilityNameById.get(cap) ?? cap.slice(0, 10))
           .join(", ");
         lines.push(
@@ -159,6 +222,12 @@ export function buildTrustlessGoalWithContext(goal: string, contextMessage?: str
   const trimmedContext = contextMessage?.trim();
   if (!trimmedContext) return trimmedGoal;
   return `${trimmedGoal}\n\n${trimmedContext}`;
+}
+
+export function buildTrustlessIntentGoal(goal: string, contextMessage?: string): string {
+  if (isSomniaStatsGoal(goal)) return SOMNIA_STATS_TRUSTLESS_GOAL;
+  if (isSomniaSentimentGoal(goal)) return SOMNIA_SENTIMENT_TRUSTLESS_GOAL;
+  return buildTrustlessGoalWithContext(goal, contextMessage);
 }
 
 export function computeJaniceCostWei(

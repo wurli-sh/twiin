@@ -6,13 +6,21 @@ import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 import {MessageHashUtils} from "@openzeppelin/contracts/utils/cryptography/MessageHashUtils.sol";
 
 import {IERC6551Registry} from "./interfaces/IERC6551Registry.sol";
-import {IAgentRequesterHandler, IAgentRequester, Response, ResponseStatus, Request} from "./interfaces/IAgentRequesterHandler.sol";
+import {
+    IAgentRequesterHandler,
+    IAgentRequester,
+    ResponseStatus,
+    ResponseWire,
+    RequestWire
+} from "./interfaces/IAgentRequesterHandler.sol";
 import {AgentRegistry} from "./AgentRegistry.sol";
 import {AgentVault} from "./AgentVault.sol";
 import {AgentPolicy} from "./AgentPolicy.sol";
 import {
     AgentLane, PlanMode, StepState, TaskState, TrustlessAwaiting, Step
 } from "./TwiinTypes.sol";
+import {AgentConsensusLib} from "./lib/AgentConsensusLib.sol";
+import {AgentJaniceLib} from "./lib/AgentJaniceLib.sol";
 
 // The orchestration engine: task lifecycle, agent dispatch, external result verification,
 // and trustless Janice execution. Refresh scheduling is delegated to AgentRefreshCoordinator.
@@ -67,8 +75,17 @@ contract AgentOrchestrator is
     uint8   public constant MAX_JANICE_ITERATIONS    = 8;
     uint8   public constant INFER_TOOLS_CHAT_MAX_ITERATIONS = 8;
     uint256 public constant JANICE_CONFIG_ID         = 0;
+    uint256 private constant ANALYSIS_CONFIG_ID      = 3;
+    uint256 private constant REPORTER_CONFIG_ID      = 4;
 
     bytes32 public constant CAP_ONCHAIN_EXECUTE = keccak256("onchain.execute");
+    uint8   private constant RESPONSE_STATUS_SUCCESS = uint8(ResponseStatus.Success);
+    bytes4  private constant SEL_FETCH_STRING = bytes4(keccak256("fetchString(string,string)"));
+    bytes4  private constant SEL_FETCH_UINT = bytes4(keccak256("fetchUint(string,string,uint8)"));
+    bytes4  private constant SEL_EXTRACT_STRING = bytes4(keccak256("ExtractString(string,string,string[],string,string,bool,uint8,uint8)"));
+    bytes4  private constant SEL_EXTRACT_NUMBER = bytes4(keccak256("ExtractANumber(string,string,uint256,uint256,string,string,bool,uint8,uint8)"));
+    bytes4  private constant SEL_INFER_STRING = bytes4(keccak256("inferString(string,string,bool,string[])"));
+    bytes4  private constant SEL_INFER_NUMBER = bytes4(keccak256("inferNumber(string,string,int256,int256,bool)"));
 
     // ERC-6551 salt — matches TWIIN_6551_SALT in shared/constants.ts
     bytes32 public constant TWIIN_6551_SALT = bytes32(0);
@@ -127,6 +144,14 @@ contract AgentOrchestrator is
         bytes32 transcriptHash,
         string reason
     );
+    event StepConsensusReached(
+        uint256 indexed taskId,
+        uint8 indexed stepIdx,
+        uint256 indexed requestId,
+        uint64 validators,
+        uint256 receiptId,
+        uint256 medianExecutionCost
+    );
 
     // ─── State ────────────────────────────────────────────────────────────────
 
@@ -165,20 +190,6 @@ contract AgentOrchestrator is
         bytes32 intentHash;
     }
 
-    struct OnchainTool {
-        string signature;
-        string description;
-    }
-
-    bytes4 private constant SEL_HIRE_SUB_AGENT =
-        bytes4(keccak256("hireSubAgent(uint256,bytes,uint256,uint32)"));
-    bytes4 private constant SEL_COMPLETE_TRUSTLESS =
-        bytes4(keccak256("completeTrustlessTask(string)"));
-    bytes4 private constant SEL_PUBLISH_ORACLE =
-        bytes4(keccak256("publishOracle(uint256,string,string,uint8,uint256,uint256,bytes32)"));
-    bytes4 private constant SEL_RATE_SUB_AGENT =
-        bytes4(keccak256("rateSubAgent(uint256,uint32,uint8)"));
-
     mapping(uint256 => uint256) public taskLock;   // personalAgentId → activeTaskId; 0 = free
     mapping(uint256 => Task)    public tasks;
     uint256                     public nextTaskId;  // starts at 1
@@ -186,6 +197,7 @@ contract AgentOrchestrator is
     mapping(uint256 => NativeRef) internal nativeReqIndex;   // somniaRequestId → (taskId, stepIdx)
     mapping(uint256 => uint256) internal trustlessReqIndex;  // janice requestId → taskId
     mapping(uint256 => TrustlessCtx) public trustlessCtx;
+    mapping(uint256 => mapping(uint8 => AgentConsensusLib.Receipt)) public stepReceipts;
 
     // ─── Modifiers ────────────────────────────────────────────────────────────
 
@@ -316,7 +328,7 @@ contract AgentOrchestrator is
         emit TaskCreated(taskId, personalAgentId, PlanMode.TrustlessJanice, budgetWei);
         emit TrustlessTaskIntent(taskId, goal, intentHash, ctx.maxIterations);
 
-        bytes memory payload = _buildInitialJanicePayload(goal, ctx.maxIterations);
+        bytes memory payload = AgentJaniceLib.buildInitialJanicePayload(goal, ctx.maxIterations);
         _startJaniceRequest(taskId, payload);
     }
 
@@ -373,12 +385,13 @@ contract AgentOrchestrator is
         if (a.lane == AgentLane.SomniaNative) {
             tasks[taskId].spentWei += stepCost;
             vault.payNative(taskId, stepCost);
+            bytes memory dispatchPayload = _payloadForDispatch(taskId, cursor, step);
 
             uint256 reqId = agentsApi.createRequest{value: stepCost}(
                 a.somniaAgentId,
                 address(this),
                 this.handleResponse.selector,
-                step.payload
+                dispatchPayload
             );
             StepRuntime storage rtN = tasks[taskId].runtime[cursor];
             rtN.state            = StepState.RunningNative;
@@ -408,9 +421,9 @@ contract AgentOrchestrator is
 
     function handleResponse(
         uint256 requestId,
-        Response[] memory responses,
-        ResponseStatus status,
-        Request memory /* details */
+        ResponseWire[] memory responses,
+        uint8 status,
+        RequestWire memory details
     ) external onlyAgentsApi {
         uint256 trustlessTaskId = trustlessReqIndex[requestId];
         if (trustlessTaskId != 0) {
@@ -429,7 +442,23 @@ contract AgentOrchestrator is
 
         delete nativeReqIndex[requestId];  // storage hygiene
 
-        bool success = status == ResponseStatus.Success && responses.length > 0;
+        bool success = status == RESPONSE_STATUS_SUCCESS
+            && AgentConsensusLib.satisfiesParticipation(responses, details);
+
+        if (success) {
+            AgentConsensusLib.Receipt memory receipt =
+                AgentConsensusLib.buildReceipt(responses);
+            stepReceipts[ref.taskId][ref.stepIdx] = receipt;
+            emit StepConsensusReached(
+                ref.taskId,
+                ref.stepIdx,
+                requestId,
+                receipt.validators,
+                receipt.receiptId,
+                receipt.executionCost
+            );
+        }
+
         bytes memory result = success ? responses[0].result : bytes("");
         rt.state      = success ? StepState.Succeeded : StepState.Failed;
         rt.resultData = result;
@@ -442,11 +471,217 @@ contract AgentOrchestrator is
         _advance(ref.taskId, ref.stepIdx, success, result);
     }
 
+    /// @notice Consensus receipt for a completed native step (empty until callback lands).
+    function stepConsensusOf(
+        uint256 taskId,
+        uint8 stepIdx
+    ) external view returns (AgentConsensusLib.Receipt memory) {
+        return stepReceipts[taskId][stepIdx];
+    }
+
+    function _payloadForDispatch(
+        uint256 taskId,
+        uint8 stepIdx,
+        Step memory step
+    ) internal view returns (bytes memory) {
+        if (
+            step.subAgentConfigId != ANALYSIS_CONFIG_ID &&
+            step.subAgentConfigId != REPORTER_CONFIG_ID
+        ) {
+            return step.payload;
+        }
+
+        string memory priorContext = _priorStepContext(taskId, stepIdx);
+        if (bytes(priorContext).length == 0) return step.payload;
+
+        return _appendContextToLlmPayload(step.payload, priorContext);
+    }
+
+    function _priorStepContext(uint256 taskId, uint8 uptoStepIdx) internal view returns (string memory) {
+        string memory context = "";
+        for (uint8 i = 0; i < uptoStepIdx; i++) {
+            bytes memory resultData = tasks[taskId].runtime[i].resultData;
+            if (resultData.length == 0) continue;
+
+            string memory decoded = _decodeStepResult(tasks[taskId].steps[i], resultData);
+            if (bytes(decoded).length == 0) continue;
+
+            string memory label = _stepOutputLabel(tasks[taskId].steps[i]);
+            if (bytes(context).length == 0) {
+                context = string.concat("Previous step outputs:\n- ", label, ": ", decoded);
+            } else {
+                context = string.concat(context, "\n- ", label, ": ", decoded);
+            }
+        }
+        return context;
+    }
+
+    function _stepOutputLabel(Step memory step) internal pure returns (string memory) {
+        if (step.subAgentConfigId == 1) return "web-intel";
+        if (step.subAgentConfigId == ANALYSIS_CONFIG_ID) return "analysis";
+        if (step.subAgentConfigId == REPORTER_CONFIG_ID) return "reporter";
+
+        bytes4 selector = _selectorOf(step.payload);
+        bytes memory argsData = _payloadArgs(step.payload);
+        if (selector == SEL_FETCH_STRING) {
+            (, string memory selectorText) = abi.decode(argsData, (string, string));
+            return string.concat("oracle ", selectorText);
+        }
+        if (selector == SEL_FETCH_UINT) {
+            (, string memory selectorText, uint8 decimals) = abi.decode(argsData, (string, string, uint8));
+            return string.concat(
+                "oracle ",
+                selectorText,
+                " (decimals=",
+                _uintToString(uint256(decimals)),
+                ")"
+            );
+        }
+        return "prior result";
+    }
+
+    function _decodeStepResult(Step memory step, bytes memory resultData) internal pure returns (string memory) {
+        bytes4 selector = _selectorOf(step.payload);
+        bytes memory argsData = _payloadArgs(step.payload);
+
+        if (selector == SEL_FETCH_STRING || selector == SEL_EXTRACT_STRING || selector == SEL_INFER_STRING) {
+            return abi.decode(resultData, (string));
+        }
+        if (selector == SEL_FETCH_UINT || selector == SEL_EXTRACT_NUMBER) {
+            uint256 value = abi.decode(resultData, (uint256));
+            if (selector == SEL_FETCH_UINT) {
+                (, , uint8 decimals) = abi.decode(argsData, (string, string, uint8));
+                return _formatFixed(value, decimals);
+            }
+            return _uintToString(value);
+        }
+        if (selector == SEL_INFER_NUMBER) {
+            // decode as signed number for analysis payloads that request numeric output
+            return _intToString(abi.decode(resultData, (int256)));
+        }
+
+        // Fallback for plain ABI string outputs from future native LLM/web steps.
+        if (step.subAgentConfigId == ANALYSIS_CONFIG_ID || step.subAgentConfigId == REPORTER_CONFIG_ID) {
+            return abi.decode(resultData, (string));
+        }
+
+        return "";
+    }
+
+    function _appendContextToLlmPayload(
+        bytes memory payload,
+        string memory priorContext
+    ) internal pure returns (bytes memory) {
+        bytes4 selector = _selectorOf(payload);
+        bytes memory argsData = _payloadArgs(payload);
+
+        if (selector == SEL_INFER_STRING) {
+            (
+                string memory prompt,
+                string memory system,
+                bool chainOfThought,
+                string[] memory allowedValues
+            ) = abi.decode(argsData, (string, string, bool, string[]));
+            return abi.encodeWithSelector(
+                SEL_INFER_STRING,
+                string.concat(prompt, "\n\n", priorContext),
+                system,
+                chainOfThought,
+                allowedValues
+            );
+        }
+
+        if (selector == SEL_INFER_NUMBER) {
+            (
+                string memory prompt,
+                string memory system,
+                int256 minValue,
+                int256 maxValue,
+                bool chainOfThought
+            ) = abi.decode(argsData, (string, string, int256, int256, bool));
+            return abi.encodeWithSelector(
+                SEL_INFER_NUMBER,
+                string.concat(prompt, "\n\n", priorContext),
+                system,
+                minValue,
+                maxValue,
+                chainOfThought
+            );
+        }
+
+        return payload;
+    }
+
+    function _selectorOf(bytes memory payload) internal pure returns (bytes4 selector) {
+        if (payload.length < 4) return bytes4(0);
+        assembly {
+            selector := mload(add(payload, 32))
+        }
+    }
+
+    function _payloadArgs(bytes memory payload) internal pure returns (bytes memory argsData) {
+        if (payload.length <= 4) return "";
+        argsData = new bytes(payload.length - 4);
+        for (uint256 i = 0; i < argsData.length; i++) {
+            argsData[i] = payload[i + 4];
+        }
+    }
+
+    function _uintToString(uint256 value) internal pure returns (string memory) {
+        if (value == 0) return "0";
+        uint256 digits;
+        uint256 temp = value;
+        while (temp != 0) {
+            digits++;
+            temp /= 10;
+        }
+        bytes memory buffer = new bytes(digits);
+        while (value != 0) {
+            digits--;
+            buffer[digits] = bytes1(uint8(48 + uint256(value % 10)));
+            value /= 10;
+        }
+        return string(buffer);
+    }
+
+    function _intToString(int256 value) internal pure returns (string memory) {
+        if (value >= 0) return _uintToString(uint256(value));
+        return string.concat("-", _uintToString(uint256(-value)));
+    }
+
+    function _formatFixed(uint256 value, uint8 decimals) internal pure returns (string memory) {
+        if (decimals == 0) return _uintToString(value);
+
+        uint256 scale = 10 ** uint256(decimals);
+        uint256 whole = value / scale;
+        uint256 fraction = value % scale;
+
+        if (fraction == 0) return _uintToString(whole);
+
+        bytes memory fractionDigits = new bytes(uint256(decimals));
+        for (uint256 i = uint256(decimals); i > 0; i--) {
+            fractionDigits[i - 1] = bytes1(uint8(48 + (fraction % 10)));
+            fraction /= 10;
+        }
+
+        uint256 end = fractionDigits.length;
+        while (end > 0 && fractionDigits[end - 1] == bytes1(uint8(48))) {
+            end--;
+        }
+
+        bytes memory trimmedFraction = new bytes(end);
+        for (uint256 i = 0; i < end; i++) {
+            trimmedFraction[i] = fractionDigits[i];
+        }
+
+        return string.concat(_uintToString(whole), ".", string(trimmedFraction));
+    }
+
     function _handleTrustlessResponse(
         uint256 taskId,
         uint256 requestId,
-        Response[] memory responses,
-        ResponseStatus status
+        ResponseWire[] memory responses,
+        uint8 status
     ) internal {
         delete trustlessReqIndex[requestId];
 
@@ -456,7 +691,7 @@ contract AgentOrchestrator is
         TrustlessCtx storage ctx = trustlessCtx[taskId];
         if (ctx.awaiting != TrustlessAwaiting.Janice) return;
 
-        if (status != ResponseStatus.Success || responses.length == 0) {
+        if (status != RESPONSE_STATUS_SUCCESS || responses.length == 0) {
             _abortTask(taskId, "janice failed");
             return;
         }
@@ -477,17 +712,17 @@ contract AgentOrchestrator is
         bytes32 transcriptHash = keccak256(responses[0].result);
         emit JaniceIteration(taskId, ctx.iterations, requestId, finishReason, transcriptHash);
 
-        if (_eq(finishReason, "max_iterations")) {
+        if (AgentJaniceLib.eq(finishReason, "max_iterations")) {
             _abortTask(taskId, "max iterations");
             return;
         }
 
-        if (_eq(finishReason, "stop")) {
+        if (AgentJaniceLib.eq(finishReason, "stop")) {
             _completeTrustlessTask(taskId, assistantMessage);
             return;
         }
 
-        if (!_eq(finishReason, "tool_calls")) {
+        if (!AgentJaniceLib.eq(finishReason, "tool_calls")) {
             _abortTask(taskId, "unsupported janice response");
             return;
         }
@@ -495,12 +730,12 @@ contract AgentOrchestrator is
         bool paused = false;
         for (uint256 i = 0; i < pendingToolCalls.length; i++) {
             bytes memory toolCalldata = pendingToolCalls[i];
-            string memory toolName = _toolNameFromCalldata(toolCalldata);
-            bytes memory toolArgs = _toolArgsFromCalldata(toolCalldata);
+            string memory toolName = AgentJaniceLib.toolNameFromCalldata(toolCalldata);
+            bytes memory toolArgs = AgentJaniceLib.toolArgsFromCalldata(toolCalldata);
             if (paused) {
                 if (
-                    _eq(toolName, "rateSubAgent") ||
-                    _eq(toolName, "publishOracle")
+                    AgentJaniceLib.eq(toolName, "rateSubAgent") ||
+                    AgentJaniceLib.eq(toolName, "publishOracle")
                 ) {
                     bool postOk = _executeTrustlessTool(taskId, toolName, toolArgs, assistantMessage);
                     emit JaniceToolExecuted(
@@ -807,6 +1042,32 @@ contract AgentOrchestrator is
         return agentRegistry.getByCapability(a.capabilities[0]);
     }
 
+    function _stepCostForConfig(uint256 configId) internal view returns (uint256) {
+        AgentRegistry.SubAgent memory a = agentRegistry.get(configId);
+        if (!(a.isActive && a.lane == AgentLane.SomniaNative)) revert BadNativeConfig();
+        return agentsApi.getRequestDeposit() + (a.costWei * SUBCOMMITTEE_SIZE);
+    }
+
+    function _externalStepCost(uint256 configId) internal view returns (uint256) {
+        AgentRegistry.SubAgent memory a = agentRegistry.get(configId);
+        return a.costWei;
+    }
+
+    function _affordableStepCost(
+        uint256 taskId,
+        uint8 stepIdx,
+        uint256 configId
+    ) internal view returns (uint256) {
+        AgentRegistry.SubAgent memory a = agentRegistry.get(configId);
+        uint256 stepCost = a.lane == AgentLane.SomniaNative
+            ? _stepCostForConfig(configId)
+            : _externalStepCost(configId);
+        Step memory step = tasks[taskId].steps[stepIdx];
+        if (stepCost > step.maxCostWei) return type(uint256).max;
+        if (tasks[taskId].spentWei + stepCost > tasks[taskId].budgetWei) return type(uint256).max;
+        return stepCost;
+    }
+
     // Try the next-ranked agent from the snapshot for the current step.
     function _retryWithSnapshot(
         uint256 taskId,
@@ -818,6 +1079,7 @@ contract AgentOrchestrator is
             if (snapshot[i] == currentConfigId) continue;
             AgentRegistry.SubAgent memory candidate = agentRegistry.get(snapshot[i]);
             if (!candidate.isActive || candidate.suspended) continue;
+            if (_affordableStepCost(taskId, stepIdx, snapshot[i]) == type(uint256).max) continue;
             tasks[taskId].steps[stepIdx].subAgentConfigId = snapshot[i];
             _dispatchStep(taskId);
             return true;
@@ -894,7 +1156,7 @@ contract AgentOrchestrator is
         Task storage t = tasks[taskId];
         TrustlessCtx storage ctx = trustlessCtx[taskId];
 
-        if (_eq(toolName, "hireSubAgent")) {
+        if (AgentJaniceLib.eq(toolName, "hireSubAgent")) {
             (
                 uint256 configId,
                 bytes memory payload,
@@ -919,13 +1181,13 @@ contract AgentOrchestrator is
             return true;
         }
 
-        if (_eq(toolName, "completeTrustlessTask")) {
+        if (AgentJaniceLib.eq(toolName, "completeTrustlessTask")) {
             string memory finalResult = abi.decode(toolArgs, (string));
             _completeTrustlessTask(taskId, bytes(finalResult).length == 0 ? assistantMessage : finalResult);
             return true;
         }
 
-        if (_eq(toolName, "publishOracle")) {
+        if (AgentJaniceLib.eq(toolName, "publishOracle")) {
             if (refreshManager == address(0)) {
                 _abortTask(taskId, "refresh manager unset");
                 return false;
@@ -958,7 +1220,7 @@ contract AgentOrchestrator is
             return true;
         }
 
-        if (_eq(toolName, "rateSubAgent")) {
+        if (AgentJaniceLib.eq(toolName, "rateSubAgent")) {
             (uint256 configId, uint32 latencyMs, uint8 score) = abi.decode(
                 toolArgs,
                 (uint256, uint32, uint8)
@@ -971,73 +1233,4 @@ contract AgentOrchestrator is
         return false;
     }
 
-    function _trustlessSystemPrompt() internal pure returns (string memory) {
-        return "You are Janice, a trustless planner on Twiin. Use the provided on-chain tools to hire sub-agents, publish oracle data, rate agents, or complete the task with a final result.";
-    }
-
-    function _trustlessOnchainTools() internal pure returns (OnchainTool[] memory tools) {
-        tools = new OnchainTool[](4);
-        tools[0].signature = "hireSubAgent(uint256,bytes,uint256,uint32)";
-        tools[1].signature = "completeTrustlessTask(string)";
-        tools[2].signature = "publishOracle(uint256,string,string,uint8,uint256,uint256,bytes32)";
-        tools[3].signature = "rateSubAgent(uint256,uint32,uint8)";
-        tools[0].description = "Hire a registered sub-agent. Args: configId, ABI-encoded step payload, maxCostWei, timeoutSeconds.";
-        tools[1].description = "Finish the trustless task with a concise final user-facing result.";
-        tools[2].description = "Publish oracle feed data. Args: personalAgentId, topic, value, confidence, maxAgeSeconds, refreshInterval, templateHash.";
-        tools[3].description = "Rate a sub-agent. Args: configId, latencyMs, score (0-100).";
-    }
-
-    function _buildInitialJanicePayload(
-        string memory goal,
-        uint8 /* maxIterations */
-    ) internal pure returns (bytes memory) {
-        string[] memory roles = new string[](2);
-        roles[0] = "system";
-        roles[1] = "user";
-        string[] memory messages = new string[](2);
-        messages[0] = _trustlessSystemPrompt();
-        messages[1] = goal;
-        return _encodeJanicePayload(roles, messages);
-    }
-
-    function _encodeJanicePayload(
-        string[] memory roles,
-        string[] memory messages
-    ) internal pure returns (bytes memory) {
-        string[] memory mcpUrls = new string[](0);
-        return abi.encodeWithSignature(
-            "inferToolsChat(string[],string[],string[],(string,string)[],uint256,bool)",
-            roles,
-            messages,
-            mcpUrls,
-            _trustlessOnchainTools(),
-            uint256(INFER_TOOLS_CHAT_MAX_ITERATIONS),
-            false
-        );
-    }
-
-    function _toolArgsFromCalldata(bytes memory toolCalldata) internal pure returns (bytes memory args) {
-        if (toolCalldata.length <= 4) return "";
-        args = new bytes(toolCalldata.length - 4);
-        for (uint256 i = 0; i < args.length; i++) {
-            args[i] = toolCalldata[i + 4];
-        }
-    }
-
-    function _toolNameFromCalldata(bytes memory toolCalldata) internal pure returns (string memory) {
-        if (toolCalldata.length < 4) return "unknown";
-        bytes4 sel;
-        assembly {
-            sel := mload(add(toolCalldata, 32))
-        }
-        if (sel == SEL_HIRE_SUB_AGENT) return "hireSubAgent";
-        if (sel == SEL_COMPLETE_TRUSTLESS) return "completeTrustlessTask";
-        if (sel == SEL_PUBLISH_ORACLE) return "publishOracle";
-        if (sel == SEL_RATE_SUB_AGENT) return "rateSubAgent";
-        return "unknown";
-    }
-
-    function _eq(string memory a, string memory b) internal pure returns (bool) {
-        return keccak256(bytes(a)) == keccak256(bytes(b));
-    }
 }

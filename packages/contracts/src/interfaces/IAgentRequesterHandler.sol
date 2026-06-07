@@ -14,6 +14,15 @@ struct Response {
     uint256 executionCost;
 }
 
+struct ResponseWire {
+    address validator;
+    bytes   result;
+    uint8   status;
+    uint256 receipt;
+    uint256 timestamp;
+    uint256 executionCost;
+}
+
 struct Request {
     uint256 id;
     address requester;
@@ -32,12 +41,30 @@ struct Request {
     uint256 perAgentBudget;
 }
 
+struct RequestWire {
+    uint256 id;
+    address requester;
+    address callbackAddress;
+    bytes4  callbackSelector;
+    address[] subcommittee;
+    ResponseWire[] responses;
+    uint256 responseCount;
+    uint256 failureCount;
+    uint256 threshold;
+    uint256 createdAt;
+    uint256 deadline;
+    uint8   status;
+    uint8   consensusType;
+    uint256 remainingBudget;
+    uint256 perAgentBudget;
+}
+
 interface IAgentRequesterHandler {
     function handleResponse(
         uint256 requestId,
-        Response[] memory responses,
-        ResponseStatus status,
-        Request memory details
+        ResponseWire[] memory responses,
+        uint8 status,
+        RequestWire memory details
     ) external;
 }
 

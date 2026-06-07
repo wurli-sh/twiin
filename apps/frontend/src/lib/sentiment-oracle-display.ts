@@ -1,7 +1,13 @@
 import { NativeConfigId } from '@/config/contracts'
 
-/** Matches buildSomniaSentimentTemplate() in the backend planner. */
+/** Legacy 4-step oracle-only template. */
 export const SENTIMENT_ORACLE_STEP_COUNT = 4
+
+/** 4 oracle fetches + reporter snapshot (common Claude plan). */
+export const ORACLE_REPORTER_STEP_COUNT = 5
+
+/** Matches buildSomniaCorroboratedTemplate() in the backend planner. */
+export const CORROBORATED_SENTIMENT_STEP_COUNT = 7
 
 const SENTIMENT_FIELD_LABELS = [
   'PRICE_USD (8 decimals)',
@@ -10,9 +16,29 @@ const SENTIMENT_FIELD_LABELS = [
   'VOLUME_24H_USD (8 decimals)',
 ] as const
 
+export function isCorroboratedSentimentTask(
+  steps: { configId: number | string }[],
+): boolean {
+  return steps.length === CORROBORATED_SENTIMENT_STEP_COUNT
+}
+
+export function isOracleReporterStatsTask(
+  steps: { configId: number | string }[],
+): boolean {
+  return (
+    steps.length === ORACLE_REPORTER_STEP_COUNT &&
+    steps
+      .slice(0, ORACLE_REPORTER_STEP_COUNT - 1)
+      .every((s) => Number(s.configId) === NativeConfigId.ORACLE) &&
+    Number(steps[ORACLE_REPORTER_STEP_COUNT - 1]?.configId) === NativeConfigId.REPORTER
+  )
+}
+
 export function isSentimentOracleTask(
   steps: { configId: number | string }[],
 ): boolean {
+  if (isCorroboratedSentimentTask(steps)) return true
+  if (isOracleReporterStatsTask(steps)) return true
   return (
     steps.length === SENTIMENT_ORACLE_STEP_COUNT &&
     steps.every((s) => Number(s.configId) === NativeConfigId.ORACLE)

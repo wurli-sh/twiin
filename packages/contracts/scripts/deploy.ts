@@ -248,8 +248,23 @@ async function main() {
   await oracleFeed.waitForDeployment();
   await captureTx("oracleFeed", oracleFeed);
 
-  const AgentOrchestratorF =
-    await ethers.getContractFactory("AgentOrchestrator");
+  console.log("\n[libs] Deploying orchestrator libraries...");
+  const AgentConsensusLibF = await ethers.getContractFactory("AgentConsensusLib");
+  const agentConsensusLib = await AgentConsensusLibF.deploy();
+  await agentConsensusLib.waitForDeployment();
+  await captureTx("agentConsensusLib", agentConsensusLib);
+
+  const AgentJaniceLibF = await ethers.getContractFactory("AgentJaniceLib");
+  const agentJaniceLib = await AgentJaniceLibF.deploy();
+  await agentJaniceLib.waitForDeployment();
+  await captureTx("agentJaniceLib", agentJaniceLib);
+
+  const AgentOrchestratorF = await ethers.getContractFactory("AgentOrchestrator", {
+    libraries: {
+      AgentConsensusLib: await agentConsensusLib.getAddress(),
+      AgentJaniceLib: await agentJaniceLib.getAddress(),
+    },
+  });
   const orchestrator = await AgentOrchestratorF.deploy(
     await registry6551.getAddress(),
     await twiinAccountImpl.getAddress(),
