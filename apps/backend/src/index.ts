@@ -7,7 +7,7 @@ import { startIndexer } from "./keepers/indexer";
 import { startRelay } from "./keepers/relay";
 import { startRater } from "./keepers/rater";
 import { startTimeoutKeeper } from "./keepers/timeouts";
-import { createExternalAgentBootstrap } from "./keepers/externals";
+import { createExternalAgentBootstrap, startExternalHealthRefresh } from "./keepers/externals";
 import { startTrustlessResumeKeeper } from "./keepers/trustless-resume";
 
 const app = createApp();
@@ -44,6 +44,7 @@ async function bootstrap(): Promise<void> {
       .run()
       .then(() => {
         console.log("[twiin-backend] external-agent bootstrap complete");
+        startExternalHealthRefresh();
       })
       .catch((error) => {
         console.error("[twiin-backend] external-agent bootstrap failed:", error);

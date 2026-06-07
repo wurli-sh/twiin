@@ -9,6 +9,7 @@
 | `useTaskDetail` | `useTaskDetail.ts` | Fetch single task from on-chain `AgentOrchestrator.tasks()` |
 | `useAgentTasks` | `useAgentTasks.ts` | Fetch all tasks for a specific personalAgentId |
 | `useCreateTask` | `useCreateTask.ts` | Build + send `createTask` via ERC-6551 `execute` |
+| `useCreateTrustlessTask` | `useCreateTrustlessTask.ts` | Build + send trustless `createTask` via ERC-6551 `execute` |
 | `useAgentPolicy` | `useAgentPolicy.ts` | Read + update agent spending policy (`dailyCapWei`, `killSwitch`) |
 | `useRotatingPhrase` | `useRotatingPhrase.ts` | Rotating text animation state for hero header |
 | `usePageReady` | `usePageReady.ts` | Staggered page reveal animation controller |

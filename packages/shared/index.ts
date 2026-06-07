@@ -4,6 +4,9 @@ export * from "./twiin-account";
 export * from "./somnia-agents";
 export * from "./trustless";
 export * from "./consensus";
+export * from "./agent-catalog";
+export * from "./plan-errors";
+export * from "./plan-templates";
 
 // ABIs — populated by `pnpm copy-abis` (requires contracts to be compiled first)
 export * from "./abis/index";

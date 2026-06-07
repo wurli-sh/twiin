@@ -18,7 +18,17 @@ import { useTaskDetail } from '@/hooks/useTaskDetail'
 import { useWallet } from '@/hooks/useWallet'
 import { useUIStore } from '@/stores/ui'
 import { type PlanBudgetMismatch } from '@/components/console/PlanBudgetRecovery'
-import { requestPlan, isPlanOverBudgetError } from '@/lib/plan-api'
+import {
+  requestPlan,
+  isPlanOverBudgetError,
+  isPlanNoAgentError,
+  isPlanUnavailableError,
+} from '@/lib/plan-api'
+import {
+  clearPersistedSession,
+  loadPersistedSession,
+  persistSession,
+} from '@/lib/console-session-storage'
 import {
   requestTrustlessPreflight,
   isTrustlessBudgetTooLowError,
@@ -133,7 +143,9 @@ export function ConsolePage() {
   const selectedAgentId = useUIStore((s) => s.selectedAgentId)
   const setSelectedAgentId = useUIStore((s) => s.setSelectedAgentId)
 
-  const [sessionEntries, setSessionEntries] = useState<SessionEntry[]>([])
+  const [sessionEntries, setSessionEntries] = useState<SessionEntry[]>(() =>
+    loadPersistedSession(selectedAgentId ?? agents[0]?.id.toString() ?? null),
+  )
   const [goal, setGoal] = useState('')
   const [budgetStt, setBudgetStt] = useState('1')
   const [planMismatch, setPlanMismatch] = useState<PlanBudgetMismatch | null>(null)
@@ -242,6 +254,10 @@ export function ConsolePage() {
     )
     if (terminal) setDetailVersion((v) => v + 1)
   }, [events])
+
+  useEffect(() => {
+    persistSession(agentId, sessionEntries)
+  }, [agentId, sessionEntries])
 
   useEffect(() => {
     if (!selectedAgentId && agents[0]) {
@@ -369,6 +385,23 @@ export function ConsolePage() {
         toast.error('Planning timed out — try again')
       } else if (isPlanOverBudgetError(e)) {
         setPlanMismatch({ estimatedStt: e.estimatedStt, budgetStt: e.budgetStt })
+      } else if (isPlanNoAgentError(e)) {
+        appendEntry({
+          id: createEntryId(),
+          kind: 'error',
+          text:
+            e.missingCapabilities?.length
+              ? `No capable agent available (${e.missingCapabilities.join(', ')}). Register an external agent or raise budget.`
+              : e.message,
+        })
+        toast.error('No capable agent available for this goal')
+      } else if (isPlanUnavailableError(e)) {
+        appendEntry({
+          id: createEntryId(),
+          kind: 'error',
+          text: `${e.message}${e.retryAfterSeconds ? ` Retry in ${e.retryAfterSeconds}s.` : ' Try again shortly.'}`,
+        })
+        toast.error('Planner temporarily unavailable — try again')
       } else {
         appendEntry({
           id: createEntryId(),

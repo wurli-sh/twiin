@@ -11,11 +11,15 @@ import { publicClient } from "../clients";
 import { addresses, defaultStartBlock, orchestratorContract } from "../contracts";
 import { env } from "../env";
 import {
+  completeRelayJob,
   deleteSubmittedResult,
+  enqueueRelayJob,
   getCursor,
   getExternalAgent,
   getStep,
   isResultSubmitted,
+  listDueRelayJobs,
+  markRelayJobRetry,
   saveSubmittedResult,
   setCursor,
   setExternalAgentVerification,
@@ -31,6 +35,8 @@ const MAX_RPC_LOG_RANGE = 1_000n;
 const FAST_FORWARD_LAG_THRESHOLD = 100_000n;
 const FAST_FORWARD_TAIL = 10_000n;
 const MAX_EXTERNAL_RESULT_SIZE = 16_384;
+const RELAY_EXECUTE_RETRIES = 3;
+const RELAY_BACKOFF_SECONDS = [2, 8, 32];
 const externalAgentRequestEvent = parseAbiItem(
   "event ExternalAgentRequest(uint256 indexed taskId, uint8 stepIdx, uint256 configId, address registrant, bytes32 endpointHash, bytes payload, bytes32 reqId, uint64 deadline)",
 ) as AbiEvent;
@@ -68,6 +74,10 @@ type RelayDeps = {
   upsertStep: typeof upsertStep;
   getExternalAgent: typeof getExternalAgent;
   setExternalAgentVerification: typeof setExternalAgentVerification;
+  enqueueRelayJob: typeof enqueueRelayJob;
+  listDueRelayJobs: typeof listDueRelayJobs;
+  markRelayJobRetry: typeof markRelayJobRetry;
+  completeRelayJob: typeof completeRelayJob;
   publish: typeof publish;
   submitExternalResult: (
     args: readonly [bigint, number, `0x${string}`, `0x${string}`],
@@ -101,6 +111,10 @@ export function createRelay(overrides: Partial<RelayDeps> = {}) {
     upsertStep,
     getExternalAgent,
     setExternalAgentVerification,
+    enqueueRelayJob,
+    listDueRelayJobs,
+    markRelayJobRetry,
+    completeRelayJob,
     publish,
     submitExternalResult: (args) =>
       orchestratorContract.write.submitExternalResult(args),
@@ -194,22 +208,68 @@ export function createRelay(overrides: Partial<RelayDeps> = {}) {
           configId: configId.toString(),
           deadline: deadline?.toString() ?? null,
         });
-        await processExternalStep(deps, {
-          taskId,
+        await deps.enqueueRelayJob({
+          taskId: taskIdStr,
           stepIdx,
-          configId,
+          configId: configId.toString(),
+          reqId,
+          payload: payload ?? "0x",
           registrant,
           endpointHash,
-          payload: payload ?? "0x",
-          reqId,
         });
       } catch (e) {
-        deps.logger.error(`[relay] failed task=${taskIdStr} step=${stepIdx}:`, e);
+        deps.logger.error(`[relay] enqueue failed task=${taskIdStr} step=${stepIdx}:`, e);
       }
     }
 
     await deps.setCursor(CURSOR_KEY, to + 1n);
+    await processRelayJobs(deps);
   }
+
+  async function processRelayJobs(deps: RelayDeps): Promise<void> {
+    const nowSeconds = Math.floor(deps.nowMs() / 1000);
+    const jobs = await deps.listDueRelayJobs(nowSeconds);
+    for (const job of jobs) {
+      if (await deps.isResultSubmitted(job.task_id, job.step_idx)) {
+        await deps.completeRelayJob(job.task_id, job.step_idx);
+        continue;
+      }
+      try {
+        await processExternalStep(deps, {
+          taskId: BigInt(job.task_id),
+          stepIdx: job.step_idx,
+          configId: BigInt(job.config_id),
+          registrant: job.registrant as `0x${string}`,
+          endpointHash: job.endpoint_hash as `0x${string}`,
+          payload: job.payload as `0x${string}`,
+          reqId: job.req_id as `0x${string}`,
+        });
+        await deps.completeRelayJob(job.task_id, job.step_idx);
+      } catch (e) {
+        const attempts = job.attempts + 1;
+        const backoff =
+          RELAY_BACKOFF_SECONDS[Math.min(attempts - 1, RELAY_BACKOFF_SECONDS.length - 1)];
+        const nextRetryAt = nowSeconds + backoff;
+        await deps.markRelayJobRetry(
+          job.task_id,
+          job.step_idx,
+          attempts,
+          nextRetryAt,
+          String(e),
+        );
+        logTaskTimeline(attempts >= RELAY_EXECUTE_RETRIES ? "relay_exhausted" : "relay_retry", {
+          taskId: job.task_id,
+          stepIdx: job.step_idx,
+          attempts,
+          nextRetryAt,
+          error: String(e),
+        });
+        deps.logger.error(
+          `[relay] job failed task=${job.task_id} step=${job.step_idx} attempt=${attempts}:`,
+          e,
+        );
+      }
+    }
 
   async function poll(): Promise<void> {
     while (running) {
@@ -263,6 +323,7 @@ async function processExternalStep(
     throw new Error(`external agent ${configId} failed verification`);
   }
 
+  const stepRow = await deps.getStep(taskIdStr, stepIdx);
   const { resultHex, signature } = await executeExternalAgent(
     deps,
     agent,
@@ -270,9 +331,9 @@ async function processExternalStep(
     stepIdx,
     payload,
     reqId,
+    stepRow?.timeout_seconds ?? 120,
   );
 
-  const stepRow = await deps.getStep(taskIdStr, stepIdx);
   if (stepRow && stepRow.state !== StepState.RunningExternal) {
     deps.logger.log(
       `[relay] step ${taskIdStr}:${stepIdx} no longer RunningExternal, skipping`,
@@ -348,7 +409,7 @@ async function ensureVerified(
     const reqId = keccak256(
       toBytes(`verify:${configId.toString()}:${deps.nowMs()}`),
     );
-    const execute = await runExecute(deps, agent, 0n, 0, "0x", reqId);
+    const execute = await runExecute(deps, agent, 0n, 0, "0x", reqId, 30);
     await verifySignedResult(
       deps,
       0n,
@@ -381,18 +442,44 @@ async function executeExternalAgent(
   stepIdx: number,
   payloadHex: `0x${string}`,
   reqId: `0x${string}`,
+  timeoutSeconds: number,
 ): Promise<{ resultHex: `0x${string}`; signature: `0x${string}` }> {
-  const execute = await runExecute(deps, agent, taskId, stepIdx, payloadHex, reqId);
-  await verifySignedResult(
-    deps,
-    taskId,
-    stepIdx,
-    reqId,
-    agent.registrant as `0x${string}`,
-    execute.resultHex,
-    execute.signature,
-  );
-  return execute;
+  let lastError: unknown;
+  for (let attempt = 0; attempt < RELAY_EXECUTE_RETRIES; attempt++) {
+    try {
+      const execute = await runExecute(
+        deps,
+        agent,
+        taskId,
+        stepIdx,
+        payloadHex,
+        reqId,
+        timeoutSeconds,
+      );
+      await verifySignedResult(
+        deps,
+        taskId,
+        stepIdx,
+        reqId,
+        agent.registrant as `0x${string}`,
+        execute.resultHex,
+        execute.signature,
+      );
+      return execute;
+    } catch (error) {
+      lastError = error;
+      const retriable =
+        error instanceof Error &&
+        (error.message.includes("502") ||
+          error.message.includes("503") ||
+          error.message.includes("504") ||
+          error.message.includes("fetch failed") ||
+          error.message.includes("network"));
+      if (!retriable || attempt >= RELAY_EXECUTE_RETRIES - 1) break;
+      await sleep(RELAY_BACKOFF_SECONDS[attempt] * 1000);
+    }
+  }
+  throw lastError ?? new Error("execute failed");
 }
 
 async function runExecute(
@@ -402,7 +489,9 @@ async function runExecute(
   stepIdx: number,
   payloadHex: `0x${string}`,
   reqId: `0x${string}`,
+  timeoutSeconds = 120,
 ): Promise<{ resultHex: `0x${string}`; signature: `0x${string}` }> {
+  const timeoutMs = Math.min(timeoutSeconds * 1000, 120_000);
   const res = await deps.fetchImpl(new URL("/execute", agent.endpoint_url), {
     method: "POST",
     headers: {
@@ -415,7 +504,7 @@ async function runExecute(
       payload: payloadHex.slice(2),
       reqId,
     }),
-    signal: AbortSignal.timeout(20_000),
+    signal: AbortSignal.timeout(timeoutMs),
   });
 
   if (!res.ok) {
@@ -519,6 +608,10 @@ const defaultRelayDeps = {
   upsertStep,
   getExternalAgent,
   setExternalAgentVerification,
+  enqueueRelayJob,
+  listDueRelayJobs,
+  markRelayJobRetry,
+  completeRelayJob,
   publish,
   submitExternalResult: (args: readonly [bigint, number, `0x${string}`, `0x${string}`]) =>
     orchestratorContract.write.submitExternalResult(args),

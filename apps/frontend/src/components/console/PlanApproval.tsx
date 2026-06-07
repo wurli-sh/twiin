@@ -10,7 +10,7 @@ import type { ExecutionMode } from '@/config/features'
 import { consolePageTheme } from '@/lib/execution-mode-theme'
 import { cn } from '@/lib/cn'
 
-const APPROVAL_SECONDS = 60
+const APPROVAL_SECONDS = 300
 
 type PlanApprovalProps = {
   plan: PlanResponse
@@ -41,7 +41,15 @@ export function PlanApproval({
     if (status !== 'pending') return
     expiredRef.current = false
     setSecondsLeft(APPROVAL_SECONDS)
+
+    const onVisibility = () => {
+      if (document.hidden) return
+      setSecondsLeft((current) => current)
+    }
+    document.addEventListener('visibilitychange', onVisibility)
+
     const t = window.setInterval(() => {
+      if (document.hidden) return
       setSecondsLeft((s) => {
         if (s <= 1) {
           window.clearInterval(t)
@@ -50,7 +58,10 @@ export function PlanApproval({
         return s - 1
       })
     }, 1000)
-    return () => window.clearInterval(t)
+    return () => {
+      window.clearInterval(t)
+      document.removeEventListener('visibilitychange', onVisibility)
+    }
   }, [plan, status])
 
   useEffect(() => {

@@ -6,6 +6,7 @@ import {
   externalAgents,
   keeperCursors,
   planRequests,
+  relayJobs,
   steps,
   submittedRatings,
   submittedResults,
@@ -182,6 +183,41 @@ export function ensureSchema(): Promise<void> {
         "consensus_median_cost_wei",
         "consensus_median_cost_wei text",
       );
+      await ensureColumn("plan_requests", "plan_id", "plan_id text");
+      await ensureColumn("plan_requests", "source", "source text NOT NULL DEFAULT 'llm'");
+      await ensureColumn(
+        "plan_requests",
+        "attempts",
+        "attempts integer NOT NULL DEFAULT 1",
+      );
+      await ensureColumn(
+        "plan_requests",
+        "verification_tier",
+        "verification_tier text",
+      );
+      await ensureColumn(
+        "plan_requests",
+        "substitutions_json",
+        "substitutions_json text",
+      );
+      await db.run(sql`
+        CREATE TABLE IF NOT EXISTS relay_jobs (
+          task_id text NOT NULL,
+          step_idx integer NOT NULL,
+          config_id text NOT NULL,
+          req_id text NOT NULL,
+          payload text NOT NULL DEFAULT '0x',
+          registrant text NOT NULL,
+          endpoint_hash text NOT NULL,
+          attempts integer NOT NULL DEFAULT 0,
+          next_retry_at integer NOT NULL DEFAULT 0,
+          status text NOT NULL DEFAULT 'pending',
+          last_error text,
+          created_at integer NOT NULL,
+          updated_at integer NOT NULL,
+          PRIMARY KEY (task_id, step_idx)
+        )
+      `);
     })().catch((error) => {
       schemaReady = null;
       throw error;
@@ -585,19 +621,180 @@ export async function deleteSubmittedRating(
 
 // ── Plan requests ─────────────────────────────────────────────────────────────
 
-export async function savePlanRequest(
-  personalAgentId: string,
-  goal: string,
-  stepsJson: string,
-  budgetWei: string,
-): Promise<void> {
+export type PlanRequestSource = "llm" | "template" | "substituted";
+
+export async function savePlanRequest(input: {
+  planId: string;
+  personalAgentId: string;
+  goal: string;
+  stepsJson: string;
+  budgetWei: string;
+  source?: PlanRequestSource;
+  attempts?: number;
+  verificationTier?: string | null;
+  substitutionsJson?: string | null;
+}): Promise<void> {
   await db.insert(planRequests).values({
-    personalAgentId,
-    goal,
-    stepsJson,
-    budgetWei,
+    planId: input.planId,
+    personalAgentId: input.personalAgentId,
+    goal: input.goal,
+    stepsJson: input.stepsJson,
+    budgetWei: input.budgetWei,
+    source: input.source ?? "llm",
+    attempts: input.attempts ?? 1,
+    verificationTier: input.verificationTier ?? null,
+    substitutionsJson: input.substitutionsJson ?? null,
     createdAt: Math.floor(Date.now() / 1000),
   });
+}
+
+export async function getPlanRequest(planId: string): Promise<{
+  plan_id: string | null;
+  personal_agent_id: string;
+  goal: string;
+  steps_json: string;
+  budget_wei: string;
+  source: string | null;
+  attempts: number | null;
+  verification_tier: string | null;
+  substitutions_json: string | null;
+  created_at: number;
+} | null> {
+  const [row] = await db
+    .select({
+      plan_id: planRequests.planId,
+      personal_agent_id: planRequests.personalAgentId,
+      goal: planRequests.goal,
+      steps_json: planRequests.stepsJson,
+      budget_wei: planRequests.budgetWei,
+      source: planRequests.source,
+      attempts: planRequests.attempts,
+      verification_tier: planRequests.verificationTier,
+      substitutions_json: planRequests.substitutionsJson,
+      created_at: planRequests.createdAt,
+    })
+    .from(planRequests)
+    .where(eq(planRequests.planId, planId))
+    .limit(1);
+  return row ?? null;
+}
+
+// ── Relay jobs ────────────────────────────────────────────────────────────────
+
+export async function enqueueRelayJob(input: {
+  taskId: string;
+  stepIdx: number;
+  configId: string;
+  reqId: string;
+  payload: string;
+  registrant: string;
+  endpointHash: string;
+}): Promise<boolean> {
+  const now = Math.floor(Date.now() / 1000);
+  const result = await db
+    .insert(relayJobs)
+    .values({
+      taskId: input.taskId,
+      stepIdx: input.stepIdx,
+      configId: input.configId,
+      reqId: input.reqId,
+      payload: input.payload,
+      registrant: input.registrant,
+      endpointHash: input.endpointHash,
+      attempts: 0,
+      nextRetryAt: now,
+      status: "pending",
+      lastError: null,
+      createdAt: now,
+      updatedAt: now,
+    })
+    .onConflictDoNothing();
+  return (result.rowsAffected ?? 0) > 0;
+}
+
+export async function listDueRelayJobs(
+  nowSeconds: number,
+  limit = 20,
+): Promise<
+  {
+    task_id: string;
+    step_idx: number;
+    config_id: string;
+    req_id: string;
+    payload: string;
+    registrant: string;
+    endpoint_hash: string;
+    attempts: number;
+  }[]
+> {
+  return db
+    .select({
+      task_id: relayJobs.taskId,
+      step_idx: relayJobs.stepIdx,
+      config_id: relayJobs.configId,
+      req_id: relayJobs.reqId,
+      payload: relayJobs.payload,
+      registrant: relayJobs.registrant,
+      endpoint_hash: relayJobs.endpointHash,
+      attempts: relayJobs.attempts,
+    })
+    .from(relayJobs)
+    .where(
+      and(
+        inArray(relayJobs.status, ["pending", "retry"]),
+        sql`${relayJobs.nextRetryAt} <= ${nowSeconds}`,
+      ),
+    )
+    .orderBy(relayJobs.nextRetryAt)
+    .limit(limit);
+}
+
+export async function markRelayJobRetry(
+  taskId: string,
+  stepIdx: number,
+  attempts: number,
+  nextRetryAt: number,
+  lastError: string,
+): Promise<void> {
+  await db
+    .update(relayJobs)
+    .set({
+      attempts,
+      nextRetryAt,
+      status: attempts >= 3 ? "failed" : "retry",
+      lastError,
+      updatedAt: Math.floor(Date.now() / 1000),
+    })
+    .where(and(eq(relayJobs.taskId, taskId), eq(relayJobs.stepIdx, stepIdx)));
+}
+
+export async function completeRelayJob(
+  taskId: string,
+  stepIdx: number,
+): Promise<void> {
+  await db
+    .delete(relayJobs)
+    .where(and(eq(relayJobs.taskId, taskId), eq(relayJobs.stepIdx, stepIdx)));
+}
+
+export async function getRelayJob(
+  taskId: string,
+  stepIdx: number,
+): Promise<{
+  status: string;
+  attempts: number;
+  last_error: string | null;
+} | null> {
+  const [row] = await db
+    .select({
+      status: relayJobs.status,
+      attempts: relayJobs.attempts,
+      last_error: relayJobs.lastError,
+    })
+    .from(relayJobs)
+    .where(and(eq(relayJobs.taskId, taskId), eq(relayJobs.stepIdx, stepIdx)))
+    .limit(1);
+  return row ?? null;
 }
 
 // ── Trustless metadata ───────────────────────────────────────────────────────

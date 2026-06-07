@@ -11,6 +11,7 @@ import { env } from "../env";
 import { verifyExternalAgentCacheEntry } from "./relay";
 
 const CHUNK = 500n;
+const HEALTH_REFRESH_MS = 5 * 60 * 1000;
 
 const externalAgentRegisteredEvent = parseAbiItem(
   "event ExternalAgentRegistered(uint256 indexed configId, address indexed registrant, string endpointUrl, bytes32 endpointHash, bytes32[] caps, uint256 costWei)",
@@ -72,18 +73,50 @@ export function createExternalAgentBootstrap(
         from = to + 1n;
       }
 
-      const activeAgents = await deps.listExternalAgents({ activeOnly: true });
-      for (const agent of activeAgents) {
-        if (agent.is_verified === 1) continue;
+      await verifyUnverifiedAgents(deps);
+    },
+  };
+}
+
+export function startExternalHealthRefresh(
+  overrides: Partial<ExternalBootstrapDeps> = {},
+): void {
+  const bootstrap = createExternalAgentBootstrap(overrides);
+  const tick = async () => {
+    try {
+      const agents = await listExternalAgents({ activeOnly: true });
+      for (const agent of agents) {
         const ok = await verifyExternalAgentCacheEntry(agent.config_id);
         if (!ok) {
-          deps.logger.warn(
-            `[externals] boot verification failed for config=${agent.config_id}`,
+          console.warn(
+            `[externals] health refresh failed for config=${agent.config_id}`,
           );
         }
       }
-    },
+    } catch (error) {
+      console.error("[externals] health refresh error:", error);
+    }
   };
+
+  void tick();
+  setInterval(() => {
+    void tick();
+  }, HEALTH_REFRESH_MS);
+}
+
+async function verifyUnverifiedAgents(
+  deps: ExternalBootstrapDeps,
+): Promise<void> {
+  const activeAgents = await deps.listExternalAgents({ activeOnly: true });
+  for (const agent of activeAgents) {
+    if (agent.is_verified === 1) continue;
+    const ok = await verifyExternalAgentCacheEntry(agent.config_id);
+    if (!ok) {
+      deps.logger.warn(
+        `[externals] boot verification failed for config=${agent.config_id}`,
+      );
+    }
+  }
 }
 
 async function processRange(

@@ -81,12 +81,37 @@ export const externalAgents = sqliteTable("external_agents", {
 
 export const planRequests = sqliteTable("plan_requests", {
   id: integer("id").primaryKey({ autoIncrement: true }),
+  planId: text("plan_id"),
   personalAgentId: text("personal_agent_id").notNull(),
   goal: text("goal").notNull(),
   stepsJson: text("steps_json").notNull(),
   budgetWei: text("budget_wei").notNull(),
+  source: text("source").notNull().default("llm"),
+  attempts: integer("attempts").notNull().default(1),
+  verificationTier: text("verification_tier"),
+  substitutionsJson: text("substitutions_json"),
   createdAt: integer("created_at").notNull(),
 });
+
+export const relayJobs = sqliteTable(
+  "relay_jobs",
+  {
+    taskId: text("task_id").notNull(),
+    stepIdx: integer("step_idx").notNull(),
+    configId: text("config_id").notNull(),
+    reqId: text("req_id").notNull(),
+    payload: text("payload").notNull().default("0x"),
+    registrant: text("registrant").notNull(),
+    endpointHash: text("endpoint_hash").notNull(),
+    attempts: integer("attempts").notNull().default(0),
+    nextRetryAt: integer("next_retry_at").notNull().default(0),
+    status: text("status").notNull().default("pending"),
+    lastError: text("last_error"),
+    createdAt: integer("created_at").notNull(),
+    updatedAt: integer("updated_at").notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.taskId, t.stepIdx] })],
+);
 
 export const trustlessTasks = sqliteTable("trustless_tasks", {
   taskId: text("task_id").primaryKey(),

@@ -32,6 +32,8 @@ packages/shared/
 ├── constants.ts                  — CHAIN_ID, TWIIN_6551_SALT, NativeConfigId, CapabilityId, enums, defaults
 ├── digest.ts                     — buildTwiinDigest()
 ├── twiin-account.ts              — deriveTwiinAccountAddress()
+├── trustless.ts                  — TrustlessJanice plan digest/encoding helpers
+├── consensus.ts                  — consensus receipt types and helpers
 ├── index.ts                      — barrel + loadAddresses(raw) + loadDeploymentManifest(raw)
 ├── tsconfig.json                 — CommonJS, ES2022, resolveJsonModule, outDir: dist
 └── vitest.config.ts
@@ -77,6 +79,16 @@ Deterministic ERC-6551 CREATE2 derivation:
 - CREATE2 salt = raw `TWIIN_6551_SALT` (NOT a hash of the footer)
 - Footer = `encodeAbiParameters([bytes32, uint256, address, uint256], [salt, chainId, twiinAgent, tokenId])` (abi.encode, 128 bytes)
 - initCode = `concat([PROXY_HEADER(20), impl(20), PROXY_TRAILER(15), footer(128)])`
+
+### `trustless.ts` — TrustlessJanice helpers
+
+- `buildTrustlessDigest(params)` — inner keccak256 for trustless task intents
+- `encodeTrustlessCreateTask(goal, configs)` — encode trustless `createTask` calldata
+
+### `consensus.ts` — Consensus receipt types
+
+- `Receipt` type definition matching `AgentConsensusLib.Receipt` struct
+- `medianExecutionCost(receipts)` — compute median across validator receipts
 
 ### `index.ts` — `loadAddresses(raw: unknown): Addresses`
 

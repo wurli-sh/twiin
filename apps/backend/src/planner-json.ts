@@ -11,6 +11,16 @@ const StepsOutputSchema = z.array(StepSpecSchema).min(1).max(6);
 
 export type PlannerStepSpec = z.infer<typeof StepSpecSchema>;
 
+export function parsePlannerStepsFromToolInput(input: unknown): PlannerStepSpec[] {
+  if (Array.isArray(input)) {
+    return StepsOutputSchema.parse(input);
+  }
+  if (input && typeof input === "object" && "steps" in input) {
+    return StepsOutputSchema.parse((input as { steps: unknown }).steps);
+  }
+  throw new SyntaxError("planner tool input missing steps array");
+}
+
 /** Strip markdown fences and trailing prose; parse the first top-level JSON array. */
 export function parsePlannerStepsJson(raw: string): PlannerStepSpec[] {
   let text = raw.trim();

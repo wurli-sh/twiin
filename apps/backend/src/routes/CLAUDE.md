@@ -7,6 +7,7 @@ All routes use a DI factory pattern (`createXRouter(deps)`) for testability. Mou
 | File | Endpoint | Method | Role |
 |------|----------|--------|------|
 | `plan.ts` | `/api/plan` | POST | User goal → Claude Haiku → `createTask` calldata; rate-limited (10 req/min/IP), optional `x-plan-secret` auth |
+| `trustless-preflight.ts` | `/api/trustless/preflight` | POST | Validates trustless plan calldata before on-chain submission |
 | `tasks.ts` | `/api/tasks/:taskId` | GET | Reads on-chain task state from `AgentOrchestrator.tasks()` |
 | `tasks.ts` | `/api/tasks/:taskId/steps` | GET | Returns indexed steps from SQLite |
 | `stream.ts` | `/api/stream/:taskId` | GET | SSE stream for real-time task execution updates; supports `Last-Event-ID` reconnection |

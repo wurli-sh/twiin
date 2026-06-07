@@ -10,6 +10,7 @@
 | `agent-status-copy.ts` | Map agent status enums to display text |
 | `config-names.ts` | Native agent name ↔ configId mapping (janice, web-intel, etc.) |
 | `console-session.ts` | Console session state (current goal, step history, selections) |
+| `execution-mode-theme.ts` | ClaudePlan vs Trustless mode color/theme tokens |
 | `feed-topics.ts` | Oracle feed topic ID ↔ label mapping |
 | `format-time.ts` | Duration/time formatting (relative, absolute, countdown) |
 | `plan-api.ts` | `POST /api/plan` client with fetch + error handling |
@@ -21,3 +22,4 @@
 | `sub-agent-status.ts` | Map sub-agent registry state to display status |
 | `task-result-display.ts` | Format task step result for display |
 | `task-state.ts` | Task state enum helpers (human label, color, icon) |
+| `trustless-api.ts` | Trustless plan API client (`POST /api/trustless/preflight`) |
