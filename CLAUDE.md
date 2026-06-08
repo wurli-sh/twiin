@@ -340,3 +340,4 @@ Auto-refresh via Somnia Reactivity precompile (chain-side, no cron) or keeper fa
 3. **Backend** ✅ — Hono server, viem clients, Claude Sonnet planner, relay + rater keepers, event indexer, SSE, SQLite
 4. **Frontend** ✅ — wallet UX, deploy flow, task flow, live execution, panels
 5. **External Agents** ✅ — 7 agents (briefsmith, docs-lens, dreamdex-mcp, onchain-lens, reactivity-lens, receipt-auditor, agent-adapter)
+
