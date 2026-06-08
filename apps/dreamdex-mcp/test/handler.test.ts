@@ -27,6 +27,10 @@ const baseEnv: DreamdexEnv = {
   REGISTRATION_DEPOSIT_WEI: 5000000000000000000n,
 };
 
+function withEnv(overrides: Partial<DreamdexEnv> = {}): DreamdexEnv {
+  return { ...baseEnv, ...overrides };
+}
+
 function payloadHex(payload: Record<string, unknown>): string {
   return Buffer.from(JSON.stringify(payload)).toString("hex");
 }
@@ -36,7 +40,7 @@ const somniaPair: DexPair = {
   dexId: "dreamdex",
   baseToken: { symbol: "SOMI", name: "Somnia" },
   quoteToken: { symbol: "USDC" },
-  priceUsd: "0.42",
+  priceUsd: "0.006800",
   liquidity: { usd: 89_100 },
   volume: { h24: 12_300 },
   priceChange: { h24: -2.1 },
@@ -169,13 +173,20 @@ describe("dreamdex helpers", () => {
 });
 
 describe("executeDreamdex", () => {
-  it("returns DexScreener success with Somnia pair preferred", async () => {
+  it("returns DexScreener success with Somnia pair preferred and price corrected by CoinGecko", async () => {
     vi.stubGlobal(
       "fetch",
-      vi.fn().mockResolvedValue({
-        ok: true,
-        json: async () => ({ pairs: [ethPair, somniaPair] }),
-      }),
+      vi.fn()
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({ pairs: [ethPair, somniaPair] }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({
+            somnia: { usd: 0.114893, usd_market_cap: 1_200_000_000, usd_24h_vol: 45_000_000, usd_24h_change: -1.2 },
+          }),
+        }),
     );
 
     const result = await executeDreamdex({
@@ -197,15 +208,68 @@ describe("executeDreamdex", () => {
         symbol: "SOMI",
         chain: "somnia",
         dex: "dreamdex",
+        priceUsd: "0.114893",
       },
     });
-    expect(parsed.lpRiskHints.length).toBeGreaterThan(0);
-    expect(parsed.findings.length).toBeGreaterThan(0);
     expect(parsed.orderbook).toMatchObject({
-      midPrice: "0.42",
+      midPrice: "0.114893",
       note: expect.stringContaining("DexScreener proxy"),
     });
+    expect(parsed.findings[0]).toContain("price-corrected");
+    expect(parsed.findings[0]).toContain("0.114893");
+    expect(parsed.lpRiskHints.length).toBeGreaterThan(0);
     expect(parsed.pairs.length).toBeLessThanOrEqual(2);
+  });
+
+  it("keeps DexScreener price when CoinGecko overlay fails", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn()
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({ pairs: [ethPair, somniaPair] }),
+        })
+        .mockResolvedValueOnce({
+          ok: false,
+          status: 429,
+        }),
+    );
+
+    const result = await executeDreamdex({
+      taskId: "1",
+      stepIdx: 0,
+      payloadHex: payloadHex({ action: "orderbook", pair: "SOMI/USDC" }),
+      reqId: "0x" + "11".repeat(32),
+      env: baseEnv,
+    });
+
+    const parsed = JSON.parse(result);
+    expect(parsed.topPair.priceUsd).toBe("0.006800");
+    expect(parsed.orderbook.midPrice).toBe("0.006800");
+    expect(parsed.findings[0]).not.toContain("price-corrected");
+  });
+
+  it("does not apply CoinGecko overlay for non-Somnia pairs", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ pairs: [ethPair] }),
+      }),
+    );
+
+    const result = await executeDreamdex({
+      taskId: "2",
+      stepIdx: 0,
+      payloadHex: payloadHex({ action: "orderbook", pair: "SOMI/USDC" }),
+      reqId: "0x" + "22".repeat(32),
+      env: baseEnv,
+    });
+
+    const parsed = JSON.parse(result);
+    expect(parsed.topPair.priceUsd).toBe("0.40");
+    expect(parsed.topPair.chain).toBe("ethereum");
+    expect(parsed.findings.some((f: string) => f.includes("No Somnia/dreamDEX pair found"))).toBe(true);
   });
 
   it("returns structured findings when DexScreener has no pairs", async () => {
@@ -240,6 +304,12 @@ describe("executeDreamdex", () => {
         .mockResolvedValueOnce({
           ok: true,
           json: async () => ({ pairs: [somniaPair] }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({
+            somnia: { usd: 0.114893, usd_market_cap: 1_200_000_000, usd_24h_vol: 45_000_000, usd_24h_change: -1.2 },
+          }),
         }),
     );
 
@@ -248,12 +318,12 @@ describe("executeDreamdex", () => {
       stepIdx: 0,
       payloadHex: payloadHex({ action: "orderbook", pair: "SOMI/USDC" }),
       reqId: "0x" + "33".repeat(32),
-      env: { ...baseEnv, DREAMDEX_MCP_URL: "https://mcp.dreamdex.example/query" },
+      env: withEnv({ DREAMDEX_MCP_URL: "https://mcp.dreamdex.example/query" }),
     });
 
     const parsed = JSON.parse(result);
     expect(parsed.source).toBe("dexscreener");
-    expect(parsed.findings[0]).toContain("dreamDEX MCP unavailable");
+    expect(parsed.findings.some((f: string) => f.includes("dreamDEX MCP unavailable"))).toBe(true);
     expect(parsed.topPair?.chain).toBe("somnia");
   });
 

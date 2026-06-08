@@ -234,6 +234,37 @@ export function filterPairsForResponse(pairs: DexPair[], request: MarketRequest)
   return sorted.slice(0, max);
 }
 
+async function applyCoingeckoOverlay(
+  env: DreamdexEnv,
+  request: MarketRequest,
+  resultStr: string,
+): Promise<string> {
+  const result = JSON.parse(resultStr);
+  const topPair = result.topPair as TopPairSummary | null;
+  if (!topPair) return resultStr;
+
+  const isSomnia = topPair.chain === "somnia" || (topPair.symbol ?? "").toUpperCase() === "SOMI";
+  if (!isSomnia) return resultStr;
+
+  const coinId = "somnia";
+  try {
+    const metrics = await fetchCoingeckoMetrics(coinId);
+    if (metrics?.usd != null) {
+      const correctedPrice = String(metrics.usd);
+      topPair.priceUsd = correctedPrice;
+      if (result.orderbook) result.orderbook.midPrice = correctedPrice;
+      result.findings = Array.isArray(result.findings) ? result.findings : [];
+      result.findings.unshift(
+        `[price-corrected] CoinGecko price override: $${correctedPrice} (DexScreener data is unreliable for ${topPair.chain})`,
+      );
+    }
+  } catch {
+    // CoinGecko unavailable, keep DexScreener price
+  }
+
+  return JSON.stringify(result);
+}
+
 function buildDexscreenerSuccess(
   env: DreamdexEnv,
   request: MarketRequest,
@@ -407,7 +438,8 @@ export async function executeDreamdex(input: ExternalExecuteInput): Promise<stri
   try {
     const pairs = await fetchDexscreenerPairs(request.pair);
     const { top, chainWarning } = pickBestPair(pairs);
-    return buildDexscreenerSuccess(env, request, pairs, top, chainWarning, mcpNote);
+    const result = buildDexscreenerSuccess(env, request, pairs, top, chainWarning, mcpNote);
+    return await applyCoingeckoOverlay(env, request, result);
   } catch (error) {
     return structuredError(env.AGENT_NAME, "dexscreener", String(error), {
       action: request.action,
