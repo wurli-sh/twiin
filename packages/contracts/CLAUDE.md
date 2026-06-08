@@ -33,8 +33,8 @@ src/
 │   ├── MockERC20.sol
 │   └── MockUniswapV2Router02.sol
 ├── lib/
-│   ├── AgentConsensusLib.sol       — consensus receipt building, participation validation
-│   └── AgentJaniceLib.sol          — Janice planner helpers (tool parsing, payload encoding)
+│   ├── AgentConsensusLib.sol       — consensus receipt building, participation validation, median cost
+│   └── AgentJaniceLib.sol          — Janice trustless planner helpers (tool parsing, payload encoding)
 ├── AgentOrchestrator.sol           — core engine; extends SomniaEventHandler; registerTaskTemplate()
 ├── AgentPolicy.sol                 — per-agent caps, kill switch, allowlist
 ├── AgentRegistry.sol               — two-lane registry; Elo ranking

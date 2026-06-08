@@ -14,3 +14,4 @@
 | `useRotatingPhrase` | `useRotatingPhrase.ts` | Rotating text animation state for hero header |
 | `usePageReady` | `usePageReady.ts` | Staggered page reveal animation controller |
 | `useNetworkGuard` | `useNetworkGuard.ts` | Enforce Somnia Testnet — warns/redirects on wrong chain |
+| `usePublishFeed` | `usePublishFeed.ts` | Publish oracle feed data on-chain via AgentOrchestrator |

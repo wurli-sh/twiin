@@ -9,10 +9,10 @@ Somnia Agentathon (Encode Club, May 18 – Jun 11 2026). Somnia Testnet chainId 
 | Phase               | Status      | Notes                                                    |
 | ------------------- | ----------- | -------------------------------------------------------- |
 | 1 — Contracts       | ✅ Complete | 94+ tests passing; lib/ extracted, consensus receipts    |
-| 2 — Shared package  | ✅ Complete | 22/22 vitest tests; ABIs, constants, digest, 6551 helper |
-| 3 — Backend         | ✅ Complete | Hono, Claude planner, keepers (6), SSE, SQLite           |
+| 2 — Shared package  | ✅ Complete | 22+ vitest tests; ABIs, constants, digest, 6551 helper, plan templates |
+| 3 — Backend         | ✅ Complete | Hono, Claude planner, keepers (6), SSE, SQLite, keeper-writes serialization |
 | 4 — Frontend        | ✅ Complete | React/Vite/wagmi, deploy flow, task console, feeds       |
-| 5 — Discord Bot     | ✅ Complete | Hono webhook server, on-chain command registration       |
+| 5 — External Agents | ✅ Complete | 7 agents (briefsmith, docs-lens, dreamdex-mcp, onchain-lens, reactivity-lens, receipt-auditor, agent-adapter) |
 | 6 — TrustlessJanice | ✅ Deployed | On-chain + UI; gated by env flag                         |
 
 ## Commands
@@ -24,30 +24,33 @@ Somnia Agentathon (Encode Club, May 18 – Jun 11 2026). Somnia Testnet chainId 
 | `pnpm test:shared`   | runs `@twiin/shared` tests (vitest)                          |
 | `pnpm test:backend`  | runs `@twiin/backend` tests (vitest)                         |
 | `pnpm test:frontend` | runs `@twiin/frontend` tests (vitest)                       |
-| `pnpm test:discord-bot` | runs `@twiin/discord-bot` tests (vitest)                 |
 | `pnpm test:all`      | runs contracts + shared + backend + discord-bot tests        |
 | `pnpm compile`       | compiles `@twiin/contracts` (Hardhat)                        |
 | `pnpm deploy:local`  | deploy contracts to local Hardhat node                       |
 | `pnpm deploy:somnia` | deploy contracts to Somnia Testnet                           |
 | `pnpm dev:backend`   | `pnpm --filter @twiin/backend dev` (from `apps/backend/`)    |
 | `pnpm dev:frontend`  | `pnpm --filter @twiin/frontend dev` (from `apps/frontend/`)  |
-| `pnpm dev:discord-bot` | `pnpm --filter @twiin/discord-bot dev`                     |
 | `pnpm dev:all`       | concurrently runs backend + frontend dev servers             |
 | `pnpm start:backend` | `pnpm --filter @twiin/backend start` (from `apps/backend/`)  |
-| `pnpm start:discord-bot` | `pnpm --filter @twiin/discord-bot start`                 |
-| `pnpm register:discord-bot` | register demo external agent on-chain on Somnia        |
 
 ## Structure
 
 ```
 twiin/
 ├── packages/
-│   ├── contracts/   — Solidity smart contracts (Hardhat, Solidity 0.8.30) ✅
-│   └── shared/      — TypeScript shared lib (ABIs, types, constants, helpers) ✅
+│   ├── contracts/     — Solidity smart contracts (Hardhat, Solidity 0.8.30) ✅
+│   ├── shared/        — TypeScript shared lib (ABIs, types, constants, helpers) ✅
+│   └── external-kit/  — Shared HTTP server, payload parsing, registration helpers ✅
 ├── apps/
-│   ├── backend/     — Hono server, Claude planner, keepers, SSE, SQLite ✅
-│   ├── frontend/    — React/Vite/wagmi ✅
-│   └── discord-bot/ — Hono webhook, on-chain command registration ✅
+│   ├── backend/       — Hono server, Claude planner, keepers, SSE, SQLite ✅
+│   ├── frontend/      — React/Vite/wagmi ✅
+│   ├── briefsmith/    — Executive brief agent (Anthropic Haiku) ✅
+│   ├── docs-lens/     — Somnia docs query agent ✅
+│   ├── dreamdex-mcp/  — Market/dex data agent (DexScreener, CoinGecko) ✅
+│   ├── onchain-lens/  — On-chain block/tx snapshot agent ✅
+│   ├── reactivity-lens/ — OracleFeed/reactivity event scanner ✅
+│   ├── receipt-auditor/ — Somnia agent receipt forensics agent ✅
+│   └── agent-adapter/ — Generic HTTP proxy for upstream runtimes ✅
 ├── .agents/         — Agent skill definitions (empty, for future use)
 ├── .codex/          — Codex metadata (empty, for future use)
 ├── build-context.md — Compact project context for agent sessions
@@ -109,13 +112,67 @@ twiin/
 | `src/stores/` | `ui.ts` — zustand UI state |
 | Config | `vite.config.ts`, `tsconfig.json`, `eslint.config.js`, `components.json`, `index.html` |
 
-### `apps/discord-bot/` — Discord Bot
+### `apps/briefsmith/` — Executive Brief Agent
 
 | Path | Purpose |
 |------|---------|
-| `src/` | `app.ts` (Hono webhook), `env.ts` (env vars), `index.ts` (entry) |
-| `scripts/` | `register.ts` — on-chain command registration on Somnia |
-| `test/` | Bot test suite |
+| `src/` | `index.ts` (entry), `env.ts` (env vars), `handler.ts` (Anthropic Haiku + fallback) |
+| `scripts/` | `register.ts` — on-chain registration on Somnia |
+| `test/` | Agent test suite |
+| Config | `tsconfig.json`, `vitest.config.ts`, `.env.example` |
+
+### `apps/docs-lens/` — Somnia Docs Query Agent
+
+| Path | Purpose |
+|------|---------|
+| `src/` | `index.ts` (entry), `env.ts` (env vars), `handler.ts` (docs.somnia.network fetcher) |
+| `scripts/` | `register.ts` — on-chain registration on Somnia |
+| `test/` | Agent test suite |
+| Config | `tsconfig.json`, `vitest.config.ts`, `.env.example` |
+
+### `apps/dreamdex-mcp/` — Market/Dex Data Agent
+
+| Path | Purpose |
+|------|---------|
+| `src/` | `index.ts` (entry), `env.ts` (env vars), `handler.ts` (DexScreener + CoinGecko + MCP) |
+| `scripts/` | `register.ts` — on-chain registration on Somnia |
+| `test/` | Agent test suite |
+| Config | `tsconfig.json`, `vitest.config.ts`, `.env.example` |
+
+### `apps/onchain-lens/` — On-chain Block/Tx Snapshot Agent
+
+| Path | Purpose |
+|------|---------|
+| `src/` | `index.ts` (entry), `env.ts` (env vars), `handler.ts` (eth_blockNumber + eth_getBlockByNumber) |
+| `scripts/` | `register.ts` — on-chain registration on Somnia |
+| `test/` | Agent test suite |
+| Config | `tsconfig.json`, `vitest.config.ts`, `.env.example` |
+
+### `apps/reactivity-lens/` — OracleFeed/Reactivity Event Scanner
+
+| Path | Purpose |
+|------|---------|
+| `src/` | `index.ts` (entry), `env.ts` (env vars), `handler.ts` (eth_getLogs + eth_call on OracleFeed) |
+| `scripts/` | `register.ts` — on-chain registration on Somnia |
+| `test/` | Agent test suite |
+| Config | `tsconfig.json`, `vitest.config.ts`, `.env.example` |
+
+### `apps/receipt-auditor/` — Receipt Forensics Agent
+
+| Path | Purpose |
+|------|---------|
+| `src/` | `index.ts` (entry), `env.ts` (env vars), `handler.ts` (receipts.testnet.agents.somnia.host fetcher) |
+| `scripts/` | `register.ts` — on-chain registration on Somnia |
+| `test/` | Agent test suite |
+| Config | `tsconfig.json`, `vitest.config.ts`, `.env.example` |
+
+### `apps/agent-adapter/` — Generic HTTP Proxy Adapter
+
+| Path | Purpose |
+|------|---------|
+| `src/` | `index.ts` (entry), `env.ts` (env vars), `handler.ts` (upstream proxy + stub fallback) |
+| `scripts/` | `register.ts` — on-chain registration on Somnia |
+| `test/` | Agent test suite |
 | Config | `tsconfig.json`, `vitest.config.ts`, `.env.example` |
 
 ### `packages/contracts/src/interfaces/` — Interface Details
@@ -165,6 +222,9 @@ twiin/
 | `env.ts` | Zod-enforced env vars: `KEEPER_PRIVATE_KEY`, `ANTHROPIC_API_KEY`, `SOMNIA_RPC_URL`, `TURSO_DB_URL`, etc. |
 | `sse.ts` | SSE pub/sub — `subscribe()`, `publish()`, `publishAll()`, `makeSseStream()`, heartbeat |
 | `budget.ts` | Shared budget validation logic |
+| `keeper-writes.ts` | Enqueues keeper writes serially with nonce collision retry |
+| `planner-json.ts` | JSON planner utilities |
+| `trustless.ts` | TrustlessJanice planner logic |
 
 ### `apps/backend/src/routes/` — Route Details
 
@@ -175,6 +235,7 @@ twiin/
 | Tasks Steps | `tasks.ts` | `GET /api/tasks/:taskId/steps` | Returns indexed steps from SQLite |
 | Stream | `stream.ts` | `GET /api/stream/:taskId` | SSE stream for real-time task execution updates |
 | Agents | `agents.ts` | `GET /api/agents` | Lists registered external agents from `AgentRegistry` |
+| Trustless Preflight | `trustless-preflight.ts` | `POST /api/trustless/preflight` | Validates trustless plan before on-chain submission |
 
 ### `apps/backend/src/keepers/` — Keeper Details
 
@@ -184,7 +245,7 @@ twiin/
 | Relay | `relay.ts` | 4s | Routes `StepUpdated(Assigned)` → Claude Sonnet (native) or HTTP POST (external); submits ECDSA-signed result on-chain |
 | Rater | `rater.ts` | 6s | Rates `StepUpdated(Completed)` via Claude Haiku; submits `rateStep` on-chain if score ≥ 40 |
 | Externals | `externals.ts` | 4s | Monitors `ExternalAgentRequest` → dispatches HTTP POST to registered agent endpoints |
-| Timeouts | `timeouts.ts` | 6s | Monitors pending external steps → calls `timeoutExternalStep` on-chain at deadline |
+| Timeouts | `timeouts.ts` | 5s | Monitors pending external steps → calls `timeoutExternalStep` on-chain at deadline |
 
 ### `packages/contracts/src/` — Contract Source Details
 
@@ -284,5 +345,5 @@ Phases 1–4: **ClaudePlan only** (Claude API plans). **TrustlessJanice** (valid
 2. **Shared package** ✅ — ABIs/types, `addresses.json`, chain constants, digest helper, 6551 helper
 3. **Backend** ✅ — Hono server, viem clients, Claude Sonnet planner, relay + rater keepers, event indexer, SSE, SQLite
 4. **Frontend** ✅ — wallet UX, deploy flow, task flow, live execution, panels
-5. **Discord Bot** ✅ — Hono webhook server, on-chain command registration
+5. **External Agents** ✅ — 7 agents (briefsmith, docs-lens, dreamdex-mcp, onchain-lens, reactivity-lens, receipt-auditor, agent-adapter)
 6. **TrustlessJanice** ⬜ — feature-flagged off until T2/T3/T4 pass

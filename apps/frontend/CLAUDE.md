@@ -2,7 +2,7 @@
 
 React 19 + Vite 6 + wagmi 2 + Tailwind CSS 4. Light-theme UI with nano-remit brand (green `#9FE870` / charcoal `#1A1A1A` / ghost `#F5F5F5`). Built with shadcn/ui, framer-motion, three.js paper shaders, and Onest font.
 
-**Status: Phase 4 complete; Phase 6 TrustlessJanice console UI shipped.**
+**Status: Phase 4 complete; Phase 5 external agents UI shipped; Phase 6 TrustlessJanice console UI shipped.**
 
 ## Commands
 
@@ -87,6 +87,7 @@ src/
 │       ├── Badge.tsx                 — status badge
 │       ├── Tabs.tsx                  — tab switcher
 │       ├── ConfirmDialog.tsx         — confirmation modal
+│       ├── DropdownPanel.tsx         — dropdown panel component
 │       ├── TextLoop.tsx              — animated text carousel
 │       ├── TextShimmer.tsx           — shimmer loading text
 │       ├── ThinkingSpinner.tsx       — thinking indicator
@@ -102,7 +103,8 @@ src/
 │   ├── useAgentPolicy.ts    — read + update agent spending policy
 │   ├── useRotatingPhrase.ts — rotating text for hero
 │   ├── usePageReady.ts      — staggered page reveal animation
-│   └── useNetworkGuard.ts   — enforce Somnia Testnet
+│   ├── useNetworkGuard.ts   — enforce Somnia Testnet
+│   └── usePublishFeed.ts    — publish oracle feed data on-chain
 ├── stores/
 │   └── ui.ts                — zustand UI state (selected agent, sidebar, etc.)
 └── lib/
@@ -111,6 +113,7 @@ src/
     ├── animations.ts           — framer-motion animation variants
     ├── agent-name.ts           — name formatting helpers
     ├── agent-budget.ts         — budget formatting helpers
+    ├── agent-output-display.ts — external agent output formatting
     ├── agent-status-copy.ts    — status label text mapping
     ├── config-names.ts         — native agent name ↔ configId mapping
     ├── console-session.ts      — console session state manager
@@ -120,6 +123,7 @@ src/
     ├── plan-api.ts             — POST /api/plan client
     ├── plan-step-display.ts    — plan step display formatting
     ├── preflight-create-task.ts — createTask calldata preflight checks
+    ├── publish-feed-params.ts   — oracle feed publish parameter helpers
     ├── read-contract.ts        — typed readContract wrapper
     ├── report-display.ts       — report step output formatting
     ├── sentiment-oracle-display.ts — oracle sentiment display

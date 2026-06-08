@@ -7,6 +7,7 @@
 | `animations.ts` | framer-motion animation variants (`fadeInUp`, `staggerContainer`, etc.) |
 | `agent-name.ts` | Format `name@twiin` display strings |
 | `agent-budget.ts` | Format budget values (STT wei → human-readable) |
+| `agent-output-display.ts` | Format external agent output for display (dreamdex, docs-lens, etc.) |
 | `agent-status-copy.ts` | Map agent status enums to display text |
 | `config-names.ts` | Native agent name ↔ configId mapping (janice, web-intel, etc.) |
 | `console-session.ts` | Console session state (current goal, step history, selections) |
@@ -16,6 +17,7 @@
 | `plan-api.ts` | `POST /api/plan` client with fetch + error handling |
 | `plan-step-display.ts` | Format plan steps for display (agent name, cost, capability) |
 | `preflight-create-task.ts` | Validate `createTask` parameters before sending tx |
+| `publish-feed-params.ts` | Build oracle feed publish parameters |
 | `read-contract.ts` | Typed `readContract` wrapper with error normalization |
 | `report-display.ts` | Format report step output text |
 | `sentiment-oracle-display.ts` | Format oracle sentiment feed data |

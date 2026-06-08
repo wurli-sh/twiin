@@ -2,7 +2,7 @@
 
 Hono server targeting **Somnia Testnet** (chainId 50312). Claude API planner, keeper bots, SSE streaming, SQLite via Drizzle ORM. Consumed by `apps/frontend`.
 
-**Status: Phase 3 complete — deployed alongside contracts; Phase 6 TrustlessJanice integrated.**
+**Status: Phase 3 complete — deployed alongside contracts; Phase 5 external agents integrated; Phase 6 TrustlessJanice integrated.**
 
 ## Commands
 
@@ -33,6 +33,7 @@ src/
 ├── task-completion.ts — task completion helpers (transcript, result formatting)
 ├── trustless.ts      — TrustlessJanice planner logic
 ├── planner-json.ts   — JSON planner utilities
+├── keeper-writes.ts  — enqueues keeper writes serially with nonce collision retry
 ├── routes/            — see src/routes/CLAUDE.md
 │   ├── plan.ts       — POST /api/plan — user goal → Claude Haiku → createTask calldata
 │   ├── tasks.ts      — GET /api/tasks/:taskId, GET /api/tasks/:taskId/steps
@@ -43,9 +44,10 @@ src/
     ├── indexer.ts    — polls events → SQLite + SSE; indexes external agent lifecycle (4s interval)
     ├── relay.ts      — routes assigned steps to Claude Sonnet (native) or HTTP POST (external) (4s interval)
     ├── rater.ts      — rates completed steps via Claude Haiku → rateStep on-chain (6s interval)
-    ├── externals.ts  — watches ExternalAgentRequest → dispatches HTTP to registered endpoints
-    ├── timeouts.ts   — watches pending external steps → submits on-chain timeout at deadline
-    └── trustless-resume.ts — resumes stalled trustless tasks (6s interval)
+    ├── externals.ts      — watches ExternalAgentRequest → dispatches HTTP to registered endpoints
+    ├── timeouts.ts       — watches pending external steps → submits on-chain timeout at deadline
+    ├── trustless-resume.ts — resumes stalled trustless tasks (6s interval)
+    └── rater-scoring.ts  — rating prompt builder, deterministic score floors, result extraction
 ```
 
 ## Environment Variables (.env)
@@ -73,7 +75,7 @@ See `src/keepers/CLAUDE.md` for full details.
 | Relay     | `relay.ts`     | 4s    | `ExternalAgentRequest`                                   | HTTP POST (external) or Claude Sonnet (native); submits ECDSA result on-chain |
 | Rater     | `rater.ts`     | 6s    | `ExternalResultPending`                                  | Rates via Claude Haiku; submits `rateStep` if score ≥ 40    |
 | Externals | `externals.ts` | 4s    | `ExternalAgentRegistered` / `EndpointUpdated` / `Deregistered` | Syncs external agent metadata into SQLite cache       |
-| Timeouts  | `timeouts.ts`  | 5s    | Pending steps past deadline (any state)                  | Calls on-chain timeout fns (`timeoutExternalStep`, `timeoutTask`, etc.) |
+| Timeouts  | `timeouts.ts`  | 5s    | Pending steps past deadline (RunningExternal, AwaitingRating, RunningNative) | Calls on-chain timeout fns (`timeoutExternalStep`, `timeoutRating`, `timeoutNativeStep`, `timeoutTask`) |
 | Trustless Resume | `trustless-resume.ts` | 6s | Stalled trustless tasks (TrustlessAwaiting)     | Resubmits janice requests for tasks past deadline          |
 
 ## Routes

@@ -10,7 +10,7 @@ components/
 ├── marketplace/   — Sub-agent marketplace (table, rows with Elo ranking)
 ├── layout/        — App shell (Navbar, MainLayout, NetworkBanner)
 ├── spell/         — Animated paper/shader components (three.js, scroll effects)
-└── ui/            — Design system primitives (Button, Badge, Tabs, Dialog, TextLoop, etc.)
+└── ui/            — Design system primitives (Button, Badge, Tabs, ConfirmDialog, DropdownPanel, TextLoop, etc.)
 ```
 
 ### Console Components (19)
