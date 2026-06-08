@@ -8,7 +8,6 @@ import { startRelay } from "./keepers/relay";
 import { startRater } from "./keepers/rater";
 import { startTimeoutKeeper } from "./keepers/timeouts";
 import { createExternalAgentBootstrap, startExternalHealthRefresh } from "./keepers/externals";
-import { startTrustlessResumeKeeper } from "./keepers/trustless-resume";
 
 const app = createApp();
 
@@ -37,9 +36,6 @@ async function bootstrap(): Promise<void> {
     startRelay();
     startRater();
     startTimeoutKeeper();
-    if (env.ENABLE_TRUSTLESS_JANICE) {
-      startTrustlessResumeKeeper();
-    }
     console.log("[twiin-backend] external-agent bootstrap started");
     void createExternalAgentBootstrap()
       .run()

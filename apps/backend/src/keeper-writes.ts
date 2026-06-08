@@ -1,6 +1,6 @@
 /**
  * Serializes on-chain keeper writes and retries transient nonce collisions.
- * Relay, rater, timeouts, and trustless-resume all share one keeper EOA.
+ * Relay, rater, and timeouts all share one keeper EOA.
  */
 let writeChain: Promise<unknown> = Promise.resolve();
 

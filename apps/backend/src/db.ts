@@ -1,6 +1,6 @@
 import { drizzle } from "drizzle-orm/libsql";
 import { and, eq, inArray, sql } from "drizzle-orm";
-import { StepState, TaskState, TrustlessAwaiting } from "@twiin/shared";
+import { StepState, TaskState } from "@twiin/shared";
 import * as schema from "./schema";
 import {
   externalAgents,
@@ -11,8 +11,6 @@ import {
   submittedRatings,
   submittedResults,
   tasks,
-  trustlessTasks,
-  trustlessTurns,
 } from "./schema";
 import { env } from "./env";
 
@@ -108,33 +106,6 @@ export function ensureSchema(): Promise<void> {
         )
       `);
       await db.run(sql`
-        CREATE TABLE IF NOT EXISTS trustless_tasks (
-          task_id text PRIMARY KEY NOT NULL,
-          goal text NOT NULL,
-          intent_hash text NOT NULL,
-          iterations integer NOT NULL DEFAULT 0,
-          max_iterations integer NOT NULL DEFAULT 0,
-          awaiting integer NOT NULL DEFAULT 0,
-          janice_request_id text,
-          last_resume_reason text,
-          updated_at integer NOT NULL
-        )
-      `);
-      await db.run(sql`
-        CREATE TABLE IF NOT EXISTS trustless_turns (
-          task_id text NOT NULL,
-          iteration integer NOT NULL,
-          request_id text NOT NULL,
-          finish_reason text NOT NULL,
-          assistant_message text NOT NULL DEFAULT '',
-          tool_calls_json text NOT NULL DEFAULT '[]',
-          raw_result_hex text,
-          transcript_hash text,
-          created_at integer NOT NULL,
-          PRIMARY KEY (task_id, iteration)
-        )
-      `);
-      await db.run(sql`
         CREATE TABLE IF NOT EXISTS external_agents (
           config_id text PRIMARY KEY NOT NULL,
           registrant text NOT NULL,
@@ -157,11 +128,6 @@ export function ensureSchema(): Promise<void> {
         "external_agents",
         "capabilities_json",
         "capabilities_json text NOT NULL DEFAULT '[]'",
-      );
-      await ensureColumn(
-        "trustless_tasks",
-        "last_resume_reason",
-        "last_resume_reason text",
       );
       await ensureColumn(
         "tasks",
@@ -351,8 +317,6 @@ export async function deleteStepsForTask(taskId: string): Promise<void> {
 export async function deleteTaskArtifactsForTask(taskId: string): Promise<void> {
   await db.delete(submittedRatings).where(eq(submittedRatings.taskId, taskId));
   await db.delete(submittedResults).where(eq(submittedResults.taskId, taskId));
-  await db.delete(trustlessTurns).where(eq(trustlessTurns.taskId, taskId));
-  await db.delete(trustlessTasks).where(eq(trustlessTasks.taskId, taskId));
   await deleteStepsForTask(taskId);
 }
 
@@ -888,194 +852,6 @@ export async function getRelayJob(
     .where(and(eq(relayJobs.taskId, taskId), eq(relayJobs.stepIdx, stepIdx)))
     .limit(1);
   return row ?? null;
-}
-
-// ── Trustless metadata ───────────────────────────────────────────────────────
-
-export async function upsertTrustlessTask(input: {
-  taskId: string;
-  goal: string;
-  intentHash: string;
-  iterations: number;
-  maxIterations: number;
-  awaiting: number;
-  janiceRequestId: string | null;
-  lastResumeReason?: string | null;
-}): Promise<void> {
-  const updatedAt = Math.floor(Date.now() / 1000);
-  await db
-    .insert(trustlessTasks)
-    .values({
-      ...input,
-      lastResumeReason: input.lastResumeReason ?? null,
-      updatedAt,
-    })
-    .onConflictDoUpdate({
-      target: trustlessTasks.taskId,
-      set: {
-        goal: sql`excluded.goal`,
-        intentHash: sql`excluded.intent_hash`,
-        iterations: sql`excluded.iterations`,
-        maxIterations: sql`excluded.max_iterations`,
-        awaiting: sql`excluded.awaiting`,
-        janiceRequestId: sql`COALESCE(excluded.janice_request_id, janice_request_id)`,
-        lastResumeReason: sql`COALESCE(excluded.last_resume_reason, last_resume_reason)`,
-        updatedAt: sql`excluded.updated_at`,
-      },
-    });
-}
-
-export async function patchTrustlessTask(
-  taskId: string,
-  patch: {
-    iterations?: number;
-    maxIterations?: number;
-    awaiting?: number;
-    janiceRequestId?: string | null;
-    lastResumeReason?: string | null;
-  },
-): Promise<void> {
-  const next: Record<string, unknown> = {
-    updatedAt: Math.floor(Date.now() / 1000),
-  };
-  if (patch.iterations != null) next.iterations = patch.iterations;
-  if (patch.maxIterations != null) next.maxIterations = patch.maxIterations;
-  if (patch.awaiting != null) next.awaiting = patch.awaiting;
-  if (patch.janiceRequestId !== undefined) next.janiceRequestId = patch.janiceRequestId;
-  if (patch.lastResumeReason !== undefined) next.lastResumeReason = patch.lastResumeReason;
-  await db.update(trustlessTasks).set(next).where(eq(trustlessTasks.taskId, taskId));
-}
-
-export async function getTrustlessTask(taskId: string): Promise<{
-  task_id: string;
-  goal: string;
-  intent_hash: string;
-  iterations: number;
-  max_iterations: number;
-  awaiting: number;
-  janice_request_id: string | null;
-  last_resume_reason: string | null;
-} | null> {
-  const [row] = await db
-    .select({
-      task_id: trustlessTasks.taskId,
-      goal: trustlessTasks.goal,
-      intent_hash: trustlessTasks.intentHash,
-      iterations: trustlessTasks.iterations,
-      max_iterations: trustlessTasks.maxIterations,
-      awaiting: trustlessTasks.awaiting,
-      janice_request_id: trustlessTasks.janiceRequestId,
-      last_resume_reason: trustlessTasks.lastResumeReason,
-    })
-    .from(trustlessTasks)
-    .where(eq(trustlessTasks.taskId, taskId))
-    .limit(1);
-  return row ?? null;
-}
-
-export async function listTrustlessTasksAwaitingJanice(): Promise<
-  Array<{
-    task_id: string;
-    goal: string;
-    iterations: number;
-    max_iterations: number;
-    awaiting: number;
-    janice_request_id: string | null;
-    last_resume_reason: string | null;
-    updated_at: number;
-  }>
-> {
-  return db
-    .select({
-      task_id: trustlessTasks.taskId,
-      goal: trustlessTasks.goal,
-      iterations: trustlessTasks.iterations,
-      max_iterations: trustlessTasks.maxIterations,
-      awaiting: trustlessTasks.awaiting,
-      janice_request_id: trustlessTasks.janiceRequestId,
-      last_resume_reason: trustlessTasks.lastResumeReason,
-      updated_at: trustlessTasks.updatedAt,
-    })
-    .from(trustlessTasks)
-    .where(eq(trustlessTasks.awaiting, TrustlessAwaiting.Janice));
-}
-
-export async function listTrustlessTasksAwaitingResume(): Promise<
-  Array<{
-    task_id: string;
-    goal: string;
-    iterations: number;
-    max_iterations: number;
-    awaiting: number;
-    last_resume_reason: string | null;
-  }>
-> {
-  return db
-    .select({
-      task_id: trustlessTasks.taskId,
-      goal: trustlessTasks.goal,
-      iterations: trustlessTasks.iterations,
-      max_iterations: trustlessTasks.maxIterations,
-      awaiting: trustlessTasks.awaiting,
-      last_resume_reason: trustlessTasks.lastResumeReason,
-    })
-    .from(trustlessTasks)
-    .where(eq(trustlessTasks.awaiting, TrustlessAwaiting.Resume));
-}
-
-export async function upsertTrustlessTurn(input: {
-  taskId: string;
-  iteration: number;
-  requestId: string;
-  finishReason: string;
-  assistantMessage: string;
-  toolCallsJson: string;
-  rawResultHex: string | null;
-  transcriptHash: string | null;
-}): Promise<void> {
-  await db
-    .insert(trustlessTurns)
-    .values({
-      ...input,
-      createdAt: Math.floor(Date.now() / 1000),
-    })
-    .onConflictDoUpdate({
-      target: [trustlessTurns.taskId, trustlessTurns.iteration],
-      set: {
-        requestId: sql`excluded.request_id`,
-        finishReason: sql`excluded.finish_reason`,
-        assistantMessage: sql`excluded.assistant_message`,
-        toolCallsJson: sql`excluded.tool_calls_json`,
-        rawResultHex: sql`excluded.raw_result_hex`,
-        transcriptHash: sql`excluded.transcript_hash`,
-      },
-    });
-}
-
-export async function listTrustlessTurns(taskId: string): Promise<
-  Array<{
-    iteration: number;
-    request_id: string;
-    finish_reason: string;
-    assistant_message: string;
-    tool_calls_json: string;
-    raw_result_hex: string | null;
-    transcript_hash: string | null;
-  }>
-> {
-  return db
-    .select({
-      iteration: trustlessTurns.iteration,
-      request_id: trustlessTurns.requestId,
-      finish_reason: trustlessTurns.finishReason,
-      assistant_message: trustlessTurns.assistantMessage,
-      tool_calls_json: trustlessTurns.toolCallsJson,
-      raw_result_hex: trustlessTurns.rawResultHex,
-      transcript_hash: trustlessTurns.transcriptHash,
-    })
-    .from(trustlessTurns)
-    .where(eq(trustlessTurns.taskId, taskId))
-    .orderBy(trustlessTurns.iteration);
 }
 
 export async function upsertExternalAgent(

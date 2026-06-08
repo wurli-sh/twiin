@@ -33,7 +33,6 @@ const EnvSchema = z
     TURSO_AUTH_TOKEN: z.string().optional().default(""),
     START_BLOCK: z.coerce.bigint().optional(),
     PLAN_SECRET: z.string().optional(),
-    ENABLE_TRUSTLESS_JANICE: BoolFromEnv.optional().default(false),
     TRUST_PROXY: BoolFromEnv.optional().default(false),
     RUN_KEEPERS: BoolFromEnv.optional().default(true),
     ANTHROPIC_BUDGET_TOTAL_USD: z.coerce.number().positive().default(2.5),

@@ -3,12 +3,10 @@ import {
   buildTwiinDigest,
   StepState,
   TaskState,
-  TrustlessAwaiting,
 } from "@twiin/shared";
 import AgentOrchestratorAbi from "@twiin/shared/abis/AgentOrchestrator.json";
 import TwiinAccountAbi from "@twiin/shared/abis/TwiinAccount.json";
 import { encodeAbiParameters, encodeFunctionData } from "viem";
-import { decodeTrustlessJaniceResult } from "@twiin/shared";
 import { privateKeyToAccount } from "viem/accounts";
 
 const baseEnv = {
@@ -31,14 +29,12 @@ async function loadKeepers() {
     { createRater },
     { createTimeoutKeeper },
     { createExternalAgentBootstrap, verifyExternalAgentsNow },
-    { createTrustlessResumeKeeper },
   ] = await Promise.all([
     import("../src/keepers/indexer"),
     import("../src/keepers/relay"),
     import("../src/keepers/rater"),
     import("../src/keepers/timeouts"),
     import("../src/keepers/externals"),
-    import("../src/keepers/trustless-resume"),
   ]);
   return {
     createIndexer,
@@ -47,7 +43,6 @@ async function loadKeepers() {
     createTimeoutKeeper,
     createExternalAgentBootstrap,
     verifyExternalAgentsNow,
-    createTrustlessResumeKeeper,
   };
 }
 
@@ -335,7 +330,6 @@ describe("indexer keeper", () => {
       upsertTask,
       upsertStep,
       updateTaskState,
-      patchTrustlessTask: vi.fn().mockResolvedValue(undefined),
       publish,
       addresses: {
         orchestrator: "0x1234567890123456789012345678901234567890",
@@ -1947,191 +1941,4 @@ describe("consensus indexer", () => {
   });
 });
 
-describe("trustless indexer", () => {
-  it("decodes Janice callback results from Agents API fulfill transactions", async () => {
-    const { createIndexer } = await loadKeepers();
-    const upsertTrustlessTurn = vi.fn().mockResolvedValue(undefined);
-    const patchTrustlessTask = vi.fn().mockResolvedValue(undefined);
-    const publish = vi.fn();
-    const resultHex = encodeAbiParameters(
-      [
-        { type: "string" },
-        { type: "string" },
-        { type: "string[]" },
-        { type: "string[]" },
-        { type: "string[]" },
-        { type: "bytes[]" },
-      ],
-      ["tool_calls", "Hiring analysis", [], [], [], []],
-    );
-    const fulfillInput = encodeFunctionData({
-      abi: [
-        {
-          type: "function",
-          name: "fulfill",
-          stateMutability: "nonpayable",
-          inputs: [
-            { name: "reqId", type: "uint256" },
-            { name: "result", type: "bytes" },
-          ],
-          outputs: [],
-        },
-      ],
-      functionName: "fulfill",
-      args: [1n, resultHex],
-    });
 
-    const getLogs = vi.fn(async ({ event }: { event: { name?: string } }) => {
-      if (event.name === "JaniceIteration") {
-        return [
-          {
-            transactionHash:
-              "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-            args: {
-              taskId: 11n,
-              iteration: 1n,
-              requestId: 1n,
-              finishReason: "tool_calls",
-              transcriptHash: "0x" + "11".repeat(32),
-            },
-          },
-        ];
-      }
-      return [];
-    });
-
-    const indexer = createIndexer({
-      getBlockNumber: vi.fn().mockResolvedValue(50n),
-      getCursor: vi.fn().mockResolvedValue(20n),
-      setCursor: vi.fn().mockResolvedValue(undefined),
-      getLogs: getLogs as never,
-      getTransaction: vi.fn().mockResolvedValue({ input: fulfillInput }),
-      getStepsForTask: vi.fn().mockResolvedValue([]),
-      deleteTaskArtifactsForTask: vi.fn().mockResolvedValue(undefined),
-      upsertTrustlessTurn,
-      patchTrustlessTask,
-      publish,
-      addresses: {
-        orchestrator: "0x1234567890123456789012345678901234567890",
-        agentRegistry: "0x9999999999999999999999999999999999999999",
-      },
-      startBlock: 0n,
-    });
-
-    await indexer.tick();
-
-    expect(upsertTrustlessTurn).toHaveBeenCalledWith(
-      expect.objectContaining({
-        taskId: "11",
-        assistantMessage: "Hiring analysis",
-      }),
-    );
-    const stored = upsertTrustlessTurn.mock.calls[0]?.[0] as {
-      rawResultHex: `0x${string}` | null;
-    };
-    expect(stored.rawResultHex).toBe(resultHex);
-    expect(decodeTrustlessJaniceResult(resultHex).assistantMessage).toBe(
-      "Hiring analysis",
-    );
-  });
-});
-
-describe("trustless resume keeper", () => {
-  it("reconstructs a resume payload and submits resumeTrustlessTask", async () => {
-    const { createTrustlessResumeKeeper } = await loadKeepers();
-    const resumeTrustlessTask = vi.fn().mockResolvedValue(undefined);
-    const keeper = createTrustlessResumeKeeper({
-      listTrustlessTasksAwaitingJanice: vi.fn().mockResolvedValue([]),
-      listTrustlessTasksAwaitingResume: vi.fn().mockResolvedValue([
-        {
-          task_id: "11",
-          goal: "Research X",
-          iterations: 1,
-          max_iterations: 8,
-          awaiting: 2,
-        },
-      ]),
-      listTrustlessTurns: vi.fn().mockResolvedValue([
-        {
-          iteration: 1,
-          request_id: "1",
-          finish_reason: "tool_calls",
-          assistant_message: "I hired an agent",
-          tool_calls_json: JSON.stringify([
-            { toolName: "hireSubAgent", args: "0x1234" },
-          ]),
-          raw_result_hex: null,
-          transcript_hash: null,
-        },
-      ]),
-      getStepsForTask: vi.fn().mockResolvedValue([
-        {
-          step_idx: 0,
-          config_id: "6",
-          timeout_seconds: 90,
-          state: StepState.Succeeded,
-          payload: "scrape",
-          req_id: null,
-          result_hex: "0x6f6b",
-          score: 90,
-          deadline: null,
-        },
-      ]),
-      readTask: vi.fn().mockResolvedValue([1, 1n, 1, 100n, 10n, 9999999999n, TaskState.Running]),
-      readTrustlessContext: vi.fn().mockResolvedValue([
-        0n,
-        1,
-        8,
-        TrustlessAwaiting.Resume,
-        9999999999n,
-        "0x" + "00".repeat(32),
-      ]),
-      readJaniceCost: vi.fn().mockResolvedValue(123n),
-      resumeTrustlessTask,
-      logger: console,
-    });
-
-    await keeper.tick();
-
-    expect(resumeTrustlessTask).toHaveBeenCalledWith([
-      11n,
-      expect.stringMatching(/^0x/),
-      123n,
-    ]);
-  });
-
-  it("skips resume submission when on-chain trustless context is not awaiting resume", async () => {
-    const { createTrustlessResumeKeeper } = await loadKeepers();
-    const resumeTrustlessTask = vi.fn().mockResolvedValue(undefined);
-    const keeper = createTrustlessResumeKeeper({
-      listTrustlessTasksAwaitingJanice: vi.fn().mockResolvedValue([]),
-      listTrustlessTasksAwaitingResume: vi.fn().mockResolvedValue([
-        {
-          task_id: "11",
-          goal: "Research X",
-          iterations: 1,
-          max_iterations: 8,
-          awaiting: TrustlessAwaiting.Resume,
-        },
-      ]),
-      listTrustlessTurns: vi.fn().mockResolvedValue([]),
-      getStepsForTask: vi.fn().mockResolvedValue([]),
-      readTask: vi.fn().mockResolvedValue([1, 1n, 1, 100n, 10n, 9999999999n, TaskState.Running]),
-      readTrustlessContext: vi.fn().mockResolvedValue([
-        0n,
-        1,
-        8,
-        TrustlessAwaiting.Janice,
-        9999999999n,
-        "0x" + "00".repeat(32),
-      ]),
-      readJaniceCost: vi.fn().mockResolvedValue(123n),
-      resumeTrustlessTask,
-      logger: console,
-    });
-
-    await keeper.tick();
-
-    expect(resumeTrustlessTask).not.toHaveBeenCalled();
-  });
-});

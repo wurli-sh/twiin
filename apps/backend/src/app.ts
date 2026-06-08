@@ -9,10 +9,6 @@ import {
   type TasksRouterDeps,
 } from "./routes/tasks";
 import {
-  createTrustlessPreflightRouter,
-  type TrustlessPreflightDeps,
-} from "./routes/trustless-preflight";
-import {
   createStreamRouter,
   type StreamRouterDeps,
 } from "./routes/stream";
@@ -24,7 +20,6 @@ import { isUpstreamAvailabilityError, upstreamUnavailableMessage } from "./error
 
 export type AppDeps = {
   plan?: Partial<PlanRouterDeps>;
-  trustlessPreflight?: Partial<TrustlessPreflightDeps>;
   tasks?: Partial<TasksRouterDeps>;
   stream?: Partial<StreamRouterDeps>;
   agents?: Partial<AgentsRouterDeps>;
@@ -38,10 +33,6 @@ export function createApp(deps: AppDeps = {}): Hono {
   app.get("/health", (c) => c.json({ ok: true, ts: new Date().toISOString() }));
 
   app.route("/api/plan", createPlanRouter(deps.plan));
-  app.route(
-    "/api/trustless-preflight",
-    createTrustlessPreflightRouter(deps.trustlessPreflight),
-  );
   app.route("/api/tasks", createTasksRouter(deps.tasks));
   app.route("/api/stream", createStreamRouter(deps.stream));
   app.route("/api/agents", createAgentsRouter(deps.agents));

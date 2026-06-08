@@ -390,7 +390,7 @@ async function buildAllTemplates(
   const generic = buildGenericTemplates(goal).map((template) => ({
     source: "template" as const,
     verificationTier: template.verificationTier,
-    steps: template.steps,
+    steps: template.steps as StepSpec[],
   }));
 
   const candidates = await deps.agentCatalog.loadCandidates();

@@ -1,8 +1,6 @@
 import { decodeFunctionData, parseAbiItem, type AbiEvent, type Hex } from "viem";
 import {
-  TrustlessAwaiting,
   decodeTaskCompletionFromLogData,
-  decodeTrustlessJaniceResult,
   StepState,
   TaskState,
 } from "@twiin/shared";
@@ -19,12 +17,9 @@ import {
   getCursor,
   getStep,
   getStepsForTask,
-  patchTrustlessTask,
   patchStepConsensus,
   setCursor,
   updateTaskState,
-  upsertTrustlessTask,
-  upsertTrustlessTurn,
   upsertExternalAgent,
   upsertStep,
   upsertTask,
@@ -67,21 +62,6 @@ const taskCompletedEvent = parseAbiItem(
 ) as AbiEvent;
 const taskAbortedEvent = parseAbiItem(
   "event TaskAborted(uint256 indexed taskId, string reason)",
-) as AbiEvent;
-const trustlessTaskIntentEvent = parseAbiItem(
-  "event TrustlessTaskIntent(uint256 indexed taskId, string goal, bytes32 intentHash, uint8 maxIterations)",
-) as AbiEvent;
-const trustlessStepAppendedEvent = parseAbiItem(
-  "event TrustlessStepAppended(uint256 indexed taskId, uint8 indexed stepIdx, uint256 configId, bytes payload, uint256 maxCostWei, uint64 timeoutSeconds)",
-) as AbiEvent;
-const janiceIterationEvent = parseAbiItem(
-  "event JaniceIteration(uint256 indexed taskId, uint8 indexed iteration, uint256 requestId, string finishReason, bytes32 transcriptHash)",
-) as AbiEvent;
-const janiceToolExecutedEvent = parseAbiItem(
-  "event JaniceToolExecuted(uint256 indexed taskId, uint8 indexed iteration, string toolName, bytes32 argsHash, bool success)",
-) as AbiEvent;
-const janiceResumeQueuedEvent = parseAbiItem(
-  "event JaniceResumeQueued(uint256 indexed taskId, uint8 indexed nextIteration, bytes32 transcriptHash, string reason)",
 ) as AbiEvent;
 const externalAgentRegisteredEvent = parseAbiItem(
   "event ExternalAgentRegistered(uint256 indexed configId, address indexed registrant, string endpointUrl, bytes32 endpointHash, bytes32[] caps, uint256 costWei)",
@@ -141,9 +121,6 @@ type IndexerDeps = {
   upsertStep: typeof upsertStep;
   patchStepConsensus: typeof patchStepConsensus;
   updateTaskState: typeof updateTaskState;
-  upsertTrustlessTask: typeof upsertTrustlessTask;
-  patchTrustlessTask: typeof patchTrustlessTask;
-  upsertTrustlessTurn: typeof upsertTrustlessTurn;
   publish: typeof publish;
 };
 
@@ -180,9 +157,6 @@ export function createIndexer(overrides: Partial<IndexerDeps> = {}) {
     upsertStep,
     patchStepConsensus,
     updateTaskState,
-    upsertTrustlessTask,
-    patchTrustlessTask,
-    upsertTrustlessTurn,
     publish,
     ...overrides,
   };
@@ -281,56 +255,6 @@ export function createIndexer(overrides: Partial<IndexerDeps> = {}) {
       });
     }
 
-    const trustlessTaskIntentLogs = await load(trustlessTaskIntentEvent);
-    logIndexerLogs("TrustlessTaskIntent", trustlessTaskIntentLogs.length, from, to);
-    for (const log of trustlessTaskIntentLogs) {
-      const { taskId, goal, intentHash, maxIterations } = log.args;
-      if (taskId == null || typeof goal !== "string" || intentHash == null) continue;
-      await deps.upsertTrustlessTask({
-        taskId: taskId.toString(),
-        goal,
-        intentHash: intentHash.toString(),
-        iterations: 0,
-        maxIterations: Number(maxIterations ?? 0),
-        awaiting: TrustlessAwaiting.Janice,
-        janiceRequestId: null,
-      });
-      deps.publish(taskId.toString(), "trustless_intent", {
-        taskId: taskId.toString(),
-        goal,
-        maxIterations,
-      });
-      logTaskTimeline("trustless_janice_pending", {
-        taskId: taskId.toString(),
-        maxIterations: Number(maxIterations ?? 0),
-        note: "First Janice inferToolsChat round submitted; awaiting Somnia Agents API callback",
-      });
-    }
-
-    const trustlessStepAppendedLogs = await load(trustlessStepAppendedEvent);
-    logIndexerLogs("TrustlessStepAppended", trustlessStepAppendedLogs.length, from, to);
-    for (const log of trustlessStepAppendedLogs) {
-      const { taskId, stepIdx, configId, payload, timeoutSeconds } = log.args;
-      if (taskId == null || stepIdx == null || configId == null) continue;
-      await deps.upsertStep(
-        taskId.toString(),
-        Number(stepIdx),
-        configId.toString(),
-        timeoutSeconds == null ? null : Number(timeoutSeconds),
-        StepState.Pending,
-        decodePayload((payload as `0x${string}` | null) ?? "0x"),
-        null,
-        null,
-        null,
-        null,
-      );
-      deps.publish(taskId.toString(), "trustless_step_appended", {
-        taskId: taskId.toString(),
-        stepIdx,
-        configId: configId.toString(),
-      });
-    }
-
     const externalAgentRequestLogs = await load(externalAgentRequestEvent);
     logIndexerLogs("ExternalAgentRequest", externalAgentRequestLogs.length, from, to);
     for (const log of externalAgentRequestLogs) {
@@ -375,17 +299,6 @@ export function createIndexer(overrides: Partial<IndexerDeps> = {}) {
             (await deps.getBlockTimestamp(log.blockNumber)) + existing.timeout_seconds;
         }
       }
-      let resultHex: `0x${string}` | null = null;
-      if (
-        (stepState === StepState.Succeeded || stepState === StepState.Failed) &&
-        existing?.state === StepState.RunningNative
-      ) {
-        const callback = await loadTrustlessCallbackFromTransaction(
-          deps,
-          log.transactionHash ?? null,
-        );
-        resultHex = callback?.resultHex ?? null;
-      }
       await deps.upsertStep(
         taskId.toString(),
         Number(stepIdx),
@@ -394,7 +307,7 @@ export function createIndexer(overrides: Partial<IndexerDeps> = {}) {
         stepState,
         "",
         null,
-        resultHex,
+        null,
         null,
         deadline,
       );
@@ -531,9 +444,6 @@ export function createIndexer(overrides: Partial<IndexerDeps> = {}) {
       if (taskId == null) continue;
       await deps.updateTaskState(taskId.toString(), TaskState.Completed);
       await deps.finalizeTaskSteps(taskId.toString(), StepState.Succeeded);
-      await deps.patchTrustlessTask(taskId.toString(), {
-        awaiting: TrustlessAwaiting.Done,
-      });
       const resultText = typeof result === "string" ? result : undefined;
       const decodedResult =
         (log.data ? decodeTaskCompletionFromLogData(log.data as `0x${string}`) : null) ??
@@ -557,128 +467,8 @@ export function createIndexer(overrides: Partial<IndexerDeps> = {}) {
         taskIdStr,
         abortReasonToStepState(reason),
       );
-      await deps.patchTrustlessTask(taskIdStr, {
-        awaiting: TrustlessAwaiting.Done,
-      });
-      logTaskTimeline("trustless_abort_diagnosed", {
-        taskId: taskIdStr,
-        reason: abortReason,
-        normalizedReason: normalizeAbortReason(abortReason),
-        terminalStepState: abortReasonToStepState(reason),
-      });
       deps.publish(taskIdStr, "task_aborted", {
         taskId: taskIdStr,
-        reason,
-      });
-    }
-
-    const janiceIterationLogs = await load(janiceIterationEvent);
-    logIndexerLogs("JaniceIteration", janiceIterationLogs.length, from, to);
-    for (const log of janiceIterationLogs) {
-      const { taskId, iteration, requestId, finishReason, transcriptHash } = log.args;
-      if (taskId == null || iteration == null || requestId == null) continue;
-      const callback = await loadTrustlessCallbackFromTransaction(
-        deps,
-        log.transactionHash ?? null,
-      );
-      const decoded = callback?.resultHex
-        ? decodeTrustlessJaniceResult(callback.resultHex)
-        : null;
-      logTaskTimeline("janice_callback_decoded", {
-        taskId: taskId.toString(),
-        iteration: Number(iteration),
-        requestId: requestId.toString(),
-        finishReason: typeof finishReason === "string" ? finishReason : decoded?.finishReason ?? null,
-        assistantMessagePreview: decoded?.assistantMessage?.slice(0, 160) ?? "",
-        toolCallCount: decoded?.toolCalls.length ?? 0,
-        toolNames: decoded?.toolCalls.map((tool) => tool.toolName) ?? [],
-        updatedRoleCount: decoded?.updatedRoles.length ?? 0,
-        updatedMessageCount: decoded?.updatedMessages.length ?? 0,
-      });
-      await deps.upsertTrustlessTurn({
-        taskId: taskId.toString(),
-        iteration: Number(iteration),
-        requestId: requestId.toString(),
-        finishReason:
-          typeof finishReason === "string" ? finishReason : decoded?.finishReason ?? "error",
-        assistantMessage: decoded?.assistantMessage ?? "",
-        toolCallsJson: JSON.stringify({
-          toolCalls: decoded?.toolCalls ?? [],
-          updatedRoles: decoded?.updatedRoles ?? [],
-          updatedMessages: decoded?.updatedMessages ?? [],
-          pendingToolCallIds: decoded?.pendingToolCallIds ?? [],
-        }),
-        rawResultHex: callback?.resultHex ?? null,
-        transcriptHash: transcriptHash?.toString() ?? null,
-      });
-      await deps.patchTrustlessTask(taskId.toString(), {
-        iterations: Number(iteration),
-        janiceRequestId: requestId.toString(),
-      });
-      deps.publish(taskId.toString(), "janice_iteration", {
-        taskId: taskId.toString(),
-        iteration,
-        requestId: requestId.toString(),
-        finishReason,
-        assistantMessage: decoded?.assistantMessage ?? "",
-        toolCalls: decoded?.toolCalls ?? [],
-      });
-    }
-
-    const janiceToolExecutedLogs = await load(janiceToolExecutedEvent);
-    logIndexerLogs("JaniceToolExecuted", janiceToolExecutedLogs.length, from, to);
-    for (const log of janiceToolExecutedLogs) {
-      const { taskId, iteration, toolName, argsHash, success } = log.args;
-      if (taskId == null || iteration == null || typeof toolName !== "string") continue;
-      deps.publish(taskId.toString(), "janice_tool_executed", {
-        taskId: taskId.toString(),
-        iteration,
-        toolName,
-        argsHash: argsHash?.toString(),
-        success,
-      });
-    }
-
-    const janiceResumeQueuedLogs = await load(janiceResumeQueuedEvent);
-    logIndexerLogs("JaniceResumeQueued", janiceResumeQueuedLogs.length, from, to);
-    for (const log of janiceResumeQueuedLogs) {
-      const { taskId, nextIteration, reason } = log.args;
-      if (taskId == null || nextIteration == null) continue;
-      const resumeReason = typeof reason === "string" ? reason : null;
-      await deps.patchTrustlessTask(taskId.toString(), {
-        awaiting: TrustlessAwaiting.Resume,
-        lastResumeReason: resumeReason,
-      });
-      if (resumeReason === "step_succeeded" || resumeReason === "step_failed") {
-        const taskIdStr = taskId.toString();
-        const steps = await deps.getStepsForTask(taskIdStr);
-        const settledStep = [...steps]
-          .filter(
-            (step) =>
-              step.state === StepState.RunningNative ||
-              step.state === StepState.Pending,
-          )
-          .sort((a, b) => b.step_idx - a.step_idx)[0];
-        if (settledStep) {
-          await deps.upsertStep(
-            taskIdStr,
-            settledStep.step_idx,
-            settledStep.config_id,
-            settledStep.timeout_seconds,
-            resumeReason === "step_succeeded"
-              ? StepState.Succeeded
-              : StepState.Failed,
-            settledStep.payload,
-            settledStep.req_id,
-            settledStep.result_hex,
-            settledStep.score,
-            settledStep.deadline,
-          );
-        }
-      }
-      deps.publish(taskId.toString(), "janice_resume_queued", {
-        taskId: taskId.toString(),
-        nextIteration,
         reason,
       });
     }
@@ -837,21 +627,6 @@ function abortReasonToStepState(reason: unknown): number {
   return StepState.Failed;
 }
 
-function normalizeAbortReason(reason: string | null): string {
-  if (!reason) return "unknown";
-  const lower = reason.toLowerCase();
-  if (lower.includes("janice failed")) return "janice_callback_failed";
-  if (lower.includes("max iterations")) return "janice_max_iterations";
-  if (lower.includes("unsupported janice response")) return "janice_response_unsupported";
-  if (lower.includes("unsupported post-pause tool")) return "janice_post_pause_tool_unsupported";
-  if (lower.includes("publish oracle failed")) return "publish_oracle_failed";
-  if (lower.includes("unknown trustless tool")) return "unknown_trustless_tool";
-  if (lower.includes("task timed out")) return "task_timeout";
-  if (lower.includes("step timed out")) return "step_timeout";
-  if (lower.includes("step failed")) return "step_failed";
-  return "other";
-}
-
 function logIndexerLogs(
   eventType: string,
   count: number,
@@ -911,54 +686,6 @@ async function loadTaskStepsFromTransaction(
     }));
   } catch {
     return [];
-  }
-}
-
-const AgentsApiFulfillAbi = [
-  {
-    type: "function",
-    name: "fulfill",
-    stateMutability: "nonpayable",
-    inputs: [
-      { name: "reqId", type: "uint256" },
-      { name: "result", type: "bytes" },
-    ],
-    outputs: [],
-  },
-] as const;
-
-async function loadTrustlessCallbackFromTransaction(
-  deps: Pick<IndexerDeps, "getTransaction">,
-  hash: `0x${string}` | null,
-): Promise<{ resultHex: `0x${string}` | null } | null> {
-  if (!hash) return null;
-  try {
-    const tx = await deps.getTransaction(hash);
-    try {
-      const fulfill = decodeFunctionData({
-        abi: AgentsApiFulfillAbi,
-        data: tx.input,
-      });
-      if (fulfill.functionName === "fulfill" && fulfill.args?.[1]) {
-        return { resultHex: fulfill.args[1] as `0x${string}` };
-      }
-    } catch {
-      /* try orchestrator callback shape */
-    }
-
-    const decoded = decodeFunctionData({
-      abi: AgentOrchestratorAbi,
-      data: tx.input,
-    });
-    if (decoded.functionName !== "handleResponse" || !decoded.args) return null;
-    const responses = decoded.args[1];
-    if (!Array.isArray(responses) || responses.length === 0) return null;
-    const first = responses[0];
-    return {
-      resultHex: (first.result as `0x${string}` | undefined) ?? null,
-    };
-  } catch {
-    return null;
   }
 }
 

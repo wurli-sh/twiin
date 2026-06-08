@@ -1,6 +1,6 @@
 # @twiin/backend/src/keepers/ — Keeper Bots
 
-6 keepers running as background loops on the Hono server. Each polls at a fixed interval and processes on-chain events.
+5 keepers running as background loops on the Hono server. Each polls at a fixed interval and processes on-chain events.
 
 ## Keeper Index
 
@@ -11,7 +11,6 @@
 | Rater | `rater.ts` | 6s | `ExternalResultPending` | Rates via Claude Haiku; submits `rateStep` if score ≥ 40 |
 | Externals | `externals.ts` | 4s | `ExternalAgentRegistered`, `ExternalEndpointUpdated`, `ExternalDeregistered` | Syncs external agent metadata into SQLite; bootstraps cache from historical logs |
 | Timeouts | `timeouts.ts` | 5s | Pending steps past deadline (RunningExternal, AwaitingRating, RunningNative) | Calls `timeoutExternalStep`, `timeoutRating`, `timeoutNativeStep`, or `timeoutTask` on-chain |
-| Trustless Resume | `trustless-resume.ts` | 6s | Stalled trustless tasks (TrustlessAwaiting) | Resubmits janice requests for trustless tasks past deadline |
 
 ## Architecture
 
@@ -22,9 +21,8 @@ Indexer ──→ SQLite ──→ SSE (frontend)
      │
      ├── Relay ──→ HTTP/Claude ──→ submitExternalResult
      ├── Rater ──→ Claude Haiku ──→ rateStep
-     ├── Externals ──→ SQLite cache sync
-     ├── Timeouts ──→ on-chain timeout fns
-     └── Trustless Resume ──→ resubmit janice requests
+      ├── Externals ──→ SQLite cache sync
+      └── Timeouts ──→ on-chain timeout fns
 ```
 
 ## Common Conventions

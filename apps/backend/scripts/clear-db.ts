@@ -5,18 +5,10 @@ import {
   relayJobs,
   submittedResults,
   submittedRatings,
-  trustlessTasks,
-  trustlessTurns,
 } from "../src/schema";
 
 async function main() {
   console.log("Clearing task-related tables from Turso DB to resolve indexer lag mismatch...");
-
-  console.log("Deleting trustless_turns...");
-  await db.delete(trustlessTurns);
-
-  console.log("Deleting trustless_tasks...");
-  await db.delete(trustlessTasks);
 
   console.log("Deleting submitted_ratings...");
   await db.delete(submittedRatings);
