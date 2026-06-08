@@ -48,6 +48,5 @@ describe("deployment manifests", () => {
     expect(byName.get("data.specialized")).toBe(CapabilityId.DATA_SPECIALIZED);
     expect(byName.get("oracle.publish")).toBe(CapabilityId.ORACLE_PUBLISH);
     expect(byName.get("onchain.execute")).toBe(CapabilityId.ONCHAIN_EXECUTE);
-    expect(byName.get("plan.trustless")).toBe(CapabilityId.PLAN_TRUSTLESS);
   });
 });

@@ -2,7 +2,6 @@ export * from "./constants";
 export * from "./digest";
 export * from "./twiin-account";
 export * from "./somnia-agents";
-export * from "./trustless";
 export * from "./consensus";
 export * from "./agent-catalog";
 export * from "./plan-errors";

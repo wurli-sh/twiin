@@ -33,7 +33,6 @@ export const CapabilityId = {
   DATA_SPECIALIZED: cap("data.specialized"),
   ORACLE_PUBLISH: cap("oracle.publish"),
   ONCHAIN_EXECUTE: cap("onchain.execute"),
-  PLAN_TRUSTLESS: cap("plan.trustless"),
 } as const;
 
 // Mirrors of TwiinTypes.sol enums — ordinals must stay in sync
@@ -62,34 +61,12 @@ export enum AgentLane {
 
 export enum PlanMode {
   ClaudePlan,
-  TrustlessJanice,
-}
-
-export enum TrustlessAwaiting {
-  Janice,
-  Step,
-  Resume,
-  Done,
 }
 
 // Policy seed defaults — must match TwiinFactory.sol deployTwiin seed values
 export const DEFAULT_DAILY_CAP_WEI = parseEther("2");
 export const DEFAULT_MAX_PER_TASK_WEI = parseEther("1");
-export const DEFAULT_MAX_TRUSTLESS_WEI = parseEther("2");
-/** Gate 0 T2 — contract loop + uint8 payload cap; see gate-results.md */
-export const MAX_JANICE_ITERATIONS = 8;
-/**
- * Per inferToolsChat request — Somnia agent internal LLM↔tool round-trips within one
- * createRequest. Must be >1 or Janice often returns finishReason=max_iterations on the
- * first callback. Distinct from MAX_JANICE_ITERATIONS (outer contract resume loop).
- */
-export const INFER_TOOLS_CHAT_MAX_ITERATIONS = 8;
-/** Gate 0 T4 — matches AgentOrchestrator SUBCOMMITTEE_SIZE native lane */
-export const JANICE_ROUND_BUFFER_MULTIPLIER = 3;
-/** Gate 0 — minimum budget covers two Janice iterations */
-export const MIN_TRUSTLESS_BUDGET_MULTIPLIER = 2;
 /** On-chain AgentOrchestrator.createTask step cap */
 export const MAX_TASK_STEPS = 8;
 /** Console suggested-prompt pipeline step cap */
 export const MAX_CONSOLE_TEMPLATE_STEPS = 5;
-export const JANICE_SOMNIA_AGENT_ID = 12847293847561029384n;

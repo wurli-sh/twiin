@@ -88,12 +88,6 @@
       "name": "onchain.execute",
       "minTrustTier": 2,
       "nativeOnly": true
-    },
-    {
-      "id": "0x1f1b85a41f58730bf40bc32d632a7b05ba145dd81ff326f1dfc729bda6a87f8f",
-      "name": "plan.trustless",
-      "minTrustTier": 2,
-      "nativeOnly": true
     }
   ],
   "nativeAgents": [
@@ -102,9 +96,7 @@
       "name": "janice",
       "somniaId": "12847293847561029384",
       "costWei": "70000000000000000",
-      "capabilities": [
-        "0x1f1b85a41f58730bf40bc32d632a7b05ba145dd81ff326f1dfc729bda6a87f8f"
-      ],
+      "capabilities": [],
       "trustTier": 2
     },
     {
