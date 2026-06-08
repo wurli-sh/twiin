@@ -13,7 +13,7 @@ components/
 └── ui/            — Design system primitives (Button, Badge, Tabs, ConfirmDialog, DropdownPanel, TextLoop, etc.)
 ```
 
-### Console Components (19)
+### Console Components (17)
 
 | Component | Role |
 |-----------|------|
@@ -31,11 +31,9 @@ components/
 | `ExecutionPanel` | Main execution view layout |
 | `ExecutionPanelOverlay` | Overlay for execution state transitions |
 | `ExecutionSidebar` | Sidebar with step list + detail panel |
-| `ExecutionModeToggle` | Switch between ClaudePlan / Trustless modes |
+| `ExecutionModeToggle` | Switch between planning modes (Claude) |
 | `ConsensusBadge` | Validator consensus receipt badge (StepConsensusReached) |
 | `ReportPendingCard` | Pending report/oracle step display |
-| `TrustlessEventLine` | Trustless event timeline (Janice iterations) |
-| `TrustlessPreflightCard` | Trustless preflight check for plan validation |
 
 ## Conventions
 

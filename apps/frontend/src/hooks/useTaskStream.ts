@@ -17,11 +17,7 @@ export const STREAM_EVENT_LABELS: Record<string, string> = {
   step_rejected: 'Step rejected',
   step_rated: 'Step rated',
   step_consensus: 'Somnia consensus reached',
-  trustless_intent: 'Trustless task intent',
-  trustless_step_appended: 'Trustless step appended',
-  janice_iteration: 'Janice iteration',
-  janice_tool_executed: 'Janice tool executed',
-  janice_resume_queued: 'Janice resume queued',
+
   task_completed: 'Task completed',
   task_aborted: 'Task aborted',
 }
@@ -30,17 +26,6 @@ export function streamEventLabel(type: string): string {
   return STREAM_EVENT_LABELS[type] ?? type.replace(/_/g, ' ')
 }
 
-const TRUSTLESS_EVENT_TYPES = new Set([
-  'trustless_intent',
-  'trustless_step_appended',
-  'janice_iteration',
-  'janice_tool_executed',
-  'janice_resume_queued',
-])
-
-export function isTrustlessStreamEvent(type: string): boolean {
-  return TRUSTLESS_EVENT_TYPES.has(type)
-}
 
 export function useTaskStream(taskId: string | null) {
   const [events, setEvents] = useState<StreamEvent[]>([])

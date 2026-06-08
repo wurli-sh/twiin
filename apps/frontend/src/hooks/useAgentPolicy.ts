@@ -53,7 +53,6 @@ export function useAgentPolicy() {
       agentId: bigint
       dailyCapStt: string
       maxPerTaskStt: string
-      maxPerTaskTrustlessWei: bigint
       killSwitch: boolean
     }) => {
       if (!publicClient) throw new Error('RPC not ready')
@@ -89,7 +88,6 @@ export function useAgentPolicy() {
             input.agentId,
             parseEther(input.dailyCapStt),
             parseEther(input.maxPerTaskStt),
-            input.maxPerTaskTrustlessWei,
             allowedContracts,
             input.killSwitch,
           ],

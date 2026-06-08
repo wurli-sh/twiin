@@ -1,8 +1,7 @@
 import type { TwiinAgentInfo } from '@/hooks/useTwiinAgents'
-import type { ExecutionMode } from '@/config/features'
 
-export function perTaskCapStt(agent: TwiinAgentInfo, mode: ExecutionMode = 'claude'): number {
-  return Number(mode === 'trustless' ? agent.maxPerTaskTrustless : agent.maxPerTask)
+export function perTaskCapStt(agent: TwiinAgentInfo): number {
+  return Number(agent.maxPerTask)
 }
 
 export function dailyRemainingStt(agent: TwiinAgentInfo): number {
@@ -10,12 +9,9 @@ export function dailyRemainingStt(agent: TwiinAgentInfo): number {
 }
 
 /** Max STT the agent can spend on one task right now (policy + wallet + daily). */
-export function maxTaskBudgetStt(
-  agent: TwiinAgentInfo,
-  mode: ExecutionMode = 'claude',
-): number {
+export function maxTaskBudgetStt(agent: TwiinAgentInfo): number {
   const parts = [
-    perTaskCapStt(agent, mode),
+    perTaskCapStt(agent),
     Number(agent.tbaBalance),
     dailyRemainingStt(agent),
   ].filter((n) => n > 0)
@@ -25,18 +21,16 @@ export function maxTaskBudgetStt(
 export function suggestedTaskBudgetStt(
   agent: TwiinAgentInfo,
   estimatedStt: number,
-  mode: ExecutionMode = 'claude',
 ): number {
   const needed = Math.ceil(estimatedStt * 100) / 100
-  return Math.min(needed, maxTaskBudgetStt(agent, mode))
+  return Math.min(needed, maxTaskBudgetStt(agent))
 }
 
 export function policyAllowsBudget(
   agent: TwiinAgentInfo,
   budgetStt: number,
-  mode: ExecutionMode = 'claude',
 ): boolean {
-  if (budgetStt > perTaskCapStt(agent, mode)) return false
+  if (budgetStt > perTaskCapStt(agent)) return false
   if (budgetStt > dailyRemainingStt(agent)) return false
   return budgetStt <= Number(agent.tbaBalance)
 }

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { motion } from 'framer-motion'
-import { formatEther, parseEther } from 'viem'
+import { formatEther } from 'viem'
 import { Loader2, RefreshCw, Shield } from 'lucide-react'
 import { AgentKillSwitchControl } from '@/components/agents/AgentKillSwitchControl'
 import { AgentStatusLabel } from '@/components/agents/AgentStatusLabel'
@@ -12,7 +12,6 @@ import { formatDuration } from '@/lib/format-time'
 import { useAgentPolicy, type PullApproval } from '@/hooks/useAgentPolicy'
 import type { TwiinAgentInfo } from '@/hooks/useTwiinAgents'
 import { cn } from '@/lib/cn'
-import { ENABLE_TRUSTLESS_JANICE } from '@/config/features'
 
 const DEFAULT_PULL_PER_TICK = '0.2'
 const DEFAULT_PULL_PERIOD = '3600'
@@ -43,20 +42,18 @@ export function PolicyPanel({
  useAgentPolicy()
 
  const [dailyCap, setDailyCap] = useState(agent.dailyCap)
- const [maxPerTask, setMaxPerTask] = useState(agent.maxPerTask)
- const [maxPerTaskTrustless, setMaxPerTaskTrustless] = useState(agent.maxPerTaskTrustless)
- const [pullPerTick, setPullPerTick] = useState(DEFAULT_PULL_PER_TICK)
+  const [maxPerTask, setMaxPerTask] = useState(agent.maxPerTask)
+  const [pullPerTick, setPullPerTick] = useState(DEFAULT_PULL_PER_TICK)
  const [pullPeriod, setPullPeriod] = useState(DEFAULT_PULL_PERIOD)
  const [pullApproval, setPullApproval] = useState<PullApproval | null>(null)
  const [pullLoading, setPullLoading] = useState(false)
 
  const label = formatAgentLabel(agent.name, agent.id)
 
- useEffect(() => {
- setDailyCap(agent.dailyCap)
- setMaxPerTask(agent.maxPerTask)
- setMaxPerTaskTrustless(agent.maxPerTaskTrustless)
- }, [agent])
+  useEffect(() => {
+  setDailyCap(agent.dailyCap)
+  setMaxPerTask(agent.maxPerTask)
+  }, [agent])
 
  useEffect(() => {
  let cancelled = false
@@ -88,33 +85,23 @@ export function PolicyPanel({
 
  async function handleSavePolicy() {
  const dailyErr = parsePositiveStt(dailyCap, 'Daily cap')
- const taskErr = parsePositiveStt(maxPerTask, 'Per-task max')
- const trustlessErr = ENABLE_TRUSTLESS_JANICE
-   ? parsePositiveStt(maxPerTaskTrustless, 'Trustless cap')
-   : null
- if (dailyErr || taskErr || trustlessErr) {
- toast.error(dailyErr ?? taskErr ?? trustlessErr)
- return
- }
- if (Number(maxPerTask) > Number(dailyCap)) {
- toast.error('Per-task max cannot exceed daily cap')
- return
- }
- if (ENABLE_TRUSTLESS_JANICE && Number(maxPerTaskTrustless) > Number(dailyCap)) {
- toast.error('Trustless cap cannot exceed daily cap')
- return
- }
+  const taskErr = parsePositiveStt(maxPerTask, 'Per-task max')
+  if (dailyErr || taskErr) {
+  toast.error(dailyErr ?? taskErr)
+  return
+  }
+  if (Number(maxPerTask) > Number(dailyCap)) {
+  toast.error('Per-task max cannot exceed daily cap')
+  return
+  }
 
- try {
- await updatePolicy({
- agentId: agent.id,
- dailyCapStt: dailyCap,
- maxPerTaskStt: maxPerTask,
- maxPerTaskTrustlessWei: parseEther(
-   ENABLE_TRUSTLESS_JANICE ? maxPerTaskTrustless : agent.maxPerTaskTrustless,
- ),
- killSwitch: agent.killSwitch,
- })
+  try {
+  await updatePolicy({
+  agentId: agent.id,
+  dailyCapStt: dailyCap,
+  maxPerTaskStt: maxPerTask,
+  killSwitch: agent.killSwitch,
+  })
  toast.success('Policy updated on-chain')
  onUpdated()
  } catch (e) {
@@ -234,25 +221,7 @@ export function PolicyPanel({
  className="mt-1 w-full border border-border bg-muted px-3 py-2.5 text-sm text-foreground outline-none focus:border-primary/40 disabled:opacity-50"
  />
  </label>
- {ENABLE_TRUSTLESS_JANICE ? (
- <label className="block">
- <span className="text-[11px] font-semibold text-muted-foreground">
- Max per trustless task (STT)
- </span>
- <input
- type="text"
- inputMode="decimal"
- value={maxPerTaskTrustless}
- onChange={(e) => setMaxPerTaskTrustless(e.target.value)}
- disabled={isSaving}
- className="mt-1 w-full border border-border bg-muted px-3 py-2.5 text-sm text-foreground outline-none focus:border-primary/40 disabled:opacity-50"
- />
- </label>
- ) : (
- <p className="text-[10px] text-muted-foreground">
- Trustless cap: {agent.maxPerTaskTrustless} STT
- </p>
- )}
+
  <Button
  type="button"
  className="w-full"

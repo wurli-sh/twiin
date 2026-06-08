@@ -19,7 +19,6 @@ type Props = {
   showTaskId?: boolean
   accentClass?: string
   shimmerClass?: string
-  trustless?: boolean
 }
 
 export function AgentStatusLine({
@@ -30,14 +29,13 @@ export function AgentStatusLine({
   showTaskId = false,
   accentClass = 'text-primary',
   shimmerClass = 'text-primary/90',
-  trustless = false,
 }: Props) {
   const phrases = useMemo(() => {
     if (planSteps && chainSteps.length > 0) {
       return buildExecutionPhrases(phase, planSteps, chainSteps)
     }
-    return getStatusPhrases(phase, trustless)
-  }, [phase, planSteps, chainSteps, trustless])
+    return getStatusPhrases(phase)
+  }, [phase, planSteps, chainSteps])
 
   const phrase = useRotatingPhrase(phrases)
 

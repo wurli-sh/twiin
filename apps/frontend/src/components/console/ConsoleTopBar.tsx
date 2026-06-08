@@ -1,15 +1,11 @@
 import { ListChecks, SquarePen } from 'lucide-react'
-import { ENABLE_TRUSTLESS_JANICE, type ExecutionMode } from '@/config/features'
 import type { TwiinAgentInfo } from '@/hooks/useTwiinAgents'
 import { AgentSelector } from '@/components/console/AgentSelector'
-import { ExecutionModeToggle } from '@/components/console/ExecutionModeToggle'
 import { BudgetWarningsBar } from '@/components/console/BudgetWarningsBar'
 import { cn } from '@/lib/cn'
 
 type Props = {
   hasActivity: boolean
-  executionMode: ExecutionMode
-  onExecutionModeChange: (mode: ExecutionMode) => void
   agents: TwiinAgentInfo[]
   agentId: string | null
   agent: TwiinAgentInfo | undefined
@@ -33,8 +29,6 @@ type Props = {
 
 export function ConsoleTopBar({
   hasActivity,
-  executionMode,
-  onExecutionModeChange,
   agents,
   agentId,
   agent,
@@ -48,7 +42,6 @@ export function ConsoleTopBar({
   maxPerTaskNum,
   onRaiseCaps,
   isRaisingCaps = false,
-  modeToggleDisabled = false,
   agentSelectorDisabled = false,
   showStepsToggle = false,
   stepsToggleActive = false,
@@ -96,15 +89,6 @@ export function ConsoleTopBar({
                 </span>
               )}
             </button>
-          )}
-
-          {ENABLE_TRUSTLESS_JANICE && (
-            <ExecutionModeToggle
-              mode={executionMode}
-              onChange={onExecutionModeChange}
-              compact={hasActivity}
-              disabled={modeToggleDisabled}
-            />
           )}
 
           <div

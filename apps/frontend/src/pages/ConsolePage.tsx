@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { motion } from 'framer-motion'
-import { formatEther, parseEther } from 'viem'
+import { parseEther } from 'viem'
 import { TranscriptPanel } from '@/components/console/TranscriptPanel'
 import { ExecutionSidebar } from '@/components/console/ExecutionSidebar'
 import { getExecutionStepSummary } from '@/components/console/ExecutionPanel'
@@ -11,7 +11,6 @@ import { TwiinAvatar } from '@/components/ui/TwiinAvatar'
 import { TextLoop } from '@/components/ui/TextLoop'
 import { useTwiinAgents } from '@/hooks/useTwiinAgents'
 import { useCreateTask } from '@/hooks/useCreateTask'
-import { useCreateTrustlessTask } from '@/hooks/useCreateTrustlessTask'
 import { useAgentPolicy } from '@/hooks/useAgentPolicy'
 import { useTaskStream } from '@/hooks/useTaskStream'
 import { useTaskDetail } from '@/hooks/useTaskDetail'
@@ -30,17 +29,11 @@ import {
   persistSession,
 } from '@/lib/console-session-storage'
 import {
-  requestTrustlessPreflight,
-  isTrustlessBudgetTooLowError,
-} from '@/lib/trustless-api'
-import {
   getLowSignalSuggestions,
   getMaxPromptBudgetStt,
   suggestedConsoleBudgetStt,
   type ConsolePromptDef,
 } from '@twiin/shared'
-import type { ExecutionMode } from '@/config/features'
-import { consolePageTheme } from '@/lib/execution-mode-theme'
 import { cn } from '@/lib/cn'
 import { type AgentStatusPhase } from '@/lib/agent-status-copy'
 import {
@@ -159,14 +152,12 @@ export function ConsolePage() {
   const [isPlanning, setIsPlanning] = useState(false)
   const [isApproving, setIsApproving] = useState(false)
   const [isRaisingCaps, setIsRaisingCaps] = useState(false)
-  const [executionMode, setExecutionMode] = useState<ExecutionMode>('claude')
   const [activeTaskId, setActiveTaskId] = useState<string | null>(null)
   const [detailVersion, setDetailVersion] = useState(0)
   const [executionPanelOpen, setExecutionPanelOpen] = useState(true)
   const [mobileExecutionPanelOpen, setMobileExecutionPanelOpen] = useState(false)
 
   const { submitCreateTask } = useCreateTask()
-  const { submitCreateTrustlessTask } = useCreateTrustlessTask()
   const { updatePolicy } = useAgentPolicy()
   const { events, connected } = useTaskStream(activeTaskId)
   const { task: chainTask, steps: chainSteps, completion: taskCompletion } =
@@ -192,9 +183,7 @@ export function ConsolePage() {
 
   const budgetNum = Number(budgetStt)
   const maxPerTaskNum =
-    agent
-      ? Number(executionMode === 'trustless' ? agent.maxPerTaskTrustless : agent.maxPerTask)
-      : 0
+    agent ? Number(agent.maxPerTask) : 0
   const dailyRemaining =
     agent ? Math.max(0, Number(agent.dailyCap) - Number(agent.dailySpent)) : 0
   const lowBalance =
@@ -227,9 +216,6 @@ export function ConsolePage() {
   )
   const stepProgressLabel =
     stepSummary && taskRunning ? `${stepSummary.done}/${stepSummary.total}` : null
-  const modeTheme = consolePageTheme()
-  const modeToggleDisabled = isPlanning || isApproving || hasActivity
-
   const appendEntry = useCallback((entry: SessionEntry) => {
     setSessionEntries((prev) => [...prev, entry])
   }, [])
@@ -284,7 +270,7 @@ export function ConsolePage() {
   useEffect(() => {
     if (!agent || sessionEntries.length > 0) return
     setBudgetStt(suggestedConsoleBudgetStt(agent))
-  }, [agent?.id.toString(), sessionEntries.length, executionMode])
+  }, [agent?.id.toString(), sessionEntries.length])
 
   useEffect(() => {
     const terminalEvent = events.some(
@@ -437,74 +423,6 @@ export function ConsolePage() {
     }
   }
 
-  async function runTrustless(trimmedGoal: string, budget: string) {
-    if (!agentId || !agent) return
-    setIsPlanning(true)
-    appendStatusForTurn('planning')
-    try {
-      const budgetWei = parseEther(budget).toString()
-      const preflight = await requestTrustlessPreflight({
-        goal: trimmedGoal,
-        personalAgentId: agentId,
-        budgetWei,
-      })
-      removeStatusForTurn()
-      appendEntry({
-        id: createEntryId(),
-        kind: 'trustless_preflight',
-        goal: trimmedGoal,
-        minBudgetStt: Number(formatEther(BigInt(preflight.minBudgetWei))).toFixed(4),
-        janiceCostStt: Number(formatEther(BigInt(preflight.janiceCostWei))).toFixed(4),
-        maxIterations: preflight.maxIterations,
-        warnings: preflight.warnings,
-      })
-
-      setIsApproving(true)
-      const { txHash, taskId } = await submitCreateTrustlessTask({
-        agent,
-        orchestrator: preflight.orchestrator,
-        budgetWei: BigInt(preflight.budgetWei),
-        createTaskCalldata: preflight.createTaskCalldata,
-      })
-
-      setGoal('')
-      if (taskId) {
-        setActiveTaskId(taskId)
-        appendEntry({ id: createEntryId(), kind: 'execution', taskId })
-        toast.success(`Trustless task #${taskId} created`)
-      } else {
-        toast.success('Trustless task submitted')
-      }
-
-      const explorer = somniaTestnet.blockExplorers.default.url
-      toast.message(
-        <a href={`${explorer}/tx/${txHash}`} target="_blank" rel="noopener noreferrer">
-          View transaction
-        </a>,
-      )
-    } catch (e) {
-      removeStatusForTurn()
-      if (isTrustlessBudgetTooLowError(e)) {
-        appendEntry({
-          id: createEntryId(),
-          kind: 'error',
-          text: `Trustless mode needs at least ${Number(formatEther(BigInt(e.minBudgetWei))).toFixed(4)} STT to start.`,
-        })
-        toast.error('Budget below trustless minimum')
-      } else {
-        appendEntry({
-          id: createEntryId(),
-          kind: 'error',
-          text: e instanceof Error ? e.message : 'Trustless preflight failed',
-        })
-        toast.error(e instanceof Error ? e.message : 'Trustless preflight failed')
-      }
-    } finally {
-      setIsPlanning(false)
-      setIsApproving(false)
-    }
-  }
-
   function resolveGoalInput(
     rawInput: string,
   ): { goal: string; aliasUsed?: string; error?: string } | null {
@@ -597,11 +515,7 @@ export function ConsolePage() {
     })
     if (resolved.aliasUsed) toast.success('Re-running the previous task')
 
-    if (executionMode === 'trustless') {
-      await runTrustless(resolved.goal, budgetStt)
-    } else {
-      await runPlan(resolved.goal, budgetStt)
-    }
+    await runPlan(resolved.goal, budgetStt)
   }
 
   async function handleSetBudgetAndRetry(nextBudget: string) {
@@ -612,19 +526,13 @@ export function ConsolePage() {
       toast.error('Enter a goal first')
       return
     }
-    if (executionMode === 'trustless') {
-      await runTrustless(trimmed, nextBudget)
-    } else {
-      await runPlan(trimmed, nextBudget)
-    }
+    await runPlan(trimmed, nextBudget)
   }
 
   async function ensurePolicyCapsForBudget(budgetNum: number): Promise<boolean> {
     if (!agent) return false
 
-    const maxPerTask = Number(
-      executionMode === 'trustless' ? agent.maxPerTaskTrustless : agent.maxPerTask,
-    )
+    const maxPerTask = Number(agent.maxPerTask)
     const dailyLeft = Math.max(0, Number(agent.dailyCap) - Number(agent.dailySpent))
     const needsRaise =
       (maxPerTask > 0 && budgetNum > maxPerTask) ||
@@ -643,20 +551,13 @@ export function ConsolePage() {
 
     setIsRaisingCaps(true)
     try {
-      const trustlessCap =
-        executionMode === 'trustless' ? taskCap : Number(agent.maxPerTaskTrustless)
       await updatePolicy({
         agentId: agent.id,
         dailyCapStt: dailyCap.toFixed(1),
-        maxPerTaskStt: executionMode === 'trustless' ? agent.maxPerTask : taskCap.toFixed(1),
-        maxPerTaskTrustlessWei: parseEther(trustlessCap.toFixed(1)),
+        maxPerTaskStt: taskCap.toFixed(1),
         killSwitch: agent.killSwitch,
       })
-      toast.success(
-        executionMode === 'trustless'
-          ? `Policy raised — ${taskCap.toFixed(1)} STT per trustless task`
-          : `Policy raised — ${taskCap.toFixed(1)} STT per task`,
-      )
+      toast.success(`Policy raised — ${taskCap.toFixed(1)} STT per task`)
       await refetchAgents()
       return true
     } catch (e) {
@@ -677,8 +578,7 @@ export function ConsolePage() {
     const lastUser = [...sessionEntries].reverse().find((e) => e.kind === 'user')
     const trimmed = lastUser?.kind === 'user' ? lastUser.text : goal.trim()
     if (trimmed) {
-      if (executionMode === 'trustless') await runTrustless(trimmed, nextBudget)
-      else await runPlan(trimmed, nextBudget)
+      await runPlan(trimmed, nextBudget)
     }
   }
 
@@ -774,8 +674,6 @@ export function ConsolePage() {
       <div className="flex h-full w-full flex-col">
         <ConsoleTopBar
           hasActivity={hasActivity}
-          executionMode={executionMode}
-          onExecutionModeChange={setExecutionMode}
           agents={agents}
           agentId={agentId}
           agent={agent}
@@ -791,7 +689,6 @@ export function ConsolePage() {
             agent && (overPerTaskCap || overDailyCap) ? handleRaiseCapsFromWarning : undefined
           }
           isRaisingCaps={isRaisingCaps}
-          modeToggleDisabled={modeToggleDisabled}
           agentSelectorDisabled={isPlanning || isApproving}
           showStepsToggle={hasActivity}
           stepsToggleActive={executionPanelOpen || mobileExecutionPanelOpen}
@@ -813,7 +710,7 @@ export function ConsolePage() {
                   interval={2.5}
                   className={cn(
                     'rounded-md px-2 py-0.5 font-mono tabular-nums',
-                    modeTheme.badge,
+                    'mode-claude-badge',
                   )}
                 >
                   <span>oracling-now</span>
@@ -842,7 +739,7 @@ export function ConsolePage() {
                 </TextLoop>
                 {' '}today?
               </h2>
-              <p className={cn('mt-1.5 text-sm', modeTheme.subtitle)}>
+              <p className="mt-1.5 text-sm text-muted-foreground">
                 Plan your steps, approve on-chain, and let keepers execute on Somnia.
               </p>
             </motion.div>
@@ -893,8 +790,7 @@ export function ConsolePage() {
                 onReject={handleRejectPlan}
                 onSetBudgetAndRetry={(b) => void handleSetBudgetAndRetry(b)}
                 onRaiseCapsAndRetry={(e) => void handleRaiseCapsAndRetry(e)}
-                onDismissMismatch={() => setPlanMismatch(null)}
-                executionMode={executionMode}
+                  onDismissMismatch={() => setPlanMismatch(null)}
               />
 
               <div className="pointer-events-none relative z-10 -mt-12 h-12 bg-gradient-to-t from-background to-transparent" />
@@ -923,7 +819,6 @@ export function ConsolePage() {
               chainTaskState={chainTask?.state}
               activeExecutionTaskId={currentTurnExecution?.taskId}
               hookTaskId={activeTaskId}
-              executionMode={executionMode}
             />
           </div>
         )}

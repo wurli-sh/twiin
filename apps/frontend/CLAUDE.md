@@ -2,7 +2,7 @@
 
 React 19 + Vite 6 + wagmi 2 + Tailwind CSS 4. Light-theme UI with nano-remit brand (green `#9FE870` / charcoal `#1A1A1A` / ghost `#F5F5F5`). Built with shadcn/ui, framer-motion, three.js paper shaders, and Onest font.
 
-**Status: Phase 4 complete; Phase 5 external agents UI shipped; Phase 6 TrustlessJanice console UI shipped.**
+**Status: Phase 4 complete; Phase 5 external agents UI shipped.**
 
 ## Commands
 
@@ -63,11 +63,9 @@ src/
 │   │   ├── ExecutionPanel.tsx        — main execution view (layout)
 │   │   ├── ExecutionPanelOverlay.tsx — overlay for execution state
 │   │   ├── ExecutionSidebar.tsx      — sidebar with step list + details
-│   │   ├── ExecutionModeToggle.tsx    — switch between Claude/Trustless mode
+│   │   ├── ExecutionModeToggle.tsx    — switch between planning modes (claude)
 │   │   ├── ConsensusBadge.tsx        — validator consensus receipt badge
-│   │   ├── ReportPendingCard.tsx     — pending report step display
-│   │   ├── TrustlessEventLine.tsx    — trustless event timeline
-│   │   └── TrustlessPreflightCard.tsx — trustless preflight check card
+│   │   └── ReportPendingCard.tsx     — pending report step display
 │   ├── marketplace/
 │   │   ├── SubAgentTable.tsx         — table of registered sub-agents
 │   │   └── SubAgentRow.tsx           — single sub-agent row with Elo
@@ -117,7 +115,6 @@ src/
     ├── agent-status-copy.ts    — status label text mapping
     ├── config-names.ts         — native agent name ↔ configId mapping
     ├── console-session.ts      — console session state manager
-    ├── execution-mode-theme.ts — Claude vs Trustless mode theme tokens
     ├── feed-topics.ts          — oracle feed topic constants
     ├── format-time.ts          — time formatting utilities
     ├── plan-api.ts             — POST /api/plan client
@@ -130,7 +127,6 @@ src/
     ├── sub-agent-status.ts     — sub-agent status helpers
     ├── task-result-display.ts  — task result display formatting
     ├── task-state.ts           — task state enum helpers
-    └── trustless-api.ts        — trustless plan API client
 ```
 
 ## Theme

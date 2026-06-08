@@ -7,7 +7,6 @@ import {
   type PhaseState,
 } from '@/lib/console-session'
 import { PlanStepList } from './PlanStepList'
-import type { ExecutionMode } from '@/config/features'
 import { consolePageTheme } from '@/lib/execution-mode-theme'
 import type { TaskStep } from '@/hooks/useTaskDetail'
 import { cn } from '@/lib/cn'
@@ -19,7 +18,6 @@ export type ExecutionPanelProps = {
   chainTaskState?: number
   activeExecutionTaskId?: string | null
   hookTaskId?: string | null
-  executionMode?: ExecutionMode
   onClose?: () => void
 }
 
@@ -32,7 +30,7 @@ const MACRO_LABELS: { key: keyof ReturnType<typeof deriveMacroPhases>; label: st
 ]
 
 function MacroDot({ state }: { state: PhaseState }) {
-  const activeClass = 'mode-trustless-dot-active'
+  const activeClass = 'mode-claude-dot-active'
 
   if (state === 'done') {
     return (
@@ -64,7 +62,7 @@ function MacroDot({ state }: { state: PhaseState }) {
 function labelClass(state: PhaseState): string {
   if (state === 'done') return 'text-muted-foreground'
   if (state === 'loading' || state === 'active') {
-    return 'font-semibold mode-trustless-text'
+    return 'font-semibold mode-claude-text'
   }
   if (state === 'error') return 'font-medium text-destructive'
   return 'text-muted-foreground/60'
@@ -100,30 +98,19 @@ export function ExecutionPanel({
   chainTaskState,
   activeExecutionTaskId,
   hookTaskId,
-  executionMode = 'claude',
   onClose,
 }: ExecutionPanelProps) {
   const modeTheme = consolePageTheme()
   const turn = getCurrentTurnEntries(entries)
-  const trustless = executionMode === 'trustless'
-  const phases = deriveMacroPhases(turn, chainTaskState, { trustless })
-  const macroLabels = trustless
-    ? MACRO_LABELS.map((item) =>
-        item.key === 'plan'
-          ? { ...item, label: 'Preflight' }
-          : item.key === 'approve'
-            ? { ...item, label: 'Submit' }
-            : item,
-      )
-    : MACRO_LABELS
+  const phases = deriveMacroPhases(turn, chainTaskState)
+  const macroLabels = MACRO_LABELS
   const planEntry = getActivePlan(turn)
   const stepsMatchExecution =
     activeExecutionTaskId != null &&
     hookTaskId != null &&
     hookTaskId === activeExecutionTaskId
   const stepsForBar = stepsMatchExecution ? chainSteps : []
-  const showSteps =
-    (planEntry || trustless) && phases.execute !== 'pending'
+  const showSteps = Boolean(planEntry) && phases.execute !== 'pending'
   const stepSummary = getExecutionStepSummary(
     entries,
     chainSteps,
@@ -192,22 +179,6 @@ export function ExecutionPanel({
             <PlanStepList
               steps={planEntry.plan.steps}
               chainSteps={stepsForBar}
-              executionMode={executionMode}
-              compact
-              stepProgress={stepProgressFn}
-            />
-          )}
-
-          {trustless && !planEntry && stepsForBar.length > 0 && (
-            <PlanStepList
-              steps={stepsForBar.map((step) => ({
-                configId: Number(step.configId),
-                payload: step.payload,
-                maxCostWei: '0',
-                timeoutSeconds: 300,
-              }))}
-              chainSteps={stepsForBar}
-              executionMode={executionMode}
               compact
               stepProgress={stepProgressFn}
             />

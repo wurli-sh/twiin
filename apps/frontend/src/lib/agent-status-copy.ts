@@ -12,19 +12,6 @@ export type AgentStatusPhase =
   | 'waiting_result'
   | 'completing'
 
-const TRUSTLESS_STATUS_PHRASES: Partial<Record<AgentStatusPhase, string[]>> = {
-  planning: ['Checking trustless budget…', 'Building Janice context…'],
-  signing: ['Awaiting your signature…', 'Locking trustless budget on-chain…'],
-  dispatching: ['Submitting trustless task on-chain…', 'Opening live task stream…'],
-  waiting_janice: [
-    'Waiting for Janice on Somnia…',
-    'Janice inference can take 1–15 minutes on testnet…',
-    'Subcommittee is running inferToolsChat…',
-  ],
-  executing: ['Janice is coordinating agents…', 'Running hired sub-agents…'],
-  completing: ['Janice is finishing up…', 'Finalizing trustless task…'],
-}
-
 const STATUS_PHRASES: Record<AgentStatusPhase, string[]> = {
   planning: [
     'Thinking through your goal…',
@@ -55,13 +42,7 @@ const STEP_PHRASES: Record<number, string> = {
   [NativeConfigId.JANICE]: 'Coordinating agents…',
 }
 
-export function getStatusPhrases(
-  phase: AgentStatusPhase,
-  trustless = false,
-): string[] {
-  if (trustless && TRUSTLESS_STATUS_PHRASES[phase]) {
-    return TRUSTLESS_STATUS_PHRASES[phase]!
-  }
+export function getStatusPhrases(phase: AgentStatusPhase): string[] {
   return STATUS_PHRASES[phase]
 }
 
@@ -87,29 +68,12 @@ export type ExecutionPhaseContext = {
   eventsCount: number
   chainSteps: TaskStep[]
   chainTaskState?: number
-  trustless?: boolean
-  hasJaniceActivity?: boolean
-  hasTrustlessIntent?: boolean
-  hasJaniceIteration?: boolean
 }
 
 export function resolveExecutionPhase(ctx: ExecutionPhaseContext): AgentStatusPhase {
   if (ctx.isApproving) return 'signing'
   if (!ctx.connected) return 'connecting'
-  if (
-    ctx.trustless &&
-    ctx.hasTrustlessIntent &&
-    !ctx.hasJaniceIteration &&
-    ctx.chainTaskState === TaskState.Running
-  ) {
-    return 'waiting_janice'
-  }
-  if (ctx.eventsCount === 0) {
-    return ctx.trustless ? 'waiting_janice' : 'dispatching'
-  }
-  if (ctx.trustless && ctx.hasJaniceActivity && ctx.chainSteps.length === 0) {
-    return 'executing'
-  }
+  if (ctx.eventsCount === 0) return 'dispatching'
 
   if (
     ctx.chainSteps.some(

@@ -5,10 +5,6 @@ import { PlanBudgetRecovery, type PlanBudgetMismatch } from './PlanBudgetRecover
 import { TaskResultCard } from './TaskResultCard'
 import { ReportPendingCard } from './ReportPendingCard'
 import { AgentStatusLine } from './AgentStatusLine'
-import { TrustlessPreflightCard } from './TrustlessPreflightCard'
-import { TrustlessEventLine } from './TrustlessEventLine'
-import { isTrustlessStreamEvent } from '@/hooks/useTaskStream'
-import type { ExecutionMode } from '@/config/features'
 import { consolePageTheme } from '@/lib/execution-mode-theme'
 import { cn } from '@/lib/cn'
 import { TaskState } from '@/config/contracts'
@@ -41,7 +37,6 @@ type Props = {
   onSetBudgetAndRetry: (b: string) => void
   onRaiseCapsAndRetry: (e: number) => void
   onDismissMismatch: () => void
-  executionMode?: ExecutionMode
 }
 
 function UserBubble({ text, budgetStt }: { text: string; budgetStt: string }) {
@@ -89,14 +84,12 @@ export function TranscriptPanel({
   onSetBudgetAndRetry,
   onRaiseCapsAndRetry,
   onDismissMismatch,
-  executionMode = 'claude',
 }: Props) {
   const modeTheme = consolePageTheme()
   const { publishFeed, isPublishing } = usePublishFeed()
   const bottomRef = useRef<HTMLDivElement>(null)
   const activeExecutionId = sessionEntries.findLast((e) => e.kind === 'execution')?.id
   const currentTurnExecution = getCurrentTurnExecution(sessionEntries)
-  const trustlessEvents = events.filter((ev) => isTrustlessStreamEvent(ev.type))
   const rejectionEvents = events.filter(
     (ev) =>
       ev.type === 'step_rejected' ||
@@ -178,23 +171,10 @@ export function TranscriptPanel({
                   goal={entry.goal}
                   agent={agent}
                   status={entry.status}
-                  executionMode={executionMode}
+                  executionMode="claude"
                   onApprove={() => onApprove(entry.id)}
                   onReject={(reason) => onReject(entry.id, reason)}
                   isSubmitting={isApproving && entry.status === 'pending'}
-                />
-              </AgentBlock>
-            )
-          }
-
-          if (entry.kind === 'trustless_preflight') {
-            return (
-              <AgentBlock key={entry.id}>
-                <TrustlessPreflightCard
-                  minBudgetStt={entry.minBudgetStt}
-                  janiceCostStt={entry.janiceCostStt}
-                  maxIterations={entry.maxIterations}
-                  warnings={entry.warnings}
                 />
               </AgentBlock>
             )
@@ -213,26 +193,12 @@ export function TranscriptPanel({
             if (!isActive || isTerminal || hasResult) return null
 
             const planEntry = getPlanForExecution(sessionEntries, entry.taskId)
-            const trustless = executionMode === 'trustless'
-            const hasTrustlessIntent = events.some(
-              (event) => event.type === 'trustless_intent',
-            )
-            const hasJaniceIteration = events.some(
-              (event) => event.type === 'janice_iteration',
-            )
-            const hasJaniceActivity = events.some((event) =>
-              isTrustlessStreamEvent(event.type),
-            )
             const phase = resolveExecutionPhase({
               isApproving,
               connected,
               eventsCount: events.length,
               chainSteps,
               chainTaskState: chainTask?.state,
-              trustless,
-              hasJaniceActivity,
-              hasTrustlessIntent,
-              hasJaniceIteration,
             })
 
             return (
@@ -243,7 +209,6 @@ export function TranscriptPanel({
                   chainSteps={chainSteps}
                   taskId={entry.taskId}
                   showTaskId
-                  trustless={trustless}
                   accentClass={modeTheme.statusSpinner}
                   shimmerClass={modeTheme.text}
                 />
@@ -266,7 +231,6 @@ export function TranscriptPanel({
                   aborted={entry.aborted}
                   abortDetail={entry.abortDetail}
                   taskId={entry.taskId}
-                  executionMode={executionMode}
                   publishLabel={
                     showPublish
                       ? `Publish to feed (${publishParams.confidence}% confidence)`
@@ -316,12 +280,6 @@ export function TranscriptPanel({
             </AgentBlock>
           )
         })}
-
-        {trustlessEvents.map((ev) => (
-          <AgentBlock key={`trustless-ev-${ev.id}`}>
-            <TrustlessEventLine event={ev} />
-          </AgentBlock>
-        ))}
 
         {pendingReportTaskId && (
           <AgentBlock>

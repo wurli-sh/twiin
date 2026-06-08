@@ -25,7 +25,6 @@ export interface TwiinAgentInfo {
   killSwitch: boolean
   dailyCap: string
   maxPerTask: string
-  maxPerTaskTrustless: string
   dailySpent: string
 }
 
@@ -86,7 +85,7 @@ export function useTwiinAgents() {
             const balanceFormatted = Number(formatEther(balance)).toFixed(4)
 
             const policy = await readContract<
-              readonly [bigint, bigint, bigint, boolean, bigint, bigint]
+              readonly [bigint, bigint, boolean, bigint, bigint]
             >(publicClient, {
               address: CONTRACTS.policy.address,
               abi: AgentPolicyAbi,
@@ -99,11 +98,10 @@ export function useTwiinAgents() {
               name: name || `Agent #${id}`,
               tbaAddress,
               tbaBalance: balanceFormatted,
-              killSwitch: policy[3],
+              killSwitch: policy[2],
               dailyCap: formatEther(policy[0]),
               maxPerTask: formatEther(policy[1]),
-              maxPerTaskTrustless: formatEther(policy[2]),
-              dailySpent: formatEther(policy[4]),
+              dailySpent: formatEther(policy[3]),
             })
           } catch (e) {
             console.error(`Error loading agent details for ID ${id}:`, e)

@@ -139,7 +139,7 @@ export function PlanApproval({
             'h-full transition-all duration-1000 ease-linear',
             secondsLeft <= 10
               ? 'bg-destructive'
-              : 'bg-[var(--mode-trustless-accent)]',
+              : 'bg-[var(--mode-claude)]',
           )}
           style={{ width: `${pct}%` }}
         />
