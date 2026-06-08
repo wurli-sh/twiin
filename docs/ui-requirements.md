@@ -230,17 +230,6 @@ The Console page must support the full task lifecycle from planning to execution
 - Completed state.
 - Aborted state.
 
-### Feature-Flagged Trustless Console Mode
-
-If trustless mode is enabled, the Console also needs:
-
-- A visible plan-mode choice between normal planning and trustless planning.
-- Trustless preflight layout before submission.
-- Budget and cap summary specific to trustless mode.
-- Latency or iteration warning copy.
-- Submit action for the trustless task path.
-- Reuse of the existing task timeline and task result areas.
-
 ## Feeds Page
 
 The Feeds page must include:

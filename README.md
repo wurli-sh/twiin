@@ -166,7 +166,7 @@ PRIVATE_KEY=your_deployer_private_key_here
 - **Chain is the source of truth.** The frontend cross-reads balances, Elo, verification, and feed staleness directly via wagmi (F6) — SSE is advisory UX only.
 - **Backend cannot submit external `createTask`** — it only relays signed results and rates them. The agent-only auth check requires `msg.sender == twiinAccount(personalAgentId)`.
 - **External agents** sign output with a registered EOA; bad signatures self-DOS until timeout.
-- **TrustlessJanice** (validator-consensus planning) is documented but feature-flagged off until gas/pricing checks pass on testnet.
+
 
 ---
 

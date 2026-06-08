@@ -10,10 +10,9 @@ Somnia Agentathon (Encode Club, May 18 – Jun 11 2026). Somnia Testnet chainId 
 | ------------------- | ----------- | -------------------------------------------------------- |
 | 1 — Contracts       | ✅ Complete | 94+ tests passing; lib/ extracted, consensus receipts    |
 | 2 — Shared package  | ✅ Complete | 22+ vitest tests; ABIs, constants, digest, 6551 helper, plan templates |
-| 3 — Backend         | ✅ Complete | Hono, Claude planner, keepers (6), SSE, SQLite, keeper-writes serialization |
+| 3 — Backend         | ✅ Complete | Hono, Claude planner, keepers (5), SSE, SQLite, keeper-writes serialization |
 | 4 — Frontend        | ✅ Complete | React/Vite/wagmi, deploy flow, task console, feeds       |
 | 5 — External Agents | ✅ Complete | 7 agents (briefsmith, docs-lens, dreamdex-mcp, onchain-lens, reactivity-lens, receipt-auditor, agent-adapter) |
-| 6 — TrustlessJanice | ✅ Deployed | On-chain + UI; gated by env flag                         |
 
 ## Commands
 
@@ -24,7 +23,7 @@ Somnia Agentathon (Encode Club, May 18 – Jun 11 2026). Somnia Testnet chainId 
 | `pnpm test:shared`   | runs `@twiin/shared` tests (vitest)                          |
 | `pnpm test:backend`  | runs `@twiin/backend` tests (vitest)                         |
 | `pnpm test:frontend` | runs `@twiin/frontend` tests (vitest)                       |
-| `pnpm test:all`      | runs contracts + shared + backend + discord-bot tests        |
+| `pnpm test:all`      | runs contracts + shared + backend tests                      |
 | `pnpm compile`       | compiles `@twiin/contracts` (Hardhat)                        |
 | `pnpm deploy:local`  | deploy contracts to local Hardhat node                       |
 | `pnpm deploy:somnia` | deploy contracts to Somnia Testnet                           |
@@ -82,16 +81,16 @@ twiin/
 | `deployments/` | Mirrored `hardhat.json` + `somniaTestnet.json` |
 | `scripts/` | `copy-abis.ts` — copies ABIs from contracts build |
 | `test/` | `parity.test.ts` — 22 vitest parity tests |
-| Top-level files | `index.ts` (barrel), `constants.ts`, `digest.ts`, `twiin-account.ts`, `trustless.ts`, `consensus.ts`, `addresses.json` |
+| Top-level files | `index.ts` (barrel), `constants.ts`, `digest.ts`, `twiin-account.ts`, `consensus.ts`, `addresses.json` |
 
 ### `apps/backend/` — Hono Backend Server
 
 | Path | Purpose |
 |------|---------|
 | `src/` | All backend source |
-| `src/routes/` | `plan.ts` (Claude planning), `stream.ts` (SSE), `tasks.ts` (task CRUD), `agents.ts` (agent listing), `trustless-preflight.ts` (trustless plan validation) |
-| `src/keepers/` | `relay.ts` (task relay keeper), `rater.ts` (Claude Haiku rating keeper), `indexer.ts` (event indexer), `externals.ts` (external agent dispatcher), `timeouts.ts` (step timeout handler), `trustless-resume.ts` (trustless task resume) |
-| Top-level `src/` files | `index.ts` (entry), `app.ts` (app factory), `clients.ts` (viem clients), `contracts.ts` (contract instances), `db.ts` (SQLite/Drizzle), `schema.ts` (DB schema), `sse.ts` (SSE helpers), `env.ts` (env vars), `budget.ts` (budget validation), `errors.ts` (error types), `task-log.ts` (structured logging), `trustless.ts` (trustless planner logic), `task-completion.ts` (task completion helpers), `planner-json.ts` (JSON planner) |
+| `src/routes/` | `plan.ts` (Claude planning), `stream.ts` (SSE), `tasks.ts` (task CRUD), `agents.ts` (agent listing) |
+| `src/keepers/` | `relay.ts` (task relay keeper), `rater.ts` (Claude Haiku rating keeper), `indexer.ts` (event indexer), `externals.ts` (external agent dispatcher), `timeouts.ts` (step timeout handler) |
+| Top-level `src/` files | `index.ts` (entry), `app.ts` (app factory), `clients.ts` (viem clients), `contracts.ts` (contract instances), `db.ts` (SQLite/Drizzle), `schema.ts` (DB schema), `sse.ts` (SSE helpers), `env.ts` (env vars), `budget.ts` (budget validation), `errors.ts` (error types), `task-log.ts` (structured logging), `task-completion.ts` (task completion helpers), `keeper-writes.ts` (keeper write serialization), `planner-json.ts` (JSON planner) |
 | Config | `drizzle.config.ts`, `tsconfig.json`, `.env.example` |
 
 ### `apps/frontend/` — React/Vite Frontend
@@ -101,14 +100,14 @@ twiin/
 | `src/pages/` | 4 pages: `HomePage`, `AgentsPage`, `ConsolePage`, `MarketplacePage` |
 | `src/components/home/` | `Hero`, `GatewayBento`, `HeroConsolePreview`, `HowItWorks`, `Ecosystem`, `DeploymentCTA`, `CinematicFooter` |
 | `src/components/agents/` | `DeployAgentPanel`, `AgentList`, `AgentTable`, `AgentStatusLabel`, `AgentKillSwitchControl`, `AddAgentPanel`, `ExternalAgentPanel`, `PolicyPanel`, `TaskActivity` |
-| `src/components/console/` | `AgentSelector`, `AgentStatusLine`, `PlanApproval`, `PlanStepList`, `PlanBudgetRecovery`, `CommandBar`, `SuggestedPrompts`, `BudgetWarningsBar`, `TaskResultCard`, `TranscriptPanel`, `ConsoleTopBar`, `ExecutionPanel`, `ExecutionPanelOverlay`, `ExecutionSidebar`, `ConsensusBadge`, `ReportPendingCard`, `ExecutionModeToggle`, `TrustlessEventLine`, `TrustlessPreflightCard` |
+| `src/components/console/` | `AgentSelector`, `AgentStatusLine`, `PlanApproval`, `PlanStepList`, `PlanBudgetRecovery`, `CommandBar`, `SuggestedPrompts`, `BudgetWarningsBar`, `TaskResultCard`, `TranscriptPanel`, `ConsoleTopBar`, `ExecutionPanel`, `ExecutionPanelOverlay`, `ExecutionSidebar`, `ConsensusBadge`, `ReportPendingCard`, `ExecutionModeToggle` |
 | `src/components/marketplace/` | `SubAgentTable`, `SubAgentRow` |
 | `src/components/layout/` | `Navbar`, `MainLayout`, `NetworkBanner` |
 | `src/components/spell/` | Animated paper/shader components: `animated-checkbox`, `blur-reveal`, `highlighted-text`, `light-rays`, `logos-carousel`, `tilt-card` |
 | `src/components/ui/` | `Button`, `Badge`, `Tabs`, `ConfirmDialog`, `TextLoop`, `TextShimmer`, `ThinkingSpinner`, `TwiinAvatar` |
 | `src/hooks/` | 11 hooks: `useWallet`, `useTwiinAgents`, `useSubAgents`, `useTaskStream`, `useTaskDetail`, `useAgentTasks`, `useCreateTask`, `useAgentPolicy`, `useRotatingPhrase`, `usePageReady`, `useNetworkGuard` |
 | `src/config/` | `wagmi.ts`, `chains.ts`, `contracts.ts` |
-| `src/lib/` | `cn.ts`, `utils.ts`, `animations.ts`, `agent-name.ts`, `agent-budget.ts`, `agent-status-copy.ts`, `config-names.ts`, `console-session.ts`, `execution-mode-theme.ts`, `feed-topics.ts`, `format-time.ts`, `plan-api.ts`, `plan-step-display.ts`, `preflight-create-task.ts`, `read-contract.ts`, `report-display.ts`, `sentiment-oracle-display.ts`, `sub-agent-status.ts`, `task-result-display.ts`, `task-state.ts`, `trustless-api.ts` |
+| `src/lib/` | `cn.ts`, `utils.ts`, `animations.ts`, `agent-name.ts`, `agent-budget.ts`, `agent-status-copy.ts`, `config-names.ts`, `console-session.ts`, `feed-topics.ts`, `format-time.ts`, `plan-api.ts`, `plan-step-display.ts`, `preflight-create-task.ts`, `read-contract.ts`, `report-display.ts`, `sentiment-oracle-display.ts`, `sub-agent-status.ts`, `task-result-display.ts`, `task-state.ts` |
 | `src/stores/` | `ui.ts` — zustand UI state |
 | Config | `vite.config.ts`, `tsconfig.json`, `eslint.config.js`, `components.json`, `index.html` |
 
@@ -224,7 +223,6 @@ twiin/
 | `budget.ts` | Shared budget validation logic |
 | `keeper-writes.ts` | Enqueues keeper writes serially with nonce collision retry |
 | `planner-json.ts` | JSON planner utilities |
-| `trustless.ts` | TrustlessJanice planner logic |
 
 ### `apps/backend/src/routes/` — Route Details
 
@@ -235,7 +233,7 @@ twiin/
 | Tasks Steps | `tasks.ts` | `GET /api/tasks/:taskId/steps` | Returns indexed steps from SQLite |
 | Stream | `stream.ts` | `GET /api/stream/:taskId` | SSE stream for real-time task execution updates |
 | Agents | `agents.ts` | `GET /api/agents` | Lists registered external agents from `AgentRegistry` |
-| Trustless Preflight | `trustless-preflight.ts` | `POST /api/trustless/preflight` | Validates trustless plan before on-chain submission |
+
 
 ### `apps/backend/src/keepers/` — Keeper Details
 
@@ -291,10 +289,6 @@ Auto-refresh via Somnia Reactivity precompile (chain-side, no cron) or keeper fa
 | `OracleFeed`        | `OracleFeed.sol`        | On-chain feed + task template store; `publishFeed`, `isStale()`, `getFeed()`; events for indexing only                          |
 | `TwiinTypes`        | `TwiinTypes.sol`        | Shared enums/structs (`AgentLane`, `PlanMode`, `StepState`, `TaskState`, `Step`)                                                |
 
-## PlanMode
-
-Phases 1–4: **ClaudePlan only** (Claude API plans). **TrustlessJanice** (validator-consensus planning via `janice@twiin`) is feature-flagged off until T2/T3/T4 measured on testnet.
-
 ## Key Constants
 
 | Constant               | Value          | Contract                           |
@@ -313,7 +307,7 @@ Phases 1–4: **ClaudePlan only** (Claude API plans). **TrustlessJanice** (valid
 
 | ID  | Name                  | Somnia Agent ID        | Cost     | Capability        |
 | --- | --------------------- | ---------------------- | -------- | ----------------- |
-| 0   | `janice@twiin`        | `12847293847561029384` | 0.24 STT | `plan.trustless`  |
+| 0   | `janice@twiin`        | `12847293847561029384` | 0.24 STT | —                 |
 | 1   | `web-intel@twiin`     | `12875401142070969085` | 0.33 STT | `web.scrape`      |
 | 2   | `somnia-oracle@twiin` | `13174292974160097713` | 0.12 STT | `json.fetch`      |
 | 3   | `analysis-bot@twiin`  | `12847293847561029384` | 0.24 STT | `llm.analyze`     |
@@ -346,4 +340,3 @@ Phases 1–4: **ClaudePlan only** (Claude API plans). **TrustlessJanice** (valid
 3. **Backend** ✅ — Hono server, viem clients, Claude Sonnet planner, relay + rater keepers, event indexer, SSE, SQLite
 4. **Frontend** ✅ — wallet UX, deploy flow, task flow, live execution, panels
 5. **External Agents** ✅ — 7 agents (briefsmith, docs-lens, dreamdex-mcp, onchain-lens, reactivity-lens, receipt-auditor, agent-adapter)
-6. **TrustlessJanice** ⬜ — feature-flagged off until T2/T3/T4 pass
