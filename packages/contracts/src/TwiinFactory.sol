@@ -10,7 +10,6 @@ import {AgentPolicy} from "./AgentPolicy.sol";
 import {OracleFeed} from "./OracleFeed.sol";
 import {AgentOrchestrator} from "./AgentOrchestrator.sol";
 import {IERC6551Registry} from "./interfaces/IERC6551Registry.sol";
-import {PlanMode} from "./TwiinTypes.sol";
 import {MockERC20} from "./mocks/MockERC20.sol";
 import {MockUniswapV2Router02} from "./mocks/MockUniswapV2Router02.sol";
 
@@ -33,10 +32,9 @@ contract TwiinFactory {
 
     bytes32 public constant TWIIN_6551_SALT = bytes32(0);
 
-    // Default policy seeds (2 STT / 1 STT / 2 STT).
+    // Default policy seeds (2 STT / 1 STT).
     uint256 public constant SEED_DAILY_CAP      = 2e18;
     uint256 public constant SEED_MAX_PER_TASK   = 1e18;
-    uint256 public constant SEED_MAX_TRUSTLESS  = 2e18;
 
     event TwiinDeployed(
         uint256 indexed personalAgentId,
@@ -123,7 +121,6 @@ contract TwiinFactory {
             personalAgentId,
             SEED_DAILY_CAP,
             SEED_MAX_PER_TASK,
-            SEED_MAX_TRUSTLESS,
             allowed,
             true  // killSwitch ON by default
         );

@@ -330,14 +330,14 @@ describe("AgentOrchestrator — task lifecycle", () => {
       .connect(user)
       .execute(await d.orchestrator.getAddress(), budget, createCalldata, 0);
 
-    expect(await d.policy.canReserveTaskBudget(0, agentId, ethers.parseEther("1.1"))).to.equal(false);
+    expect(await d.policy.canReserveTaskBudget(agentId, ethers.parseEther("1.1"))).to.equal(false);
 
     await ethers.provider.send("evm_increaseTime", [2]);
     await ethers.provider.send("evm_mine", []);
     await d.orchestrator.timeoutExternalStep(1n, 0);
 
     expect((await d.orchestrator.tasks(1n)).state).to.equal(3n);
-    expect(await d.policy.canReserveTaskBudget(0, agentId, ethers.parseEther("1"))).to.equal(true);
+    expect(await d.policy.canReserveTaskBudget(agentId, ethers.parseEther("1"))).to.equal(true);
   });
 
   it("timeoutTask is permissionless after TASK_DEADLINE", async () => {

@@ -5,10 +5,9 @@ pragma solidity 0.8.30;
 // Keeping them here prevents divergent struct layouts across cross-contract calls.
 
 enum AgentLane  { SomniaNative, ExternalHTTP }
-enum PlanMode   { ClaudePlan, TrustlessJanice }
+enum PlanMode   { ClaudePlan }
 enum StepState  { Pending, RunningNative, RunningExternal, AwaitingRating, Succeeded, Failed, Retrying, TimedOut }
 enum TaskState  { Created, Running, Completed, Aborted }
-enum TrustlessAwaiting { Janice, Step, Resume, Done }
 
 struct Step {
     uint256 subAgentConfigId;

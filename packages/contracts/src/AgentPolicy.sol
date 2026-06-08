@@ -1,14 +1,13 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.30;
 
-import {PlanMode} from "./TwiinTypes.sol";
+
 
 // Per-agent spend guards: daily cap, per-task cap, kill switch, allowed-contracts list.
 contract AgentPolicy {
     struct Policy {
         uint256   dailyCapWei;
         uint256   maxPerTaskWei;
-        uint256   maxPerTaskWeiTrustless;  // separate cap for TrustlessJanice (Phase 5)
         address[] allowedContracts;        // onchain.execute targets
         bool      killSwitch;
         uint256   dailySpent;
@@ -55,7 +54,6 @@ contract AgentPolicy {
         uint256 personalAgentId,
         uint256 dailyCapWei,
         uint256 maxPerTaskWei,
-        uint256 maxPerTaskWeiTrustless,
         address[] calldata allowedContracts,
         bool killSwitch
     ) external {
@@ -63,7 +61,6 @@ contract AgentPolicy {
         Policy storage p = policies[personalAgentId];
         p.dailyCapWei              = dailyCapWei;
         p.maxPerTaskWei            = maxPerTaskWei;
-        p.maxPerTaskWeiTrustless   = maxPerTaskWeiTrustless;
         p.killSwitch               = killSwitch;
         // Clear and reassign allowedContracts
         delete p.allowedContracts;
@@ -92,16 +89,12 @@ contract AgentPolicy {
 
     // Called once at createTask. Validates and reserves budget against daily+task caps.
     function validateAndReserveTaskBudget(
-        PlanMode mode,
         uint256 personalAgentId,
         uint256 budgetWei
     ) external onlyOrchestrator {
         Policy storage p = policies[personalAgentId];
         require(!p.killSwitch, "kill switch active");
-        uint256 cap = mode == PlanMode.TrustlessJanice
-            ? p.maxPerTaskWeiTrustless
-            : p.maxPerTaskWei;
-        require(budgetWei <= cap, "exceeds per-task cap");
+        require(budgetWei <= p.maxPerTaskWei, "exceeds per-task cap");
 
         // Lazy daily reset
         uint256 today = block.timestamp / 1 days;
@@ -115,16 +108,12 @@ contract AgentPolicy {
 
     // Non-mutating preflight — used by _preflightRefreshTask before pulling funds.
     function canReserveTaskBudget(
-        PlanMode mode,
         uint256 personalAgentId,
         uint256 budgetWei
     ) external view returns (bool) {
         Policy storage p = policies[personalAgentId];
         if (p.killSwitch || budgetWei == 0) return false;
-        uint256 cap = mode == PlanMode.TrustlessJanice
-            ? p.maxPerTaskWeiTrustless
-            : p.maxPerTaskWei;
-        if (budgetWei > cap) return false;
+        if (budgetWei > p.maxPerTaskWei) return false;
         uint256 today = block.timestamp / 1 days;
         uint256 spent = today > p.lastResetDay ? 0 : p.dailySpent;
         return spent + budgetWei <= p.dailyCapWei;

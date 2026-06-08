@@ -358,12 +358,6 @@ async function main() {
       tier: 2,
       nativeOnly: true,
     },
-    {
-      id: CAP("plan.trustless"),
-      name: "plan.trustless",
-      tier: 2,
-      nativeOnly: true,
-    },
   ];
   for (const cap of capabilities) {
     await (await agentRegistry.registerCapability(
@@ -381,7 +375,7 @@ async function main() {
       somniaId: LLM_INFERENCE_ID,
       payload: "0x",
       cost: SOMNIA_LLM_INFERENCE_PER_AGENT,
-      caps: [CAP("plan.trustless")],
+      caps: [],
       tier: 2,
     },
     {

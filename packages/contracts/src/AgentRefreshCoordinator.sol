@@ -9,7 +9,7 @@ import {IERC6551Registry} from "./interfaces/IERC6551Registry.sol";
 import {AgentPolicy} from "./AgentPolicy.sol";
 import {OracleFeed} from "./OracleFeed.sol";
 import {TwiinAccount} from "./TwiinAccount.sol";
-import {Step, PlanMode} from "./TwiinTypes.sol";
+import {Step} from "./TwiinTypes.sol";
 
 interface IRefreshTaskOrchestrator {
     function createRefreshTaskFromPulledFunds(
@@ -246,7 +246,7 @@ contract AgentRefreshCoordinator is SomniaEventHandler {
         if (orchestrator.taskLock(personalAgentId) != 0) return false;
         if (steps.length == 0 || steps.length > MAX_STEPS) return false;
         if (budget == 0) return false;
-        if (!policy.canReserveTaskBudget(PlanMode.ClaudePlan, personalAgentId, budget)) return false;
+        if (!policy.canReserveTaskBudget(personalAgentId, budget)) return false;
         return true;
     }
 

@@ -17,13 +17,11 @@ import {AgentRegistry} from "./AgentRegistry.sol";
 import {AgentVault} from "./AgentVault.sol";
 import {AgentPolicy} from "./AgentPolicy.sol";
 import {
-    AgentLane, PlanMode, StepState, TaskState, TrustlessAwaiting, Step
+    AgentLane, PlanMode, StepState, TaskState, Step
 } from "./TwiinTypes.sol";
 import {AgentConsensusLib} from "./lib/AgentConsensusLib.sol";
-import {AgentJaniceLib} from "./lib/AgentJaniceLib.sol";
 
-// The orchestration engine: task lifecycle, agent dispatch, external result verification,
-// and trustless Janice execution. Refresh scheduling is delegated to AgentRefreshCoordinator.
+// The orchestration engine: task lifecycle, agent dispatch, external result verification.
 contract AgentOrchestrator is
     IAgentRequesterHandler,
     ReentrancyGuard
@@ -41,11 +39,8 @@ contract AgentOrchestrator is
     error TaskAlreadyActive();
     error BadStepCount();
     error NoBudget();
-    error NotTrustless();
     error TaskNotRunning();
-    error NotAwaitingResume();
     error TaskTimedOut();
-    error BadJaniceCost();
     error DepositExceedsMax();
     error BadToolPayload();
     error ResultTooLarge();
@@ -59,7 +54,6 @@ contract AgentOrchestrator is
     error NotTimedOut();
     error BudgetExhausted();
     error BadNativeConfig();
-    error MaxStepsReached();
     error OnlyAdmin();
     error OnlyRefreshManager();
     error RefreshManagerAlreadySet();
@@ -72,9 +66,6 @@ contract AgentOrchestrator is
     uint64  public constant TASK_DEADLINE            = 1800;   // 30 min
     uint256 public constant MAX_EXTERNAL_RESULT_SIZE = 16_384; // 16 KB
     uint256 public constant SUBCOMMITTEE_SIZE        = 3;
-    uint8   public constant MAX_JANICE_ITERATIONS    = 8;
-    uint8   public constant INFER_TOOLS_CHAT_MAX_ITERATIONS = 8;
-    uint256 public constant JANICE_CONFIG_ID         = 0;
     uint256 private constant ANALYSIS_CONFIG_ID      = 3;
     uint256 private constant REPORTER_CONFIG_ID      = 4;
     uint256 private constant EXTERNAL_MIN_CONFIG_ID  = 6;
@@ -117,35 +108,6 @@ contract AgentOrchestrator is
     event ExternalStepRejected(uint256 indexed taskId, uint8 stepIdx, address registrant, uint8 score);
     event RatingTimedOut(uint256 indexed taskId, uint8 stepIdx);
     event NativeStepTimedOut(uint256 indexed taskId, uint8 stepIdx);
-    event TrustlessTaskIntent(uint256 indexed taskId, string goal, bytes32 intentHash, uint8 maxIterations);
-    event TrustlessStepAppended(
-        uint256 indexed taskId,
-        uint8 indexed stepIdx,
-        uint256 configId,
-        bytes payload,
-        uint256 maxCostWei,
-        uint64 timeoutSeconds
-    );
-    event JaniceIteration(
-        uint256 indexed taskId,
-        uint8 indexed iteration,
-        uint256 requestId,
-        string finishReason,
-        bytes32 transcriptHash
-    );
-    event JaniceToolExecuted(
-        uint256 indexed taskId,
-        uint8 indexed iteration,
-        string toolName,
-        bytes32 argsHash,
-        bool success
-    );
-    event JaniceResumeQueued(
-        uint256 indexed taskId,
-        uint8 indexed nextIteration,
-        bytes32 transcriptHash,
-        string reason
-    );
     event StepConsensusReached(
         uint256 indexed taskId,
         uint8 indexed stepIdx,
@@ -183,22 +145,11 @@ contract AgentOrchestrator is
 
     struct NativeRef { uint256 taskId; uint8 stepIdx; }
 
-    struct TrustlessCtx {
-        uint256 janiceRequestId;
-        uint8 iterations;
-        uint8 maxIterations;
-        TrustlessAwaiting awaiting;
-        uint64 deadline;
-        bytes32 intentHash;
-    }
-
     mapping(uint256 => uint256) public taskLock;   // personalAgentId → activeTaskId; 0 = free
     mapping(uint256 => Task)    public tasks;
     uint256                     public nextTaskId;  // starts at 1
 
     mapping(uint256 => NativeRef) internal nativeReqIndex;   // somniaRequestId → (taskId, stepIdx)
-    mapping(uint256 => uint256) internal trustlessReqIndex;  // janice requestId → taskId
-    mapping(uint256 => TrustlessCtx) public trustlessCtx;
     mapping(uint256 => mapping(uint8 => AgentConsensusLib.Receipt)) public stepReceipts;
 
     // ─── Modifiers ────────────────────────────────────────────────────────────
@@ -268,7 +219,7 @@ contract AgentOrchestrator is
         if (budgetWei == 0) revert NoBudget();
 
         // Reserve per-task + daily caps BEFORE touching vault (cheap revert on cap exceeded).
-        policy.validateAndReserveTaskBudget(mode, personalAgentId, budgetWei);
+        policy.validateAndReserveTaskBudget(personalAgentId, budgetWei);
 
         taskId = ++nextTaskId;
         taskLock[personalAgentId] = taskId;
@@ -289,66 +240,6 @@ contract AgentOrchestrator is
 
         emit TaskCreated(taskId, personalAgentId, mode, budgetWei);
         _dispatchStep(taskId);
-    }
-
-    function createTrustlessTask(
-        uint256 personalAgentId,
-        bytes calldata intentPayload,
-        uint256 budgetWei
-    ) external payable returns (uint256 taskId) {
-        address expectedAgent = _twiinAccount(personalAgentId);
-        if (!_agentExists(personalAgentId)) revert NoAgent();
-        if (msg.sender != expectedAgent) revert NotAgent();
-        if (msg.value != budgetWei) revert ValueBudgetMismatch();
-        if (taskLock[personalAgentId] != 0) revert TaskAlreadyActive();
-        if (budgetWei == 0) revert NoBudget();
-
-        string memory goal = abi.decode(intentPayload, (string));
-        bytes32 intentHash = keccak256(intentPayload);
-
-        policy.validateAndReserveTaskBudget(PlanMode.TrustlessJanice, personalAgentId, budgetWei);
-
-        taskId = ++nextTaskId;
-        taskLock[personalAgentId] = taskId;
-
-        Task storage t = tasks[taskId];
-        t.mode = PlanMode.TrustlessJanice;
-        t.personalAgentId = personalAgentId;
-        t.budgetWei = budgetWei;
-        t.deadline = uint64(block.timestamp + TASK_DEADLINE);
-        t.state = TaskState.Running;
-
-        TrustlessCtx storage ctx = trustlessCtx[taskId];
-        ctx.iterations = 0;
-        ctx.maxIterations = MAX_JANICE_ITERATIONS;
-        ctx.awaiting = TrustlessAwaiting.Janice;
-        ctx.deadline = t.deadline;
-        ctx.intentHash = intentHash;
-
-        vault.lockStep{value: budgetWei}(personalAgentId, taskId, budgetWei);
-
-        emit TaskCreated(taskId, personalAgentId, PlanMode.TrustlessJanice, budgetWei);
-        emit TrustlessTaskIntent(taskId, goal, intentHash, ctx.maxIterations);
-
-        bytes memory payload = AgentJaniceLib.buildInitialJanicePayload(goal, ctx.maxIterations);
-        _startJaniceRequest(taskId, payload);
-    }
-
-    function resumeTrustlessTask(
-        uint256 taskId,
-        bytes calldata resumePayload,
-        uint256 janiceCostWei
-    ) external onlyKeeper nonReentrant {
-        Task storage t = tasks[taskId];
-        if (t.mode != PlanMode.TrustlessJanice) revert NotTrustless();
-        if (t.state != TaskState.Running) revert TaskNotRunning();
-        TrustlessCtx storage ctx = trustlessCtx[taskId];
-        if (ctx.awaiting != TrustlessAwaiting.Resume) revert NotAwaitingResume();
-        if (block.timestamp >= t.deadline) revert TaskTimedOut();
-
-        uint256 expectedCost = _nativeRequestCost(JANICE_CONFIG_ID);
-        if (janiceCostWei != expectedCost) revert BadJaniceCost();
-        _startJaniceRequest(taskId, resumePayload);
     }
 
     function setRefreshManager(address _refreshManager) external {
@@ -427,12 +318,6 @@ contract AgentOrchestrator is
         uint8 status,
         RequestWire memory details
     ) external onlyAgentsApi {
-        uint256 trustlessTaskId = trustlessReqIndex[requestId];
-        if (trustlessTaskId != 0) {
-            _handleTrustlessResponse(trustlessTaskId, requestId, responses, status);
-            return;
-        }
-
         NativeRef memory ref = nativeReqIndex[requestId];
         if (ref.taskId == 0) return;  // unknown or already cleaned up
         if (tasks[ref.taskId].state != TaskState.Running) {
@@ -716,106 +601,6 @@ contract AgentOrchestrator is
         return string.concat(_uintToString(whole), ".", string(trimmedFraction));
     }
 
-    function _handleTrustlessResponse(
-        uint256 taskId,
-        uint256 requestId,
-        ResponseWire[] memory responses,
-        uint8 status
-    ) internal {
-        delete trustlessReqIndex[requestId];
-
-        Task storage t = tasks[taskId];
-        if (t.state != TaskState.Running) return;
-
-        TrustlessCtx storage ctx = trustlessCtx[taskId];
-        if (ctx.awaiting != TrustlessAwaiting.Janice) return;
-
-        if (status != RESPONSE_STATUS_SUCCESS || responses.length == 0) {
-            _abortTask(taskId, "janice failed");
-            return;
-        }
-
-        (
-            string memory finishReason,
-            string memory assistantMessage,
-            ,
-            ,
-            ,
-            bytes[] memory pendingToolCalls
-        ) = abi.decode(
-            responses[0].result,
-            (string, string, string[], string[], string[], bytes[])
-        );
-
-        ctx.iterations++;
-        bytes32 transcriptHash = keccak256(responses[0].result);
-        emit JaniceIteration(taskId, ctx.iterations, requestId, finishReason, transcriptHash);
-
-        if (AgentJaniceLib.eq(finishReason, "max_iterations")) {
-            _abortTask(taskId, "max iterations");
-            return;
-        }
-
-        if (AgentJaniceLib.eq(finishReason, "stop")) {
-            _completeTrustlessTask(taskId, assistantMessage);
-            return;
-        }
-
-        if (!AgentJaniceLib.eq(finishReason, "tool_calls")) {
-            _abortTask(taskId, "unsupported janice response");
-            return;
-        }
-
-        bool paused = false;
-        for (uint256 i = 0; i < pendingToolCalls.length; i++) {
-            bytes memory toolCalldata = pendingToolCalls[i];
-            string memory toolName = AgentJaniceLib.toolNameFromCalldata(toolCalldata);
-            bytes memory toolArgs = AgentJaniceLib.toolArgsFromCalldata(toolCalldata);
-            if (paused) {
-                if (
-                    AgentJaniceLib.eq(toolName, "rateSubAgent") ||
-                    AgentJaniceLib.eq(toolName, "publishOracle")
-                ) {
-                    bool postOk = _executeTrustlessTool(taskId, toolName, toolArgs, assistantMessage);
-                    emit JaniceToolExecuted(
-                        taskId,
-                        ctx.iterations,
-                        toolName,
-                        keccak256(toolArgs),
-                        postOk
-                    );
-                    if (!postOk || t.state != TaskState.Running) return;
-                    continue;
-                }
-                _abortTask(taskId, "unsupported post-pause tool");
-                return;
-            }
-            bool ok = _executeTrustlessTool(taskId, toolName, toolArgs, assistantMessage);
-            emit JaniceToolExecuted(
-                taskId,
-                ctx.iterations,
-                toolName,
-                keccak256(toolArgs),
-                ok
-            );
-            if (!ok || t.state != TaskState.Running) return;
-            if (ctx.awaiting == TrustlessAwaiting.Step || ctx.awaiting == TrustlessAwaiting.Resume) {
-                paused = true;
-            }
-        }
-
-        if (paused) return;
-
-        if (t.state == TaskState.Running && ctx.awaiting == TrustlessAwaiting.Janice) {
-            if (ctx.iterations >= ctx.maxIterations) {
-                _abortTask(taskId, "max iterations");
-                return;
-            }
-            ctx.awaiting = TrustlessAwaiting.Resume;
-            emit JaniceResumeQueued(taskId, ctx.iterations + 1, transcriptHash, "tool_batch_complete");
-        }
-    }
-
     // ─── External result submission ────────────────────────────────────────────
 
     // Permissionless relay — ECDSA-verified. Result held pending rating (no payment yet).
@@ -956,18 +741,9 @@ contract AgentOrchestrator is
         emit TaskCompleted(taskId, result);
     }
 
-    function _completeTrustlessTask(uint256 taskId, string memory result) internal {
-        trustlessCtx[taskId].awaiting = TrustlessAwaiting.Done;
-        _completeTask(taskId, result);
-    }
-
     // _abortTask: decrement active counters for in-flight external steps, sweep, release lock.
     function _abortTask(uint256 taskId, string memory reason) internal {
         Task storage t = tasks[taskId];
-        TrustlessCtx storage ctx = trustlessCtx[taskId];
-        if (ctx.janiceRequestId != 0) {
-            delete trustlessReqIndex[ctx.janiceRequestId];
-        }
         uint8 c = t.cursor;
         if (c < t.runtime.length) {
             StepRuntime storage rt = t.runtime[c];
@@ -987,9 +763,6 @@ contract AgentOrchestrator is
         }
         taskLock[t.personalAgentId] = 0;
         t.state = TaskState.Aborted;
-        if (t.mode == PlanMode.TrustlessJanice) {
-            ctx.awaiting = TrustlessAwaiting.Done;
-        }
         emit TaskAborted(taskId, reason);
     }
 
@@ -1002,71 +775,26 @@ contract AgentOrchestrator is
         if (success) {
             t.cursor++;
             if (t.cursor == t.steps.length) {
-                if (t.mode == PlanMode.TrustlessJanice) {
-                    TrustlessCtx storage trustless = trustlessCtx[taskId];
-                    trustless.awaiting = TrustlessAwaiting.Resume;
-                    emit JaniceResumeQueued(
-                        taskId,
-                        trustless.iterations + 1,
-                        keccak256(result),
-                        "step_succeeded"
-                    );
-                } else {
-                    _completeTask(taskId, string(result));
-                }
+                _completeTask(taskId, string(result));
             } else {
                 _dispatchStep(taskId);
             }
         } else {
             StepRuntime storage rt = t.runtime[stepIdx];
             if (rt.state == StepState.TimedOut) {
-                if (t.mode == PlanMode.TrustlessJanice) {
-                    TrustlessCtx storage trustlessTimedOut = trustlessCtx[taskId];
-                    trustlessTimedOut.awaiting = TrustlessAwaiting.Resume;
-                    emit JaniceResumeQueued(
-                        taskId,
-                        trustlessTimedOut.iterations + 1,
-                        keccak256(bytes("step timed out")),
-                        "step_failed"
-                    );
-                } else {
-                    _abortTask(taskId, "step timed out");
-                }
+                _abortTask(taskId, "step timed out");
                 return;
             }
             if (rt.retryCount < MAX_RETRIES) {
                 rt.retryCount++;
                 rt.state = StepState.Retrying;
-                // Snapshot byCapability array at retry-start to avoid Elo-write mutations (R2-24).
                 uint256[] memory snapshot = _snapshotByCapability(stepIdx, t);
                 bool dispatched = _retryWithSnapshot(taskId, stepIdx, snapshot);
                 if (!dispatched) {
-                    if (t.mode == PlanMode.TrustlessJanice) {
-                        TrustlessCtx storage trustlessFailed = trustlessCtx[taskId];
-                        trustlessFailed.awaiting = TrustlessAwaiting.Resume;
-                        emit JaniceResumeQueued(
-                            taskId,
-                            trustlessFailed.iterations + 1,
-                            keccak256(bytes("step failed")),
-                            "step_failed"
-                        );
-                    } else {
-                        _abortTask(taskId, "step failed");
-                    }
-                }
-            } else {
-                if (t.mode == PlanMode.TrustlessJanice) {
-                    TrustlessCtx storage trustlessExhausted = trustlessCtx[taskId];
-                    trustlessExhausted.awaiting = TrustlessAwaiting.Resume;
-                    emit JaniceResumeQueued(
-                        taskId,
-                        trustlessExhausted.iterations + 1,
-                        keccak256(bytes("step failed")),
-                        "step_failed"
-                    );
-                } else {
                     _abortTask(taskId, "step failed");
                 }
+            } else {
+                _abortTask(taskId, "step failed");
             }
         }
     }
@@ -1155,121 +883,6 @@ contract AgentOrchestrator is
         );
         if (!ok || data.length < 32) return false;
         return abi.decode(data, (address)) != address(0);
-    }
-
-    function _startJaniceRequest(uint256 taskId, bytes memory payload) internal {
-        Task storage t = tasks[taskId];
-        TrustlessCtx storage ctx = trustlessCtx[taskId];
-        policy.requireNotKilled(t.personalAgentId);
-
-        uint256 stepCost = _nativeRequestCost(JANICE_CONFIG_ID);
-        if (t.spentWei + stepCost > t.budgetWei) revert BudgetExhausted();
-
-        t.spentWei += stepCost;
-        vault.payNative(taskId, stepCost);
-
-        AgentRegistry.SubAgent memory janice = agentRegistry.get(JANICE_CONFIG_ID);
-        uint256 reqId = agentsApi.createRequest{value: stepCost}(
-            janice.somniaAgentId,
-            address(this),
-            this.handleResponse.selector,
-            payload
-        );
-        ctx.awaiting = TrustlessAwaiting.Janice;
-        ctx.janiceRequestId = reqId;
-        trustlessReqIndex[reqId] = taskId;
-    }
-
-    function _nativeRequestCost(uint256 configId) internal view returns (uint256) {
-        AgentRegistry.SubAgent memory a = agentRegistry.get(configId);
-        if (!(a.isActive && a.lane == AgentLane.SomniaNative)) revert BadNativeConfig();
-        return agentsApi.getRequestDeposit() + (a.costWei * SUBCOMMITTEE_SIZE);
-    }
-
-    function _executeTrustlessTool(
-        uint256 taskId,
-        string memory toolName,
-        bytes memory toolArgs,
-        string memory assistantMessage
-    ) internal returns (bool) {
-        Task storage t = tasks[taskId];
-        TrustlessCtx storage ctx = trustlessCtx[taskId];
-
-        if (AgentJaniceLib.eq(toolName, "hireSubAgent")) {
-            (
-                uint256 configId,
-                bytes memory payload,
-                uint256 maxCostWei,
-                uint32 timeoutSeconds
-            ) = abi.decode(toolArgs, (uint256, bytes, uint256, uint32));
-            if (t.steps.length >= MAX_STEPS) revert MaxStepsReached();
-            t.steps.push(
-                Step({
-                    subAgentConfigId: configId,
-                    payload: payload,
-                    maxCostWei: maxCostWei,
-                    timeoutSeconds: timeoutSeconds
-                })
-            );
-            t.runtime.push();
-            uint8 stepIdx = uint8(t.steps.length - 1);
-            emit TrustlessStepAppended(taskId, stepIdx, configId, payload, maxCostWei, timeoutSeconds);
-            t.cursor = stepIdx;
-            ctx.awaiting = TrustlessAwaiting.Step;
-            _dispatchStep(taskId);
-            return true;
-        }
-
-        if (AgentJaniceLib.eq(toolName, "completeTrustlessTask")) {
-            string memory finalResult = abi.decode(toolArgs, (string));
-            _completeTrustlessTask(taskId, bytes(finalResult).length == 0 ? assistantMessage : finalResult);
-            return true;
-        }
-
-        if (AgentJaniceLib.eq(toolName, "publishOracle")) {
-            if (refreshManager == address(0)) {
-                _abortTask(taskId, "refresh manager unset");
-                return false;
-            }
-            (
-                uint256 personalAgentId,
-                string memory topic,
-                string memory value,
-                uint8 confidence,
-                uint256 maxAgeSeconds,
-                uint256 refreshInterval,
-                bytes32 templateHash
-            ) = abi.decode(toolArgs, (uint256, string, string, uint8, uint256, uint256, bytes32));
-            (bool ok, ) = refreshManager.call(
-                abi.encodeWithSignature(
-                    "publishFeedAndMaybeSchedule(uint256,string,string,uint8,uint256,uint256,bytes32)",
-                    personalAgentId,
-                    topic,
-                    value,
-                    confidence,
-                    maxAgeSeconds,
-                    refreshInterval,
-                    templateHash
-                )
-            );
-            if (!ok) {
-                _abortTask(taskId, "publish oracle failed");
-                return false;
-            }
-            return true;
-        }
-
-        if (AgentJaniceLib.eq(toolName, "rateSubAgent")) {
-            (uint256 configId, uint32 latencyMs, uint8 score) = abi.decode(
-                toolArgs,
-                (uint256, uint32, uint8)
-            );
-            agentRegistry.recordSuccess(configId, latencyMs, score);
-            return true;
-        }
-
-        _abortTask(taskId, "unknown trustless tool");
-        return false;
     }
 
 }

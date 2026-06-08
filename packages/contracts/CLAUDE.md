@@ -3,7 +3,7 @@
 Hardhat project targeting **Somnia Testnet** (chainId 50312) + local Hardhat node (chainId 31337).
 Part of the `twiin/` pnpm monorepo — consumed by `@twiin/shared`, `apps/backend`, and `apps/frontend`.
 
-**Status: Phase 1 complete — 94/94 tests passing.**
+**Status: Phase 1 complete — 96/96 tests passing.**
 
 ## Commands
 
@@ -33,8 +33,7 @@ src/
 │   ├── MockERC20.sol
 │   └── MockUniswapV2Router02.sol
 ├── lib/
-│   ├── AgentConsensusLib.sol       — consensus receipt building, participation validation, median cost
-│   └── AgentJaniceLib.sol          — Janice trustless planner helpers (tool parsing, payload encoding)
+│   └── AgentConsensusLib.sol       — consensus receipt building, participation validation, median cost
 ├── AgentOrchestrator.sol           — core engine; extends SomniaEventHandler; registerTaskTemplate()
 ├── AgentPolicy.sol                 — per-agent caps, kill switch, allowlist
 ├── AgentRegistry.sol               — two-lane registry; Elo ranking

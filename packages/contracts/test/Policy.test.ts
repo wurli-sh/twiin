@@ -34,7 +34,7 @@ describe("AgentPolicy", () => {
   it("canReserveTaskBudget returns false when kill switch ON", async () => {
     const { policy, agentId } = await setupAgent();
     expect(
-      await policy.canReserveTaskBudget(0, agentId, ethers.parseEther("0.5")),
+      await policy.canReserveTaskBudget(agentId, ethers.parseEther("0.5")),
     ).to.be.false;
   });
 
@@ -42,16 +42,15 @@ describe("AgentPolicy", () => {
     const { policy, agentId, user } = await setupAgent();
     await policy.connect(user).toggleKillSwitch(agentId, false);
     expect(
-      await policy.canReserveTaskBudget(0, agentId, ethers.parseEther("0.5")),
+      await policy.canReserveTaskBudget(agentId, ethers.parseEther("0.5")),
     ).to.be.true;
   });
 
   it("canReserveTaskBudget returns false when budget > maxPerTaskWei", async () => {
     const { policy, agentId, user } = await setupAgent();
     await policy.connect(user).toggleKillSwitch(agentId, false);
-    // SEED_MAX_PER_TASK = 1 STT; request 2 STT
     expect(
-      await policy.canReserveTaskBudget(0, agentId, ethers.parseEther("2")),
+      await policy.canReserveTaskBudget(agentId, ethers.parseEther("2")),
     ).to.be.false;
   });
 
@@ -64,11 +63,9 @@ describe("AgentPolicy", () => {
       await orchestrator.getAddress(),
       "0x" + ethers.parseEther("1").toString(16),
     ]);
-    // Should not revert for mockRouter
     await policy
       .connect(orchSigner)
       .requireAllowed(agentId, await mockRouter.getAddress());
-    // Should revert for random address
     await expect(
       policy.connect(orchSigner).requireAllowed(agentId, ethers.ZeroAddress),
     ).to.be.revertedWith("target not allowed");
@@ -80,19 +77,7 @@ describe("AgentPolicy", () => {
     await expect(
       policy
         .connect(user)
-        .validateAndReserveTaskBudget(0, agentId, ethers.parseEther("0.5")),
+        .validateAndReserveTaskBudget(agentId, ethers.parseEther("0.5")),
     ).to.be.revertedWith("only orchestrator");
-  });
-
-  it("TrustlessJanice cap is separate from ClaudePlan cap", async () => {
-    const { policy, agentId, user } = await setupAgent();
-    await policy.connect(user).toggleKillSwitch(agentId, false);
-    // PlanMode 0 = ClaudePlan (max 1 STT), PlanMode 1 = TrustlessJanice (max 2 STT)
-    expect(
-      await policy.canReserveTaskBudget(0, agentId, ethers.parseEther("1.5")),
-    ).to.be.false;
-    expect(
-      await policy.canReserveTaskBudget(1, agentId, ethers.parseEther("1.5")),
-    ).to.be.true;
   });
 });
