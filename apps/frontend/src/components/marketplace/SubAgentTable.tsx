@@ -58,6 +58,7 @@ export function SubAgentTable({
           <span className="hidden w-9 shrink-0 sm:block" />
           <span className="flex-1">Agent</span>
           <span className="hidden w-52 shrink-0 text-center sm:grid sm:grid-cols-3">Stats</span>
+          <span className="hidden w-24 shrink-0 text-center sm:block">Trust</span>
         </div>
         <button
           type="button"

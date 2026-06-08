@@ -25,6 +25,7 @@ export const NATIVE_CONFIG_CAPABILITIES: Record<number, string> = {
 
 export const RESERVED_CONFIG_IDS = new Set<number>([
   NativeConfigId.JANICE,
+  NativeConfigId.WEB_INTEL,
   NativeConfigId.EXECUTOR,
 ]);
 
@@ -58,18 +59,25 @@ export function pickSubstitute(
   if (!current) return null;
 
   const capSet = new Set(current.capabilities.map((c) => c.toLowerCase()));
+  const webScrape = CapabilityId.WEB_SCRAPE.toLowerCase();
   const ranked = candidates
     .filter(
       (c) =>
         c.configId !== configId &&
+        c.configId !== NativeConfigId.WEB_INTEL &&
         !exclude.has(c.configId) &&
         c.healthy &&
         c.isActive &&
         !c.suspended &&
         c.exactCostWei <= budgetWei &&
+        !c.capabilities.some((cap) => cap.toLowerCase() === webScrape) &&
         c.capabilities.some((cap) => capSet.has(cap.toLowerCase())),
     )
-    .sort((a, b) => a.rank - b.rank || a.exactCostWei - b.exactCostWei);
+    .sort(
+      (a, b) =>
+        a.rank - b.rank ||
+        Number(a.exactCostWei - b.exactCostWei),
+    );
 
   return ranked[0] ?? null;
 }
@@ -80,14 +88,21 @@ export function resolveByCapability(
   budgetWei: bigint,
 ): AgentCandidate[] {
   const cap = capability.toLowerCase();
+  const webScrape = CapabilityId.WEB_SCRAPE.toLowerCase();
   return candidates
     .filter(
       (c) =>
+        c.configId !== NativeConfigId.WEB_INTEL &&
         c.healthy &&
         c.isActive &&
         !c.suspended &&
         c.exactCostWei <= budgetWei &&
+        cap !== webScrape &&
         c.capabilities.some((value) => value.toLowerCase() === cap),
     )
-    .sort((a, b) => a.rank - b.rank || a.exactCostWei - b.exactCostWei);
+    .sort(
+      (a, b) =>
+        a.rank - b.rank ||
+        Number(a.exactCostWei - b.exactCostWei),
+    );
 }

@@ -24,6 +24,8 @@ type AgentListProps = {
   error: string | null
   onRefresh: () => void
   onToggleKillSwitch: (agentId: bigint, current: boolean) => Promise<unknown>
+  killSwitchDialogAgentId: string | null
+  onKillSwitchDialogOpenChange: (agentId: string | null) => void
 }
 
 export function AgentList({
@@ -32,6 +34,8 @@ export function AgentList({
   error,
   onRefresh,
   onToggleKillSwitch,
+  killSwitchDialogAgentId,
+  onKillSwitchDialogOpenChange,
 }: AgentListProps) {
   const [togglingId, setTogglingId] = useState<bigint | null>(null)
   const setSelectedAgentId = useUIStore((s) => s.setSelectedAgentId)
@@ -101,6 +105,8 @@ export function AgentList({
             onSelect={setSelectedAgentId}
             onToggleKillSwitch={handleToggle}
             togglingId={togglingId}
+            killSwitchDialogAgentId={killSwitchDialogAgentId}
+            onKillSwitchDialogOpenChange={onKillSwitchDialogOpenChange}
           />
         </>
       )}

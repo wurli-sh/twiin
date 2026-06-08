@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parsePlannerStepsJson } from "../src/planner-json";
+import { parsePlannerStepsFromToolInput, parsePlannerStepsJson } from "../src/planner-json";
 
 describe("parsePlannerStepsJson", () => {
   const step = {
@@ -31,7 +31,27 @@ Here is a summary of the plan for the user.`;
     expect(out[0].configId).toBe(2);
   });
 
-  it("throws when no array is present", () => {
-    expect(() => parsePlannerStepsJson("not-json")).toThrow();
+  it("returns tool input steps", () => {
+    const out = parsePlannerStepsFromToolInput({
+      steps: [
+        {
+          configId: 3,
+          payload: "analyze",
+          maxCostWei: "1",
+          timeoutSeconds: 120,
+        },
+      ],
+    });
+    expect(out[0].configId).toBe(3);
+  });
+
+  it("rejects plans with more than 5 steps", () => {
+    const tooMany = Array.from({ length: 6 }, (_, i) => ({
+      configId: 3,
+      payload: `step ${i}`,
+      timeoutSeconds: 120,
+    }));
+    expect(() => parsePlannerStepsFromToolInput({ steps: tooMany })).toThrow();
+    expect(() => parsePlannerStepsJson(JSON.stringify(tooMany))).toThrow();
   });
 });

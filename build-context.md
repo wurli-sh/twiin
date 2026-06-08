@@ -27,7 +27,7 @@ Named ERC-6551 NFT agents on Somnia Shannon (`50312`). Hire sub-agents from open
 
 **Infra:** wagmi Somnia only, `NetworkBanner` wrong-chain switch, Vite proxy `/api` → `:3001`, `@twiin/shared` via Vite alias to source.
 
-**Frontend gaps (low):** Policy panel (`setPolicy`, `subscribePull`), external register UI (curl/`pnpm register:discord-bot` OK), AgentProfile NFT page, `wallet_addEthereumChain` fallback, frontend tests.
+**Frontend gaps (low):** Policy panel (`setPolicy`, `subscribePull`), external register UI (curl/`pnpm register:docs-lens` OK), AgentProfile NFT page, `wallet_addEthereumChain` fallback, frontend tests.
 
 ## Backend (`apps/backend`)
 - `POST /api/plan` · `GET /api/stream/:id` · `GET /api/tasks/:id` (+ `/steps`) · `GET /api/agents`
@@ -36,13 +36,14 @@ Named ERC-6551 NFT agents on Somnia Shannon (`50312`). Hire sub-agents from open
 **Gaps:** BudgetGuard ($2/$0.50), boot re-verify externals, optional OracleRefreshWorker if Reactivity fails.
 
 ## External demo
-`apps/discord-bot` + `pnpm register:discord-bot` — `discord-bot@twiin` HTTP `/execute`.
+`apps/docs-lens` (`docs-lens@twiin`) + `apps/reactivity-lens` (`reactivity-lens@twiin`) — HTTP `/execute`, zero secrets.
 
 ## Commands
 ```bash
 pnpm install && pnpm dev:all          # :3001 + :5173
 pnpm build && pnpm test               # contracts
-pnpm deploy:somnia && pnpm register:discord-bot
+pnpm register:docs-lens && pnpm register:reactivity-lens
+pnpm smoke:docs-lens                  # curl /health + /execute (server must be running)
 ```
 
 ## Env

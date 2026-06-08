@@ -483,6 +483,6 @@ describe("AgentOrchestrator — task lifecycle", () => {
     const decoded = llmIface.decodeFunctionData("inferString", reporterPayload);
     const prompt = String(decoded[0]);
     expect(prompt).to.contain("Previous step outputs:");
-    expect(prompt).to.contain("oracle somnia.usd (decimals=8): 12915400");
+    expect(prompt).to.contain("oracle somnia.usd (decimals=8): 0.129154");
   });
 });

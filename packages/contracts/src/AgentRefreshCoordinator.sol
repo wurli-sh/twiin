@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.30;
 
-import {SomniaEventHandler} from "@somnia-chain/reactivity-contracts/contracts/SomniaEventHandler.sol";
+import { SomniaEventHandler } from "@somnia-chain/reactivity-contracts/contracts/SomniaEventHandler.sol";
 import {SomniaExtensions} from "@somnia-chain/reactivity-contracts/contracts/interfaces/SomniaExtensions.sol";
 
+import {IERC721} from "@openzeppelin/contracts/token/ERC721/IERC721.sol";
 import {IERC6551Registry} from "./interfaces/IERC6551Registry.sol";
 import {AgentPolicy} from "./AgentPolicy.sol";
 import {OracleFeed} from "./OracleFeed.sol";
@@ -83,6 +84,21 @@ contract AgentRefreshCoordinator is SomniaEventHandler {
         bytes32 templateHash
     ) external {
         if (msg.sender != admin && msg.sender != address(orchestrator)) revert NotAllowed();
+        _publishFeedAndMaybeSchedule(
+            personalAgentId, topic, value, confidence, maxAgeSeconds, refreshInterval, templateHash
+        );
+    }
+
+    function publishFeedForOwner(
+        uint256 personalAgentId,
+        string calldata topic,
+        string calldata value,
+        uint8 confidence,
+        uint256 maxAgeSeconds,
+        uint256 refreshInterval,
+        bytes32 templateHash
+    ) external {
+        if (IERC721(twiinAgent).ownerOf(personalAgentId) != msg.sender) revert NotAllowed();
         _publishFeedAndMaybeSchedule(
             personalAgentId, topic, value, confidence, maxAgeSeconds, refreshInterval, templateHash
         );

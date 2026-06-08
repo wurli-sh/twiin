@@ -6,7 +6,7 @@ import {
   toHex,
   type AbiEvent,
 } from "viem";
-import { buildTwiinDigest, CHAIN_ID, StepState } from "@twiin/shared";
+import { buildTwiinDigest, CHAIN_ID, StepState, TaskState, buildPriorStepContext, enrichExternalPayload } from "@twiin/shared";
 import { publicClient } from "../clients";
 import { addresses, defaultStartBlock, orchestratorContract } from "../contracts";
 import { env } from "../env";
@@ -16,15 +16,21 @@ import {
   enqueueRelayJob,
   getCursor,
   getExternalAgent,
+  getRelayJob,
   getStep,
+  getStepsForTask,
   isResultSubmitted,
   listDueRelayJobs,
+  listFailedRelayJobs,
+  markRelayJobIndexerLagRetry,
   markRelayJobRetry,
+  reactivateRelayJob,
   saveSubmittedResult,
   setCursor,
   setExternalAgentVerification,
   upsertStep,
 } from "../db";
+import { enqueueKeeperWrite, isNonceCollisionError } from "../keeper-writes";
 import { publish } from "../sse";
 import { logTaskTimeline } from "../task-log";
 
@@ -37,6 +43,10 @@ const FAST_FORWARD_TAIL = 10_000n;
 const MAX_EXTERNAL_RESULT_SIZE = 16_384;
 const RELAY_EXECUTE_RETRIES = 3;
 const RELAY_BACKOFF_SECONDS = [2, 8, 32];
+const RELAY_INDEXER_LAG_BACKOFF_SECONDS = 2;
+const POST_EXECUTE_INDEXER_LAG_POLLS = 3;
+const POST_EXECUTE_INDEXER_LAG_DELAY_MS = 1_000;
+const EXTERNAL_VERIFICATION_TTL_SECONDS = 300;
 const externalAgentRequestEvent = parseAbiItem(
   "event ExternalAgentRequest(uint256 indexed taskId, uint8 stepIdx, uint256 configId, address registrant, bytes32 endpointHash, bytes payload, bytes32 reqId, uint64 deadline)",
 ) as AbiEvent;
@@ -71,14 +81,22 @@ type RelayDeps = {
   saveSubmittedResult: typeof saveSubmittedResult;
   deleteSubmittedResult: typeof deleteSubmittedResult;
   getStep: typeof getStep;
+  getStepsForTask: typeof getStepsForTask;
   upsertStep: typeof upsertStep;
   getExternalAgent: typeof getExternalAgent;
   setExternalAgentVerification: typeof setExternalAgentVerification;
   enqueueRelayJob: typeof enqueueRelayJob;
+  getRelayJob: typeof getRelayJob;
   listDueRelayJobs: typeof listDueRelayJobs;
+  listFailedRelayJobs: typeof listFailedRelayJobs;
   markRelayJobRetry: typeof markRelayJobRetry;
+  markRelayJobIndexerLagRetry: typeof markRelayJobIndexerLagRetry;
+  reactivateRelayJob: typeof reactivateRelayJob;
   completeRelayJob: typeof completeRelayJob;
   publish: typeof publish;
+  readOnChainTask: (
+    taskId: bigint,
+  ) => Promise<readonly [number, bigint, number, bigint, bigint, bigint, number]>;
   submitExternalResult: (
     args: readonly [bigint, number, `0x${string}`, `0x${string}`],
   ) => Promise<unknown>;
@@ -108,16 +126,25 @@ export function createRelay(overrides: Partial<RelayDeps> = {}) {
     saveSubmittedResult,
     deleteSubmittedResult,
     getStep,
+    getStepsForTask,
     upsertStep,
     getExternalAgent,
     setExternalAgentVerification,
     enqueueRelayJob,
+    getRelayJob,
     listDueRelayJobs,
+    listFailedRelayJobs,
     markRelayJobRetry,
+    markRelayJobIndexerLagRetry,
+    reactivateRelayJob,
     completeRelayJob,
     publish,
+    readOnChainTask: (taskId) =>
+      orchestratorContract.read.tasks([taskId]),
     submitExternalResult: (args) =>
-      orchestratorContract.write.submitExternalResult(args),
+      enqueueKeeperWrite(() =>
+        orchestratorContract.write.submitExternalResult(args),
+      ),
     fetchImpl: fetch,
     nowMs: () => Date.now(),
     logger: console,
@@ -130,109 +157,134 @@ export function createRelay(overrides: Partial<RelayDeps> = {}) {
     const latest = await deps.getBlockNumber();
     const stored = await deps.getCursor(CURSOR_KEY);
     if (stored > latest) {
-      const rewindTo = deps.startBlock > 0n && deps.startBlock <= latest
-        ? deps.startBlock
-        : latest;
+      const rewindTo = latest > 1n ? latest - 1n : 0n;
       deps.logger.warn(
         `[relay] cursor ${stored} is ahead of latest block ${latest}; rewinding to ${rewindTo}`,
       );
       await deps.setCursor(CURSOR_KEY, rewindTo);
-      return;
-    }
-    const from = stored === 0n && deps.startBlock > 0n ? deps.startBlock : stored;
-    if (from > latest) return;
-    const lag = latest - from;
-    if (lag > FAST_FORWARD_LAG_THRESHOLD) {
-      const fastForwardTo =
-        latest > FAST_FORWARD_TAIL ? latest - FAST_FORWARD_TAIL : 0n;
-      if (fastForwardTo > from) {
-        deps.logger.warn(
-          `[relay] lag ${lag} blocks is too large; fast-forwarding cursor from ${from} to ${fastForwardTo}`,
-        );
-        await deps.setCursor(CURSOR_KEY, fastForwardTo);
-        return;
+    } else {
+      const from = stored === 0n && deps.startBlock > 0n ? deps.startBlock : stored;
+      if (from <= latest) {
+        const lag = latest - from;
+        let fastForwarded = false;
+        if (lag > FAST_FORWARD_LAG_THRESHOLD) {
+          const fastForwardTo =
+            latest > FAST_FORWARD_TAIL ? latest - FAST_FORWARD_TAIL : 0n;
+          if (fastForwardTo > from) {
+            deps.logger.warn(
+              `[relay] lag ${lag} blocks is too large; fast-forwarding cursor from ${from} to ${fastForwardTo}`,
+            );
+            await deps.setCursor(CURSOR_KEY, fastForwardTo);
+            fastForwarded = true;
+          }
+        }
+        
+        if (!fastForwarded) {
+          const chunk = lag > MAX_RPC_LOG_RANGE ? MAX_RPC_LOG_RANGE : CHUNK;
+          const to = from + chunk < latest ? from + chunk : latest;
+          const logs = await deps.getLogs({
+            address: deps.addresses.orchestrator,
+            event: externalAgentRequestEvent,
+            fromBlock: from,
+            toBlock: to,
+          });
+
+          for (const log of logs) {
+            const {
+              taskId,
+              stepIdx,
+              configId,
+              registrant,
+              endpointHash,
+              payload,
+              reqId,
+              deadline,
+            } = log.args;
+            if (
+              taskId == null ||
+              stepIdx == null ||
+              configId == null ||
+              registrant == null ||
+              endpointHash == null ||
+              reqId == null
+            ) {
+              continue;
+            }
+
+            const taskIdStr = taskId.toString();
+
+            if (deadline && BigInt(Math.floor(deps.nowMs() / 1000)) > deadline) {
+              deps.logger.log(
+                `[relay] step ${taskIdStr}:${stepIdx} deadline passed, skipping`,
+              );
+              logTaskTimeline("relay_step_expired", {
+                taskId: taskIdStr,
+                stepIdx,
+                configId: configId.toString(),
+                deadline: deadline.toString(),
+              });
+              continue;
+            }
+
+            try {
+              logTaskTimeline("relay_step_detected", {
+                taskId: taskIdStr,
+                stepIdx,
+                configId: configId.toString(),
+                deadline: deadline?.toString() ?? null,
+              });
+              await scheduleRelayJobDispatch(deps, {
+                taskId: taskIdStr,
+                stepIdx,
+                configId: configId.toString(),
+                reqId,
+                payload: payload ?? "0x",
+                registrant,
+                endpointHash,
+              });
+            } catch (e) {
+              deps.logger.error(`[relay] enqueue failed task=${taskIdStr} step=${stepIdx}:`, e);
+            }
+          }
+
+          await deps.setCursor(CURSOR_KEY, to + 1n);
+
+          await recoverFailedRelayJobs(deps);
+          await processRelayJobs(deps);
+          return;
+        }
       }
     }
-    const chunk = lag > MAX_RPC_LOG_RANGE ? MAX_RPC_LOG_RANGE : CHUNK;
-    const to = from + chunk < latest ? from + chunk : latest;
 
-    const logs = await deps.getLogs({
-      address: deps.addresses.orchestrator,
-      event: externalAgentRequestEvent,
-      fromBlock: from,
-      toBlock: to,
-    });
-
-    for (const log of logs) {
-      const {
-        taskId,
-        stepIdx,
-        configId,
-        registrant,
-        endpointHash,
-        payload,
-        reqId,
-        deadline,
-      } = log.args;
-      if (
-        taskId == null ||
-        stepIdx == null ||
-        configId == null ||
-        registrant == null ||
-        endpointHash == null ||
-        reqId == null
-      ) {
-        continue;
-      }
-
-      const taskIdStr = taskId.toString();
-      if (await deps.isResultSubmitted(taskIdStr, stepIdx)) continue;
-
-      if (deadline && BigInt(Math.floor(deps.nowMs() / 1000)) > deadline) {
-        deps.logger.log(
-          `[relay] step ${taskIdStr}:${stepIdx} deadline passed, skipping`,
-        );
-        logTaskTimeline("relay_step_expired", {
-          taskId: taskIdStr,
-          stepIdx,
-          configId: configId.toString(),
-          deadline: deadline.toString(),
-        });
-        continue;
-      }
-
-      try {
-        logTaskTimeline("relay_step_detected", {
-          taskId: taskIdStr,
-          stepIdx,
-          configId: configId.toString(),
-          deadline: deadline?.toString() ?? null,
-        });
-        await deps.enqueueRelayJob({
-          taskId: taskIdStr,
-          stepIdx,
-          configId: configId.toString(),
-          reqId,
-          payload: payload ?? "0x",
-          registrant,
-          endpointHash,
-        });
-      } catch (e) {
-        deps.logger.error(`[relay] enqueue failed task=${taskIdStr} step=${stepIdx}:`, e);
-      }
-    }
-
-    await deps.setCursor(CURSOR_KEY, to + 1n);
+    await recoverFailedRelayJobs(deps);
     await processRelayJobs(deps);
   }
 
   async function processRelayJobs(deps: RelayDeps): Promise<void> {
     const nowSeconds = Math.floor(deps.nowMs() / 1000);
     const jobs = await deps.listDueRelayJobs(nowSeconds);
+    if (jobs.length > 0) deps.logger.log(`[relay] processRelayJobs found ${jobs.length} jobs at ${nowSeconds}`);
     for (const job of jobs) {
       if (await deps.isResultSubmitted(job.task_id, job.step_idx)) {
-        await deps.completeRelayJob(job.task_id, job.step_idx);
-        continue;
+        const stepRow = await deps.getStep(job.task_id, job.step_idx);
+        const configId = BigInt(job.config_id);
+        const reqId = job.req_id as `0x${string}`;
+        if (
+          stepRow &&
+          stepRow.state === StepState.RunningExternal &&
+          isStepAlignedWithDispatch(stepRow, configId, reqId)
+        ) {
+          logTaskTimeline("relay_dedup_stale_cleared", {
+            taskId: job.task_id,
+            stepIdx: job.step_idx,
+            configId: job.config_id,
+            reqId: job.req_id,
+          });
+          await deps.deleteSubmittedResult(job.task_id, job.step_idx);
+        } else {
+          await deps.completeRelayJob(job.task_id, job.step_idx);
+          continue;
+        }
       }
       try {
         await processExternalStep(deps, {
@@ -246,6 +298,30 @@ export function createRelay(overrides: Partial<RelayDeps> = {}) {
         });
         await deps.completeRelayJob(job.task_id, job.step_idx);
       } catch (e) {
+        if (isIndexerLagError(e) || isNonceCollisionError(e)) {
+          const nextRetryAt = nowSeconds + RELAY_INDEXER_LAG_BACKOFF_SECONDS;
+          await deps.markRelayJobIndexerLagRetry(
+            job.task_id,
+            job.step_idx,
+            nextRetryAt,
+            String(e),
+          );
+          logTaskTimeline(
+            isNonceCollisionError(e) ? "relay_nonce_retry" : "relay_indexer_lag",
+            {
+              taskId: job.task_id,
+              stepIdx: job.step_idx,
+              attempts: job.attempts,
+              nextRetryAt,
+              error: String(e),
+            },
+          );
+          deps.logger.log(
+            `[relay] ${isNonceCollisionError(e) ? "nonce collision" : "indexer lag"} task=${job.task_id} step=${job.step_idx}, retry at ${nextRetryAt}`,
+          );
+          continue;
+        }
+
         const attempts = job.attempts + 1;
         const backoff =
           RELAY_BACKOFF_SECONDS[Math.min(attempts - 1, RELAY_BACKOFF_SECONDS.length - 1)];
@@ -270,6 +346,7 @@ export function createRelay(overrides: Partial<RelayDeps> = {}) {
         );
       }
     }
+  }
 
   async function poll(): Promise<void> {
     while (running) {
@@ -289,6 +366,131 @@ export function createRelay(overrides: Partial<RelayDeps> = {}) {
       void poll();
     },
     tick,
+  };
+}
+
+type StepRow = NonNullable<Awaited<ReturnType<typeof getStep>>>;
+
+type RelayJobInput = {
+  taskId: string;
+  stepIdx: number;
+  configId: string;
+  reqId: `0x${string}`;
+  payload: string;
+  registrant: string;
+  endpointHash: string;
+};
+
+function isIndexerLagError(error: unknown): boolean {
+  const message = String(error);
+  return (
+    message.includes("(indexer_lag)") ||
+    message.includes("step state Pending after execute")
+  );
+}
+
+async function scheduleRelayJobDispatch(
+  deps: RelayDeps,
+  input: RelayJobInput,
+): Promise<boolean> {
+  await deps.deleteSubmittedResult(input.taskId, input.stepIdx);
+  const inserted = await deps.enqueueRelayJob(input);
+  if (inserted) return true;
+
+  const existing = await deps.getRelayJob(input.taskId, input.stepIdx);
+  if (existing?.status === "failed") {
+    await deps.reactivateRelayJob(input);
+    return true;
+  }
+  return false;
+}
+
+async function recoverFailedRelayJobs(deps: RelayDeps): Promise<void> {
+  const failedJobs = await deps.listFailedRelayJobs();
+  for (const job of failedJobs) {
+    if (await deps.isResultSubmitted(job.task_id, job.step_idx)) continue;
+
+    const taskId = BigInt(job.task_id);
+    const onChainTask = await deps.readOnChainTask(taskId);
+    const taskState = Number(onChainTask[6]);
+    if (taskState !== TaskState.Running) continue;
+
+    const stepRow = await deps.getStep(job.task_id, job.step_idx);
+    const stillNeedsRelay =
+      stepRow == null ||
+      stepRow.state === StepState.Pending ||
+      stepRow.state === StepState.RunningExternal;
+    if (!stillNeedsRelay) continue;
+
+    await deps.reactivateRelayJob({
+      taskId: job.task_id,
+      stepIdx: job.step_idx,
+      configId: job.config_id,
+      reqId: job.req_id,
+      payload: job.payload,
+      registrant: job.registrant,
+      endpointHash: job.endpoint_hash,
+    });
+    logTaskTimeline("relay_job_reactivated", {
+      taskId: job.task_id,
+      stepIdx: job.step_idx,
+      configId: job.config_id,
+      stepState: stepRow?.state ?? null,
+    });
+    deps.logger.log(
+      `[relay] reactivated failed job task=${job.task_id} step=${job.step_idx}`,
+    );
+  }
+}
+
+function isStepAlignedWithDispatch(
+  row: StepRow,
+  configId: bigint,
+  reqId: `0x${string}`,
+): boolean {
+  return (
+    row.config_id === configId.toString() &&
+    row.req_id != null &&
+    row.req_id.toLowerCase() === reqId.toLowerCase()
+  );
+}
+
+async function waitForRunningExternalStep(
+  deps: RelayDeps,
+  taskIdStr: string,
+  stepIdx: number,
+  configId: bigint,
+  reqId: `0x${string}`,
+): Promise<StepRow | null> {
+  let row = await deps.getStep(taskIdStr, stepIdx);
+  for (let poll = 0; poll < POST_EXECUTE_INDEXER_LAG_POLLS; poll += 1) {
+    if (
+      row &&
+      row.state === StepState.RunningExternal &&
+      isStepAlignedWithDispatch(row, configId, reqId)
+    ) {
+      return row;
+    }
+    if (row && row.state !== StepState.Pending) {
+      return row;
+    }
+    await sleep(POST_EXECUTE_INDEXER_LAG_DELAY_MS);
+    row = await deps.getStep(taskIdStr, stepIdx);
+  }
+  return row;
+}
+
+function stepDispatchDetails(
+  row: StepRow | null,
+  configId: bigint,
+  reqId: `0x${string}`,
+) {
+  return {
+    configId: configId.toString(),
+    expectedReqId: reqId,
+    rowConfigId: row?.config_id ?? null,
+    rowReqId: row?.req_id ?? null,
+    rowState: row?.state ?? null,
   };
 }
 
@@ -323,22 +525,149 @@ async function processExternalStep(
     throw new Error(`external agent ${configId} failed verification`);
   }
 
-  const stepRow = await deps.getStep(taskIdStr, stepIdx);
+  const preExecuteRow = await deps.getStep(taskIdStr, stepIdx);
+  const preStepReady = preExecuteRow !== null &&
+    isStepAlignedWithDispatch(preExecuteRow, configId, reqId) &&
+    preExecuteRow.state === StepState.RunningExternal;
+
+  if (!preStepReady) {
+    const maybeIndexerLag = !preExecuteRow || preExecuteRow.state === StepState.Pending;
+
+    if (maybeIndexerLag) {
+      const onChainTask = await deps.readOnChainTask(taskId);
+      const taskState = Number(onChainTask[6]);
+      if (taskState === TaskState.Running) {
+        logTaskTimeline("relay_step_chain_fallback", {
+          taskId: taskIdStr,
+          stepIdx,
+          configId: configId.toString(),
+        });
+      } else {
+        logTaskTimeline("relay_step_not_ready", {
+          taskId: taskIdStr,
+          stepIdx,
+          phase: "pre_execute",
+          reason: taskState === TaskState.Created ? "task_not_running" : "task_done",
+          ...stepDispatchDetails(preExecuteRow, configId, reqId),
+        });
+        throw new Error(
+          `step not ready for dispatch (pre_execute) task=${taskIdStr} step=${stepIdx} taskState=${taskState}`,
+        );
+      }
+    } else {
+      logTaskTimeline("relay_step_not_ready", {
+        taskId: taskIdStr,
+        stepIdx,
+        phase: "pre_execute",
+        reason: "step_state_mismatch",
+        ...stepDispatchDetails(preExecuteRow, configId, reqId),
+      });
+      throw new Error(
+        `step not ready for dispatch (pre_execute) task=${taskIdStr} step=${stepIdx} state=${preExecuteRow.state}`,
+      );
+    }
+  }
+
+  const timeoutSeconds = preExecuteRow?.timeout_seconds ?? 120;
+
+  const enrichedPayload = await enrichPayloadWithPriorContext(
+    deps,
+    taskIdStr,
+    stepIdx,
+    payload,
+  );
   const { resultHex, signature } = await executeExternalAgent(
     deps,
     agent,
     taskId,
     stepIdx,
-    payload,
+    enrichedPayload,
     reqId,
-    stepRow?.timeout_seconds ?? 120,
+    timeoutSeconds,
   );
 
-  if (stepRow && stepRow.state !== StepState.RunningExternal) {
+  const freshStepRow = await waitForRunningExternalStep(
+    deps,
+    taskIdStr,
+    stepIdx,
+    configId,
+    reqId,
+  );
+  const alreadySubmitted = await deps.isResultSubmitted(taskIdStr, stepIdx);
+
+  if (alreadySubmitted) {
+    logTaskTimeline("relay_step_skipped", {
+      taskId: taskIdStr,
+      stepIdx,
+      configId: configId.toString(),
+      staleState: preExecuteRow?.state ?? null,
+      freshState: freshStepRow?.state ?? null,
+      reason: "already_submitted",
+    });
+    return;
+  }
+
+  const stepStillAligned = freshStepRow !== null &&
+    isStepAlignedWithDispatch(freshStepRow, configId, reqId);
+
+  if (!stepStillAligned) {
+    const maybeIndexerLag = !freshStepRow || freshStepRow.state === StepState.Pending;
+
+    if (maybeIndexerLag) {
+      const onChainTask = await deps.readOnChainTask(taskId);
+      const taskState = Number(onChainTask[6]);
+      if (taskState === TaskState.Running) {
+        logTaskTimeline("relay_step_chain_fallback_post", {
+          taskId: taskIdStr,
+          stepIdx,
+          configId: configId.toString(),
+        });
+      } else {
+        logTaskTimeline("relay_step_skipped", {
+          taskId: taskIdStr,
+          stepIdx,
+          configId: configId.toString(),
+          reason: "task_not_running_after_execute",
+        });
+        return;
+      }
+    } else {
+      logTaskTimeline("relay_step_not_ready", {
+        taskId: taskIdStr,
+        stepIdx,
+        phase: "post_execute",
+        reason: "misaligned_after_execute",
+        ...stepDispatchDetails(freshStepRow, configId, reqId),
+      });
+      throw new Error(
+        `step misaligned after execute task=${taskIdStr} step=${stepIdx}`,
+      );
+    }
+  }
+
+  if (freshStepRow && freshStepRow.state !== StepState.RunningExternal) {
+    logTaskTimeline("relay_step_skipped", {
+      taskId: taskIdStr,
+      stepIdx,
+      configId: configId.toString(),
+      staleState: preExecuteRow?.state ?? null,
+      freshState: freshStepRow.state,
+      reason:
+        freshStepRow.state === StepState.Pending
+          ? "indexer_lag_pending"
+          : "terminal_state",
+    });
+
     deps.logger.log(
-      `[relay] step ${taskIdStr}:${stepIdx} no longer RunningExternal, skipping`,
+      `[relay] step ${taskIdStr}:${stepIdx} freshState=${freshStepRow.state} not RunningExternal; skipping`,
     );
-    await deps.saveSubmittedResult(taskIdStr, stepIdx, resultHex, signature);
+
+    if (freshStepRow.state === StepState.Pending) {
+      throw new Error(
+        `step state Pending after execute for task=${taskIdStr} step=${stepIdx} (indexer_lag)`,
+      );
+    }
+
     return;
   }
 
@@ -380,12 +709,35 @@ async function processExternalStep(
   );
 }
 
+async function enrichPayloadWithPriorContext(
+  deps: RelayDeps,
+  taskIdStr: string,
+  stepIdx: number,
+  payloadHex: `0x${string}`,
+): Promise<`0x${string}`> {
+  if (stepIdx <= 0) return payloadHex;
+
+  const steps = await deps.getStepsForTask(taskIdStr);
+  const priorContext = buildPriorStepContext(
+    steps.map((row) => ({
+      stepIdx: row.step_idx,
+      configId: row.config_id,
+      resultHex: row.result_hex,
+      payload: row.payload,
+    })),
+    stepIdx,
+  );
+
+  return enrichExternalPayload(payloadHex, priorContext);
+}
+
 async function ensureVerified(
   deps: RelayDeps,
   agent: ExternalAgentRow,
   configId: bigint,
+  options: { force?: boolean } = {},
 ): Promise<boolean> {
-  if (agent.is_verified === 1) return true;
+  if (!options.force && agent.is_verified === 1) return true;
 
   try {
     const healthRes = await deps.fetchImpl(new URL("/health", agent.endpoint_url), {
@@ -468,6 +820,9 @@ async function executeExternalAgent(
       return execute;
     } catch (error) {
       lastError = error;
+      deps.logger.warn(
+        `[relay] executeExternalAgent attempt ${attempt + 1}/${RELAY_EXECUTE_RETRIES} failed task=${taskId} step=${stepIdx} agent=${agent.endpoint_url}: ${String(error)}`,
+      );
       const retriable =
         error instanceof Error &&
         (error.message.includes("502") ||
@@ -479,6 +834,9 @@ async function executeExternalAgent(
       await sleep(RELAY_BACKOFF_SECONDS[attempt] * 1000);
     }
   }
+  deps.logger.error(
+    `[relay] executeExternalAgent exhausted task=${taskId} step=${stepIdx} agent=${agent.endpoint_url} after ${RELAY_EXECUTE_RETRIES} attempts: ${String(lastError)}`,
+  );
   throw lastError ?? new Error("execute failed");
 }
 
@@ -584,7 +942,14 @@ export async function verifyExternalAgentCacheEntry(
 ): Promise<boolean> {
   const agent = await getExternalAgent(configId);
   if (!agent || agent.is_active !== 1) return false;
-  return ensureVerified(defaultRelayDeps, agent, BigInt(configId));
+  const nowSeconds = Math.floor(Date.now() / 1000);
+  const needsRefresh =
+    agent.is_verified !== 1 ||
+    agent.last_verified_at == null ||
+    nowSeconds - agent.last_verified_at >= EXTERNAL_VERIFICATION_TTL_SECONDS;
+  return ensureVerified(defaultRelayDeps, agent, BigInt(configId), {
+    force: needsRefresh,
+  });
 }
 
 const defaultRelayDeps = {
@@ -605,16 +970,25 @@ const defaultRelayDeps = {
   saveSubmittedResult,
   deleteSubmittedResult,
   getStep,
+  getStepsForTask,
   upsertStep,
   getExternalAgent,
   setExternalAgentVerification,
   enqueueRelayJob,
+  getRelayJob,
   listDueRelayJobs,
+  listFailedRelayJobs,
   markRelayJobRetry,
+  markRelayJobIndexerLagRetry,
+  reactivateRelayJob,
   completeRelayJob,
   publish,
+  readOnChainTask: (taskId: bigint) =>
+    orchestratorContract.read.tasks([taskId]),
   submitExternalResult: (args: readonly [bigint, number, `0x${string}`, `0x${string}`]) =>
-    orchestratorContract.write.submitExternalResult(args),
+    enqueueKeeperWrite(() =>
+      orchestratorContract.write.submitExternalResult(args),
+    ),
   fetchImpl: fetch,
   nowMs: () => Date.now(),
   logger: console,

@@ -52,7 +52,7 @@ contract AgentRegistry {
     mapping(uint256 => SubAgent)  public agents;
     uint256                       public nextConfigId;  // starts at 6; 0–5 reserved for native
     mapping(bytes32 => uint256[]) public byCapability;  // capability id → configIds (Elo-sorted)
-    mapping(address => bool)      public isRegisteredExternal;
+    mapping(bytes32 => uint256)   public configIdByName;
     mapping(uint256 => uint256)   public activeStepCount;
     mapping(bytes32 => bool)      public reservedSubAgentName;
     mapping(bytes32 => Capability) public capabilities;
@@ -168,7 +168,6 @@ contract AgentRegistry {
     ) external payable returns (uint256 configId) {
         require(msg.value >= MIN_EXTERNAL_DEPOSIT, "deposit required");
         require(!reservedSubAgentName[keccak256(bytes(_toLower(agentName)))], "reserved name");
-        require(!isRegisteredExternal[msg.sender], "already registered");
         require(bytes(endpointUrl).length > 0 && bytes(endpointUrl).length <= 256, "bad url");
         require(bytes(agentName).length > 0 && bytes(agentName).length <= 32, "bad name");
         require(costWei > 0, "bad cost");
@@ -197,7 +196,7 @@ contract AgentRegistry {
             registeredAt: uint64(block.timestamp)
         });
 
-        isRegisteredExternal[msg.sender] = true;
+        configIdByName[keccak256(bytes(agentName))] = configId;
         _insertByCapability(configId, caps);
         twiinNames.claimSubAgentName(configId, agentName);
         emit ExternalAgentRegistered(configId, msg.sender, endpointUrl, epHash, caps, costWei);
@@ -212,7 +211,7 @@ contract AgentRegistry {
         uint256 refund = a.suspended ? 0 : a.depositWei;
         a.isActive = false;
         a.depositWei = 0;
-        isRegisteredExternal[msg.sender] = false;
+        configIdByName[keccak256(bytes(a.name))] = 0;
         // Name stays reserved in TwiinNames (R4-6: prevents brand-jacking).
         _removeByCapability(configId, a.capabilities);
 

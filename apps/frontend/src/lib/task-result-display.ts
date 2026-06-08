@@ -1,15 +1,24 @@
-import { decodeNativeAgentResult } from '@twiin/shared'
+import {
+  decodeStepResult,
+  formatOracleChangePercent,
+  formatOracleUsdValue,
+  fixMisscaledSomiPriceInReport,
+  ORACLE_METRIC_LABELS,
+  rewriteStatsSnapshotFromOracleValues,
+  EXTERNAL_MIN_CONFIG_ID,
+} from '@twiin/shared'
 import { formatEther } from 'viem'
 import { NativeConfigId } from '@/config/contracts'
 import {
   describeSentimentCompletion,
-  formatScaledUsd,
   isCorroboratedSentimentTask,
   isSentimentOracleTask,
-  sentimentStepFieldLabel,
 } from '@/lib/sentiment-oracle-display'
 import type { PlanStep } from '@/lib/plan-api'
 import type { TaskStep } from '@/hooks/useTaskDetail'
+import type { StreamEvent } from '@/hooks/useTaskStream'
+import { StepState } from '@/config/contracts'
+import { configIdLabel } from '@/lib/config-names'
 
 const PLACEHOLDER_RESULTS = new Set([
   '',
@@ -36,17 +45,6 @@ function isPlaceholderResult(text: string | null | undefined): boolean {
   return PLACEHOLDER_RESULTS.has(text.trim())
 }
 
-function formatSentimentValue(stepIdx: number, raw: string): string {
-  if (stepIdx === 1) {
-    const n = Number(raw)
-    if (Number.isFinite(n)) return `${n >= 0 ? '+' : ''}${n.toFixed(2)}%`
-    return raw
-  }
-  const scaled = formatScaledUsd(raw)
-  if (scaled) return `$${scaled}`
-  return raw
-}
-
 function consensusStepFootnote(step: TaskStep | undefined): string {
   if (!step?.consensusValidators) return ''
   const median =
@@ -56,34 +54,115 @@ function consensusStepFootnote(step: TaskStep | undefined): string {
   return ` (${step.consensusValidators} validators${median})`
 }
 
+type OracleMetricRow = {
+  label: string
+  formatted: string
+  step: TaskStep
+}
+
+function collectOracleMetricRows(chainSteps: TaskStep[]): OracleMetricRow[] {
+  const oracleSteps = chainSteps
+    .filter((s) => Number(s.configId) === NativeConfigId.ORACLE)
+    .sort((a, b) => a.stepIdx - b.stepIdx)
+
+  const rows: OracleMetricRow[] = []
+  for (let i = 0; i < oracleSteps.length; i++) {
+    const step = oracleSteps[i]
+    const raw = decodeStepResult(step.resultHex)
+    if (!raw?.trim()) continue
+
+    const label = ORACLE_METRIC_LABELS[i] ?? `Metric ${i + 1}`
+    let formatted: string
+    if (i === 1) {
+      formatted = formatOracleChangePercent(raw)
+    } else if (i === 0) {
+      const value = formatOracleUsdValue(raw, { kind: 'spot' })
+      formatted = value ? `$${value}` : raw
+    } else {
+      const value = formatOracleUsdValue(raw, { kind: 'large' })
+      formatted = value ? `$${value}` : raw
+    }
+    rows.push({ label, formatted, step })
+  }
+  return rows
+}
+
+function extractReporterFootnote(chainSteps: TaskStep[]): string | undefined {
+  const reporter = chainSteps.find(
+    (s) => Number(s.configId) === NativeConfigId.REPORTER,
+  )
+  const text = reporter ? decodeStepResult(reporter.resultHex) : null
+  if (!text?.trim()) return undefined
+
+  const noteLine = text
+    .split('\n')
+    .map((line) => line.trim())
+    .find(
+      (line) =>
+        /^note:/i.test(line) ||
+        /single-source/i.test(line) ||
+        /does not include external analysis/i.test(line),
+    )
+  if (!noteLine) return undefined
+  return noteLine.replace(/^note:\s*/i, '').replace(/^_/, '').replace(/_$/, '')
+}
+
+export function buildOracleMetricsSnapshot(chainSteps: TaskStep[]): string | null {
+  const rows = collectOracleMetricRows(chainSteps)
+  if (rows.length === 0) return null
+
+  const title =
+    rows.length >= 4 ? 'Somnia stats snapshot' : 'Somnia sentiment snapshot'
+  const footnote =
+    extractReporterFootnote(chainSteps) ??
+    'Lower-budget single-source oracle summary.'
+
+  return [
+    `### ${title}`,
+    '',
+    ...rows.map(
+      (row) =>
+        `- **${row.label}:** ${row.formatted}${consensusStepFootnote(row.step)}`,
+    ),
+    '',
+    `_${footnote}_`,
+    '_Data from CoinGecko oracle steps._',
+  ].join('\n')
+}
+
 export function buildReporterReportFromSteps(chainSteps: TaskStep[]): string | null {
-  const reporter =
-    chainSteps.find((s) => Number(s.configId) === NativeConfigId.REPORTER) ??
-    chainSteps[chainSteps.length - 1]
-  const text = decodeNativeAgentResult(reporter?.resultHex)
+  const reporter = chainSteps.find(
+    (s) => Number(s.configId) === NativeConfigId.REPORTER,
+  )
+  if (!reporter) return null
+  const text = decodeStepResult(reporter.resultHex)
   if (!text?.trim()) return null
 
-  if (looksLikeMarkdown(text)) return text
-  if (text.length > 40) {
-    return text.startsWith('#') ? text : `### Somnia stats snapshot\n\n${text}`
+  const oracleRows = collectOracleMetricRows(chainSteps)
+  const rewritten =
+    oracleRows.length > 0
+      ? rewriteStatsSnapshotFromOracleValues(
+          text,
+          oracleRows.map((row) => ({
+            label: row.label,
+            formatted: row.formatted,
+          })),
+        )
+      : fixMisscaledSomiPriceInReport(text)
+
+  if (looksLikeMarkdown(rewritten)) return rewritten
+  if (rewritten.length > 40) {
+    const body = rewritten.startsWith('#')
+      ? rewritten
+      : `### Somnia stats snapshot\n\n${rewritten}`
+    return fixMisscaledSomiPriceInReport(body)
   }
   return null
 }
 
+/** @deprecated Use buildOracleMetricsSnapshot */
 export function buildOracleMetricsTable(chainSteps: TaskStep[]): string | null {
-  const rows: string[] = []
-
-  for (let i = 0; i < 4; i++) {
-    const step = chainSteps.find((s) => s.stepIdx === i)
-    const raw = step ? decodeNativeAgentResult(step.resultHex) : null
-    const label = sentimentStepFieldLabel(i)?.replace(/ \(.*\)/, '') ?? `Step ${i + 1}`
-    if (raw) {
-      rows.push(
-        `| ${label.replace(/_/g, ' ')} | ${formatSentimentValue(i, raw)}${consensusStepFootnote(step)} |`,
-      )
-    }
-  }
-
+  const rows = collectOracleMetricRows(chainSteps)
   if (rows.length === 0) return null
 
   return [
@@ -91,7 +170,10 @@ export function buildOracleMetricsTable(chainSteps: TaskStep[]): string | null {
     '',
     '| Metric | Value |',
     '| --- | --- |',
-    ...rows,
+    ...rows.map(
+      (row) =>
+        `| ${row.label} | ${row.formatted}${consensusStepFootnote(row.step)} |`,
+    ),
     '',
     '_Data from CoinGecko oracle steps._',
   ].join('\n')
@@ -100,16 +182,29 @@ export function buildOracleMetricsTable(chainSteps: TaskStep[]): string | null {
 export function buildSentimentReportMarkdown(chainSteps: TaskStep[]): string | null {
   if (!isSentimentOracleTask(chainSteps)) return null
 
+  const oracleSnapshot = buildOracleMetricsSnapshot(chainSteps)
+
   if (isCorroboratedSentimentTask(chainSteps)) {
     const reporter = chainSteps.find((s) => s.stepIdx === chainSteps.length - 1)
     const analysis = chainSteps.find((s) => s.stepIdx === chainSteps.length - 2)
-    const reporterText = reporter ? decodeNativeAgentResult(reporter.resultHex) : null
-    const analysisText = analysis ? decodeNativeAgentResult(analysis.resultHex) : null
+    const reporterText = reporter ? decodeStepResult(reporter.resultHex) : null
+    const analysisText = analysis ? decodeStepResult(analysis.resultHex) : null
     if (reporterText) {
+      const oracleRows = collectOracleMetricRows(chainSteps)
+      const body =
+        oracleRows.length > 0
+          ? rewriteStatsSnapshotFromOracleValues(
+              reporterText,
+              oracleRows.map((row) => ({
+                label: row.label,
+                formatted: row.formatted,
+              })),
+            )
+          : fixMisscaledSomiPriceInReport(reporterText)
       return [
         '### Somnia corroborated snapshot',
         '',
-        reporterText,
+        body,
         '',
         analysisText ? `_Analysis: ${analysisText.slice(0, 280)}_` : '',
         '',
@@ -126,14 +221,29 @@ export function buildSentimentReportMarkdown(chainSteps: TaskStep[]): string | n
     }
   }
 
-  const reporterText = buildReporterReportFromSteps(chainSteps)
-  const metricsTable = buildOracleMetricsTable(chainSteps)
+  if (oracleSnapshot) return oracleSnapshot
 
-  if (reporterText && metricsTable) {
-    return `${reporterText}\n\n---\n\n${metricsTable}`
-  }
+  const reporterText = buildReporterReportFromSteps(chainSteps)
   if (reporterText) return reporterText
-  if (metricsTable) return metricsTable
+
+  return buildOracleMetricsTable(chainSteps)
+}
+
+export function buildExternalReportFromSteps(chainSteps: TaskStep[]): string | null {
+  const hasReporter = chainSteps.some(
+    (s) => Number(s.configId) === NativeConfigId.REPORTER,
+  )
+  if (hasReporter) return null
+
+  const externalSteps = chainSteps
+    .filter((s) => Number(s.configId) >= EXTERNAL_MIN_CONFIG_ID)
+    .sort((a, b) => a.stepIdx - b.stepIdx)
+
+  for (let i = externalSteps.length - 1; i >= 0; i--) {
+    const text = decodeStepResult(externalSteps[i]?.resultHex)
+    if (!text?.trim()) continue
+    if (looksLikeMarkdown(text) || text.length > 120) return text
+  }
 
   return null
 }
@@ -145,6 +255,9 @@ export function resolveTaskReportText(
 ): string | null {
   const fromSteps = buildSentimentReportMarkdown(chainSteps)
   if (fromSteps && !isPlaceholderResult(fromSteps)) return fromSteps
+
+  const externalReport = buildExternalReportFromSteps(chainSteps)
+  if (externalReport) return externalReport
 
   const reporterOnly = buildReporterReportFromSteps(chainSteps)
   if (reporterOnly) return reporterOnly
@@ -202,11 +315,104 @@ export function formatTaskResultForDisplay(
   }
 
   if (looksLikeRawUint(trimmed)) {
-    const scaled = formatScaledUsd(trimmed)
+    const scaled = formatOracleUsdValue(trimmed, { kind: 'spot' })
     if (scaled) {
       return `**Result:** $${scaled}`
     }
   }
 
   return trimmed
+}
+
+export type AbortDetail = {
+  chainReason: string
+  stepIdx?: number
+  agentName?: string
+  score?: number
+  ratingReason?: string
+}
+
+export function buildAbortResultText(detail: AbortDetail): string {
+  const lines = [`**${detail.chainReason}**`]
+  if (detail.stepIdx != null) {
+    const agent = detail.agentName ? ` (${detail.agentName})` : ''
+    lines.push(`Failed at step ${detail.stepIdx + 1}${agent}`)
+  }
+  if (detail.score != null) {
+    lines.push(`Quality score: **${detail.score}/100** (minimum 40 required)`)
+  }
+  if (detail.ratingReason) {
+    lines.push(`Rater: ${detail.ratingReason}`)
+  }
+  return lines.join('\n\n')
+}
+
+function firstTerminalStep(chainSteps: TaskStep[]): TaskStep | undefined {
+  return chainSteps
+    .filter(
+      (step) =>
+        step.state === StepState.Failed || step.state === StepState.TimedOut,
+    )
+    .sort((a, b) => a.stepIdx - b.stepIdx)[0]
+}
+
+export function resolveAbortDetail(
+  events: StreamEvent[],
+  chainSteps: TaskStep[],
+  chainReason?: string,
+): AbortDetail {
+  const reason = chainReason ?? 'Task aborted'
+  const isTimeout = /timed?\s*out|timeout/i.test(reason)
+
+  const rejected = [...events]
+    .reverse()
+    .find(
+      (event) =>
+        event.type === 'step_rejected' ||
+        (event.type === 'step_rated' && event.data.approved === false),
+    )
+
+  if (isTimeout) {
+    const failedStep = firstTerminalStep(chainSteps)
+    return {
+      chainReason: reason,
+      stepIdx: failedStep?.stepIdx,
+      agentName: failedStep
+        ? configIdLabel(Number(failedStep.configId))
+        : undefined,
+    }
+  }
+
+  if (rejected) {
+    const stepIdx =
+      typeof rejected.data.stepIdx === 'number'
+        ? rejected.data.stepIdx
+        : undefined
+    const step =
+      stepIdx != null
+        ? chainSteps.find((s) => s.stepIdx === stepIdx)
+        : undefined
+    return {
+      chainReason: reason,
+      stepIdx,
+      agentName: step ? configIdLabel(Number(step.configId)) : undefined,
+      score:
+        typeof rejected.data.score === 'number'
+          ? rejected.data.score
+          : undefined,
+      ratingReason:
+        typeof rejected.data.reason === 'string'
+          ? rejected.data.reason
+          : undefined,
+    }
+  }
+
+  const failedStep = firstTerminalStep(chainSteps)
+  return {
+    chainReason: reason,
+    stepIdx: failedStep?.stepIdx,
+    agentName: failedStep
+      ? configIdLabel(Number(failedStep.configId))
+      : undefined,
+  }
 }

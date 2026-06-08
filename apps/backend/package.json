@@ -9,7 +9,8 @@
     "build": "pnpm --filter @twiin/shared build && tsc",
     "test": "vitest run --config vitest.config.ts",
     "db:push": "drizzle-kit push",
-    "db:studio": "drizzle-kit studio"
+    "db:studio": "drizzle-kit studio",
+    "verify:externals": "node --env-file=.env ./node_modules/tsx/dist/cli.mjs scripts/verify-externals.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.37.0",

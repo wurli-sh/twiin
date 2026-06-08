@@ -7,6 +7,7 @@ import {
   type TrustlessTurnInput,
 } from "@twiin/shared";
 import { publicClient } from "../clients";
+import { enqueueKeeperWrite } from "../keeper-writes";
 import { deployment, orchestratorContract, agentRegistryContract } from "../contracts";
 import {
   getStepsForTask,
@@ -71,7 +72,9 @@ export function createTrustlessResumeKeeper(
       return computeJaniceCostWei(requestDeposit, janice.costWei);
     },
     resumeTrustlessTask: (args) =>
-      orchestratorContract.write.resumeTrustlessTask(args),
+      enqueueKeeperWrite(() =>
+        orchestratorContract.write.resumeTrustlessTask(args),
+      ),
     logger: console,
     ...overrides,
   };

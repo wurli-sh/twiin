@@ -7,6 +7,10 @@ export * from "./consensus";
 export * from "./agent-catalog";
 export * from "./plan-errors";
 export * from "./plan-templates";
+export * from "./external-plan-templates";
+export * from "./console-prompts";
+export * from "./oracle-display";
+export * from "./agent-output-display";
 
 // ABIs — populated by `pnpm copy-abis` (requires contracts to be compiled first)
 export * from "./abis/index";

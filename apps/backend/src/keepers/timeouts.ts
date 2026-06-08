@@ -1,5 +1,6 @@
 import { StepState, TaskState } from "@twiin/shared";
 import { orchestratorContract } from "../contracts";
+import { enqueueKeeperWrite } from "../keeper-writes";
 import {
   clearStepDeadline,
   getTimedOutSteps,
@@ -30,10 +31,22 @@ export function createTimeoutKeeper(overrides: Partial<TimeoutDeps> = {}) {
     getTimedOutSteps,
     readNextTaskId: () => orchestratorContract.read.nextTaskId(),
     readTask: (taskId) => orchestratorContract.read.tasks([taskId]),
-    timeoutExternalStep: (args) => orchestratorContract.write.timeoutExternalStep(args),
-    timeoutRating: (args) => orchestratorContract.write.timeoutRating(args),
-    timeoutNativeStep: (args) => orchestratorContract.write.timeoutNativeStep(args),
-    timeoutTask: (args) => orchestratorContract.write.timeoutTask(args),
+    timeoutExternalStep: (args) =>
+      enqueueKeeperWrite(() =>
+        orchestratorContract.write.timeoutExternalStep(args),
+      ),
+    timeoutRating: (args) =>
+      enqueueKeeperWrite(() =>
+        orchestratorContract.write.timeoutRating(args),
+      ),
+    timeoutNativeStep: (args) =>
+      enqueueKeeperWrite(() =>
+        orchestratorContract.write.timeoutNativeStep(args),
+      ),
+    timeoutTask: (args) =>
+      enqueueKeeperWrite(() =>
+        orchestratorContract.write.timeoutTask(args),
+      ),
     nowSeconds: () => Math.floor(Date.now() / 1000),
     logger: console,
     ...overrides,

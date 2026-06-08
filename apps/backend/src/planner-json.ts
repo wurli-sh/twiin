@@ -1,3 +1,4 @@
+import { MAX_CONSOLE_TEMPLATE_STEPS } from "@twiin/shared";
 import { z } from "zod";
 
 const StepSpecSchema = z.object({
@@ -7,7 +8,10 @@ const StepSpecSchema = z.object({
   timeoutSeconds: z.number().int().min(60).max(600),
 });
 
-const StepsOutputSchema = z.array(StepSpecSchema).min(1).max(6);
+const StepsOutputSchema = z
+  .array(StepSpecSchema)
+  .min(1)
+  .max(MAX_CONSOLE_TEMPLATE_STEPS);
 
 export type PlannerStepSpec = z.infer<typeof StepSpecSchema>;
 

@@ -9,8 +9,8 @@ import { CONTRACTS, AgentRegistryAbi, CapabilityId } from '@/config/contracts'
 import { somniaTestnet } from '@/config/chains'
 import type { SubAgentInfo } from '@/hooks/useSubAgents'
 
-const DEFAULT_NAME = 'discord-bot@twiin'
-const DEFAULT_ENDPOINT = 'https://discord-bot-twiin.onrender.com'
+const DEFAULT_NAME = 'docs-lens'
+const DEFAULT_ENDPOINT = 'http://127.0.0.1:3011'
 const DEFAULT_COST = '0.15'
 const DEFAULT_DEPOSIT = '5'
 
@@ -129,7 +129,7 @@ export function ExternalAgentPanel({
           name.trim(),
           endpointUrl.trim(),
           parseEther(costStt),
-          [CapabilityId.WEB_SCRAPE_DISCORD],
+          [CapabilityId.DATA_SPECIALIZED],
         ],
         value: parseEther(DEFAULT_DEPOSIT),
       } as never)
@@ -184,7 +184,7 @@ export function ExternalAgentPanel({
             type="url"
             value={endpointUrl}
             onChange={(e) => setEndpointUrl(e.target.value)}
-            placeholder="https://discord-bot-twiin.onrender.com"
+            placeholder="https://docs-lens-twiin.onrender.com"
             disabled={!isConnected || busy}
             className="w-full border border-border bg-muted px-3 py-2.5 text-sm text-foreground outline-none disabled:opacity-50"
           />
@@ -274,7 +274,7 @@ export function ExternalAgentPanel({
 
       <p className="text-sm leading-relaxed text-muted-foreground">
         This wires a public HTTP worker into the registry with
-        <code className="mx-1 rounded bg-muted px-1 py-0.5 text-xs">web.scrape.discord</code>
+        <code className="mx-1 rounded bg-muted px-1 py-0.5 text-xs">data.specialized</code>
         capability and a 5 STT deposit.
       </p>
 

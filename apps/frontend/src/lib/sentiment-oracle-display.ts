@@ -1,4 +1,5 @@
 import { NativeConfigId } from '@/config/contracts'
+import { formatOracleUsdValue, formatScaledUsd } from '@twiin/shared'
 
 /** Legacy 4-step oracle-only template. */
 export const SENTIMENT_ORACLE_STEP_COUNT = 4
@@ -10,10 +11,10 @@ export const ORACLE_REPORTER_STEP_COUNT = 5
 export const CORROBORATED_SENTIMENT_STEP_COUNT = 7
 
 const SENTIMENT_FIELD_LABELS = [
-  'PRICE_USD (8 decimals)',
+  'PRICE_USD',
   'CHANGE_24H_PERCENT',
-  'MARKET_CAP_USD (8 decimals)',
-  'VOLUME_24H_USD (8 decimals)',
+  'MARKET_CAP_USD',
+  'VOLUME_24H_USD',
 ] as const
 
 export function isCorroboratedSentimentTask(
@@ -34,42 +35,38 @@ export function isOracleReporterStatsTask(
   )
 }
 
+/** 2–4 oracle steps followed by a reporter (sentiment/stats templates). */
+export function isOracleReporterSentimentTask(
+  steps: { configId: number | string }[],
+): boolean {
+  if (steps.length < 2 || steps.length > ORACLE_REPORTER_STEP_COUNT) return false
+  const last = steps[steps.length - 1]
+  if (Number(last.configId) !== NativeConfigId.REPORTER) return false
+  return steps
+    .slice(0, -1)
+    .every((s) => Number(s.configId) === NativeConfigId.ORACLE)
+}
+
 export function isSentimentOracleTask(
   steps: { configId: number | string }[],
 ): boolean {
   if (isCorroboratedSentimentTask(steps)) return true
   if (isOracleReporterStatsTask(steps)) return true
+  if (isOracleReporterSentimentTask(steps)) return true
   return (
     steps.length === SENTIMENT_ORACLE_STEP_COUNT &&
     steps.every((s) => Number(s.configId) === NativeConfigId.ORACLE)
   )
 }
 
-/** Decode a Somnia oracle uint256 scaled with 8 decimals (CoinGecko planner default). */
-export function formatScaledUsd(raw: string, decimals = 8): string | null {
-  const digits = raw.trim()
-  if (!/^\d+$/.test(digits)) return null
+export { formatScaledUsd, formatOracleUsdValue }
 
-  const normalized = digits.replace(/^0+(?=\d)/, '')
-  const padded = normalized.padStart(decimals + 1, '0')
-  const whole = padded.slice(0, -decimals) || '0'
-  const fraction = padded.slice(-decimals)
-
-  // Guard against mislabeling arbitrary raw payloads as dollar values.
-  if (whole.replace(/^0+/, '').length > 15) return null
-
-  const wholeNumber = BigInt(whole)
-  if (wholeNumber >= 1n) {
-    const cents = fraction.slice(0, 2).replace(/0+$/, '')
-    const formattedWhole = wholeNumber.toLocaleString()
-    return cents ? `${formattedWhole}.${cents}` : formattedWhole
-  }
-
-  const firstSignificant = fraction.search(/[1-9]/)
-  if (firstSignificant === -1) return '0'
-  const precision = Math.min(fraction.length, firstSignificant + 4)
-  const trimmedFraction = fraction.slice(0, precision).replace(/0+$/, '')
-  return trimmedFraction ? `0.${trimmedFraction}` : '0'
+export function formatSentimentOracleUsd(
+  stepIdx: number,
+  raw: string,
+): string | null {
+  const kind = stepIdx === 0 ? 'spot' : 'large'
+  return formatOracleUsdValue(raw, { kind })
 }
 
 /**
@@ -82,7 +79,7 @@ export function describeSentimentCompletion(raw: string | null | undefined): {
   hint: string
 } | null {
   if (!raw?.trim() || !/^\d+$/.test(raw.trim())) return null
-  const formatted = formatScaledUsd(raw)
+  const formatted = formatOracleUsdValue(raw, { kind: 'large' })
   if (!formatted) return null
   return {
     field: 'VOLUME_24H_USD',

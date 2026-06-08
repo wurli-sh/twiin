@@ -1,12 +1,14 @@
 import {
   decodeAbiParameters,
+  decodeFunctionData,
   encodeFunctionData,
   formatEther,
   hexToString,
+  isHex,
   stringToHex,
   type Hex,
 } from "viem";
-import { NativeConfigId } from "./constants";
+import { NativeConfigId, EXTERNAL_MIN_CONFIG_ID, MAX_PRIOR_CONTEXT_CHARS } from "./constants";
 
 /**
  * Somnia Agents API base-agent ABIs.
@@ -135,6 +137,20 @@ function parseJsonObject(payload: string, errorMessage: string): Record<string, 
   }
 }
 
+function parseJsonObjectIfPresent(payload: string): Record<string, unknown> | null {
+  const trimmed = payload.trim();
+  if (!trimmed.startsWith("{")) return null;
+  try {
+    const parsed = JSON.parse(trimmed) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return null;
+    }
+    return parsed as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+}
+
 function requireString(value: unknown, errorMessage: string): string {
   if (typeof value !== "string" || value.trim().length === 0) {
     throw new Error(errorMessage);
@@ -186,8 +202,141 @@ export function validateOraclePlannerPayload(
     !selector.includes(".")
   ) {
     throw new Error(
-      'somnia-oracle: CoinGecko /simple/price needs a leaf selector (e.g. "somnia.usd" with "decimals":8), not just "somnia" — the API returns an object, not a string.',
+      'somnia-oracle: CoinGecko /simple/price needs a leaf selector (e.g. "somnia.usd"). Prefer fetchString (omit decimals) so the API float is returned as a decimal string.',
     );
+  }
+}
+
+export function validateExternalAgentPayload(
+  agentName: string,
+  rawPayload: string,
+): void {
+  const parsed = parseJsonObjectIfPresent(rawPayload);
+
+  switch (agentName) {
+    case "docs-lens": {
+      if (!parsed) {
+        requireString(rawPayload, "docs-lens payload must be non-empty text or JSON");
+        return;
+      }
+      requireString(
+        parsed.question ?? "What agents and oracles does Somnia expose?",
+        'docs-lens payload requires a non-empty "question"',
+      );
+      if (parsed.docPath !== undefined) {
+        requireString(parsed.docPath, 'docs-lens "docPath" must be non-empty when provided');
+      }
+      return;
+    }
+    case "dreamdex-mcp": {
+      if (!parsed) {
+        throw new Error(
+          'dreamdex-mcp payload must be JSON: {"action":"orderbook|pairs|snapshot|coingecko","pair":"SOMI/USDC"} or {"action":"coingecko","id":"somnia"}',
+        );
+      }
+      const action =
+        typeof parsed.action === "string" ? parsed.action.toLowerCase() : "snapshot";
+      if (!["orderbook", "pairs", "snapshot", "coingecko"].includes(action)) {
+        throw new Error(
+          'dreamdex-mcp "action" must be orderbook, pairs, snapshot, or coingecko',
+        );
+      }
+      if (action === "coingecko") {
+        if (parsed.id !== undefined) {
+          requireString(parsed.id, 'dreamdex-mcp "id" must be non-empty when provided');
+        }
+        return;
+      }
+      requireString(
+        parsed.pair ?? parsed.symbol ?? "SOMI",
+        'dreamdex-mcp payload requires non-empty "pair" or "symbol"',
+      );
+      return;
+    }
+    case "onchain-lens": {
+      if (!parsed) {
+        throw new Error(
+          'onchain-lens payload must be JSON: {"blockWindow":5} or {"lookbackHours":24}',
+        );
+      }
+      if (
+        parsed.blockWindow !== undefined &&
+        (typeof parsed.blockWindow !== "number" ||
+          !Number.isFinite(parsed.blockWindow) ||
+          parsed.blockWindow <= 0)
+      ) {
+        throw new Error('onchain-lens "blockWindow" must be a positive number');
+      }
+      if (
+        parsed.lookbackHours !== undefined &&
+        (typeof parsed.lookbackHours !== "number" ||
+          !Number.isFinite(parsed.lookbackHours) ||
+          parsed.lookbackHours <= 0)
+      ) {
+        throw new Error('onchain-lens "lookbackHours" must be a positive number');
+      }
+      return;
+    }
+    case "reactivity-lens": {
+      if (!parsed) {
+        throw new Error(
+          'reactivity-lens payload must be JSON: {"lookbackBlocks":1000} or {"agentId":1,"topic":"..."}',
+        );
+      }
+      if (
+        parsed.lookbackBlocks !== undefined &&
+        (typeof parsed.lookbackBlocks !== "number" ||
+          !Number.isFinite(parsed.lookbackBlocks) ||
+          parsed.lookbackBlocks <= 0)
+      ) {
+        throw new Error('reactivity-lens "lookbackBlocks" must be a positive number');
+      }
+      if (
+        typeof parsed.lookbackBlocks === "number" &&
+        parsed.lookbackBlocks > 1000
+      ) {
+        throw new Error('reactivity-lens "lookbackBlocks" must be <= 1000 (Somnia RPC limit)');
+      }
+      if (
+        parsed.agentId !== undefined &&
+        (typeof parsed.agentId !== "number" || !Number.isFinite(parsed.agentId))
+      ) {
+        throw new Error('reactivity-lens "agentId" must be a number when provided');
+      }
+      if (parsed.topic !== undefined) {
+        requireString(parsed.topic, 'reactivity-lens "topic" must be non-empty when provided');
+      }
+      return;
+    }
+    case "receipt-auditor": {
+      if (!parsed) {
+        throw new Error(
+          'receipt-auditor payload must be JSON: {"receiptId":"latest"} or {"requestId":"..."}',
+        );
+      }
+      requireString(
+        parsed.requestId ?? parsed.receiptId ?? parsed.taskId ?? "latest",
+        'receipt-auditor payload requires non-empty "requestId", "receiptId", or "taskId"',
+      );
+      return;
+    }
+    case "briefsmith": {
+      if (!parsed) {
+        requireString(rawPayload, "briefsmith payload must be non-empty text or JSON");
+        return;
+      }
+      requireString(
+        parsed.goal ?? parsed.priorContext ?? parsed.text ?? "brief",
+        "briefsmith payload must include non-empty brief context",
+      );
+      return;
+    }
+    case "agent-adapter": {
+      requireString(rawPayload, "agent-adapter payload must be non-empty text or JSON");
+      return;
+    }
+    default:
+      return;
   }
 }
 
@@ -406,6 +555,141 @@ export function decodeNativeAgentResult(resultHex: string | null | undefined): s
   }
 
   return null;
+}
+
+/**
+ * Decodes any step result — native ABI first, then raw UTF-8 for external agents.
+ */
+export function decodeStepResult(resultHex: string | null | undefined): string | null {
+  if (!resultHex || resultHex === "0x") return null;
+  return (
+    decodeNativeAgentResult(resultHex) ??
+    normalizeDisplayText(hexToString(resultHex as Hex))
+  );
+}
+
+export type PriorStepInput = {
+  stepIdx: number;
+  configId: string | number;
+  resultHex: string | null;
+  payload?: string | null;
+};
+
+/** Label for a prior step output line (mirrors AgentOrchestrator._stepOutputLabel). */
+export function stepOutputLabel(configId: number, payloadHex?: string | null): string {
+  if (configId === NativeConfigId.WEB_INTEL) return "web-intel";
+  if (configId === NativeConfigId.ANALYSIS) return "analysis";
+  if (configId === NativeConfigId.REPORTER) return "reporter";
+  if (configId >= EXTERNAL_MIN_CONFIG_ID) return `external-${configId}`;
+
+  if (configId === NativeConfigId.ORACLE && payloadHex && isHex(payloadHex)) {
+    try {
+      const decoded = decodeFunctionData({ abi: JsonApiAgentAbi, data: payloadHex as Hex });
+      if (decoded.functionName === "fetchString" || decoded.functionName === "fetchUint") {
+        const selectorText = String(decoded.args?.[1] ?? "metric");
+        if (decoded.functionName === "fetchUint") {
+          const decimals = decoded.args?.[2];
+          return `oracle ${selectorText} (decimals=${String(decimals)})`;
+        }
+        return `oracle ${selectorText}`;
+      }
+    } catch {
+      /* plain payload */
+    }
+  }
+
+  return "prior result";
+}
+
+/** Prefer agent name/type from decoded step result over opaque external-N labels. */
+export function stepOutputLabelFromResult(
+  configId: number,
+  resultText?: string | null,
+  payloadHex?: string | null,
+): string {
+  if (resultText?.trim()) {
+    try {
+      const parsed = JSON.parse(resultText.trim()) as Record<string, unknown>;
+      if (typeof parsed.agentName === "string" && parsed.agentName.trim()) {
+        return parsed.agentName.replace(/@twiin$/i, "").trim();
+      }
+      if (typeof parsed.type === "string" && parsed.type.trim()) {
+        return parsed.type.trim();
+      }
+    } catch {
+      /* plain text result */
+    }
+  }
+  return stepOutputLabel(configId, payloadHex);
+}
+
+function truncateForPriorContext(text: string): string {
+  if (text.length <= MAX_PRIOR_CONTEXT_CHARS) return text;
+  return `${text.slice(0, MAX_PRIOR_CONTEXT_CHARS)}...`;
+}
+
+/**
+ * Builds prior-step context for external relay enrichment (mirrors on-chain _priorStepContext).
+ */
+export function buildPriorStepContext(
+  steps: PriorStepInput[],
+  uptoStepIdx: number,
+): string {
+  const sorted = [...steps]
+    .filter((s) => s.stepIdx < uptoStepIdx)
+    .sort((a, b) => a.stepIdx - b.stepIdx);
+
+  const lines: string[] = [];
+  for (const step of sorted) {
+    const decoded = decodeStepResult(step.resultHex);
+    if (!decoded) continue;
+    const label = stepOutputLabelFromResult(
+      Number(step.configId),
+      decoded,
+      step.payload ?? undefined,
+    );
+    lines.push(`- ${label}: ${truncateForPriorContext(decoded)}`);
+  }
+
+  if (lines.length === 0) return "";
+  return `Previous step outputs:\n${lines.join("\n")}`;
+}
+
+/**
+ * Appends prior-step context to an external agent payload hex before relay /execute.
+ */
+export function enrichExternalPayload(
+  payloadHex: `0x${string}`,
+  priorContext: string,
+): `0x${string}` {
+  if (!priorContext.trim()) return payloadHex;
+
+  const raw = decodePayloadHex(payloadHex);
+  if (!raw) {
+    return stringToHex(`${priorContext}\n\n`) as `0x${string}`;
+  }
+
+  try {
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return stringToHex(
+        JSON.stringify({ ...parsed, priorContext }),
+      ) as `0x${string}`;
+    }
+  } catch {
+    /* plain text */
+  }
+
+  return stringToHex(`${raw}\n\n${priorContext}`) as `0x${string}`;
+}
+
+function decodePayloadHex(hex: `0x${string}`): string | null {
+  if (!hex || hex === "0x") return null;
+  try {
+    return hexToString(hex);
+  } catch {
+    return null;
+  }
 }
 
 /**

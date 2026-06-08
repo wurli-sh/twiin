@@ -1,0 +1,25 @@
+{
+  "name": "@twiin/external-kit",
+  "version": "0.1.0",
+  "private": true,
+  "type": "commonjs",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "pnpm --filter @twiin/shared build && tsc",
+    "register:all": "node --env-file-if-exists=../../.env.external-agents.local --env-file-if-exists=../../.env.external-agents ../../node_modules/.bin/tsx scripts/register-all.ts",
+    "test": "vitest run --config vitest.config.ts"
+  },
+  "dependencies": {
+    "@hono/node-server": "^1.13.7",
+    "@twiin/shared": "workspace:*",
+    "hono": "^4.7.10",
+    "viem": "^2.47.4",
+    "zod": "^3.24.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "typescript": "^5.8.0",
+    "vitest": "^3.2.4"
+  }
+}

@@ -32,13 +32,13 @@ const NATIVE_AGENT_LABELS: Record<number, string> = {
 
 const TRUSTLESS_AGENT_CONTEXT = `
 Available sub-agents (use configId in hireSubAgent):
-- configId ${NativeConfigId.WEB_INTEL} (web-intel@twiin): Scrapes a web page. payload=JSON {"url":"https://...","prompt":"what to extract"}.
-- configId ${NativeConfigId.ORACLE} (somnia-oracle@twiin): Fetches a JSON API. payload=JSON {"url":"https://...","selector":"leaf.path","decimals":8}.
+- Do NOT use configId ${NativeConfigId.WEB_INTEL} (web-intel@twiin) — disabled. For docs use docs-lens (external). For market data use dreamdex-mcp (external).
+- configId ${NativeConfigId.ORACLE} (somnia-oracle@twiin): Fetches a JSON API. payload=JSON {"url":"https://...","selector":"leaf.path"} — prefer dreamdex-mcp coingecko over native oracle on testnet.
 - configId ${NativeConfigId.ANALYSIS} (analysis-bot@twiin): Analyzes prior results. payload=plain text instruction.
 - configId ${NativeConfigId.REPORTER} (reporter-bot@twiin): Writes a final report. payload=plain text instruction.
 
 Rules:
-- Do NOT use configId ${NativeConfigId.JANICE} or configId ${NativeConfigId.EXECUTOR}.
+- Do NOT use configId ${NativeConfigId.JANICE}, configId ${NativeConfigId.EXECUTOR}, or configId ${NativeConfigId.WEB_INTEL}.
 - Call exactly one hireSubAgent per Janice round when hiring; do not batch hireSubAgent with other tools.
 - Use completeTrustlessTask when the goal is satisfied.
 - Never invent URLs, prices, or facts not present in prior step outputs.
@@ -52,7 +52,6 @@ const SOMNIA_PRICE_PAYLOAD = encodeNativeAgentPayload(
   JSON.stringify({
     url: SOMNIA_STATS_API_URL,
     selector: "somnia.usd",
-    decimals: 8,
   }),
 );
 
@@ -69,7 +68,6 @@ const SOMNIA_MARKET_CAP_PAYLOAD = encodeNativeAgentPayload(
   JSON.stringify({
     url: SOMNIA_STATS_API_URL,
     selector: "somnia.usd_market_cap",
-    decimals: 8,
   }),
 );
 
@@ -78,7 +76,6 @@ const SOMNIA_VOLUME_PAYLOAD = encodeNativeAgentPayload(
   JSON.stringify({
     url: SOMNIA_STATS_API_URL,
     selector: "somnia.usd_24h_vol",
-    decimals: 8,
   }),
 );
 

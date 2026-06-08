@@ -32,6 +32,8 @@ export type PlanErrorBody = {
   missingCapabilities?: string[]
   suggestedBudgetWei?: string
   retryAfterSeconds?: number
+  agentName?: string
+  unhealthyConfigId?: number
 }
 
 export class PlanOverBudgetError extends Error {
@@ -66,11 +68,15 @@ export class PlanUnavailableError extends Error {
 export class PlanNoAgentError extends Error {
   code: PlanErrorCode = 'NO_CAPABLE_AGENT'
   missingCapabilities?: string[]
+  agentName?: string
+  unhealthyConfigId?: number
 
   constructor(body: PlanErrorBody) {
     super(body.error)
     this.name = 'PlanNoAgentError'
     this.missingCapabilities = body.missingCapabilities
+    this.agentName = body.agentName
+    this.unhealthyConfigId = body.unhealthyConfigId
   }
 }
 

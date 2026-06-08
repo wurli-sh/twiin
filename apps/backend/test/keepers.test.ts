@@ -30,7 +30,7 @@ async function loadKeepers() {
     { createRelay },
     { createRater },
     { createTimeoutKeeper },
-    { createExternalAgentBootstrap },
+    { createExternalAgentBootstrap, verifyExternalAgentsNow },
     { createTrustlessResumeKeeper },
   ] = await Promise.all([
     import("../src/keepers/indexer"),
@@ -46,6 +46,7 @@ async function loadKeepers() {
     createRater,
     createTimeoutKeeper,
     createExternalAgentBootstrap,
+    verifyExternalAgentsNow,
     createTrustlessResumeKeeper,
   };
 }
@@ -54,10 +55,170 @@ const externalAgentAccount = privateKeyToAccount(
   "0x59c6995e998f97a5a0044966f0945382dbb5b2d0d7e54d99f7f9a0b7f8d6d7f0",
 );
 
+function relayStepRow(
+  configId: string,
+  reqId: string,
+  state: StepState,
+  extras: Partial<{
+    timeout_seconds: number | null;
+    payload: string;
+    result_hex: string | null;
+    score: number | null;
+  }> = {},
+) {
+  return {
+    config_id: configId,
+    req_id: reqId,
+    state,
+    timeout_seconds: 120,
+    payload: "",
+    result_hex: null,
+    score: null,
+    ...extras,
+  };
+}
+
+async function runRelayTicks(
+  relay: { tick: () => Promise<void> },
+  count = 2,
+): Promise<void> {
+  for (let i = 0; i < count; i += 1) {
+    await relay.tick();
+  }
+}
+
+function relayQueueDeps() {
+  const queue: Array<{
+    task_id: string;
+    step_idx: number;
+    config_id: string;
+    req_id: string;
+    payload: string;
+    registrant: string;
+    endpoint_hash: string;
+    attempts: number;
+  }> = [];
+
+  return {
+    getStepsForTask: vi.fn().mockResolvedValue([]),
+    getRelayJob: vi.fn().mockResolvedValue(null),
+    listFailedRelayJobs: vi.fn().mockResolvedValue([]),
+    markRelayJobIndexerLagRetry: vi.fn().mockResolvedValue(undefined),
+    reactivateRelayJob: vi.fn().mockResolvedValue(undefined),
+    enqueueRelayJob: vi.fn().mockImplementation(async (input: {
+      taskId: string;
+      stepIdx: number;
+      configId: string;
+      reqId: string;
+      payload: string;
+      registrant: string;
+      endpointHash: string;
+    }) => {
+      const exists = queue.some(
+        (row) => row.task_id === input.taskId && row.step_idx === input.stepIdx,
+      );
+      if (exists) return false;
+      queue.push({
+        task_id: input.taskId,
+        step_idx: input.stepIdx,
+        config_id: input.configId,
+        req_id: input.reqId,
+        payload: input.payload,
+        registrant: input.registrant,
+        endpoint_hash: input.endpointHash,
+        attempts: 0,
+      });
+      return true;
+    }),
+    listDueRelayJobs: vi.fn().mockImplementation(async () => queue.slice()),
+    markRelayJobRetry: vi.fn().mockResolvedValue(undefined),
+    completeRelayJob: vi.fn().mockImplementation(async (taskId: string, stepIdx: number) => {
+      const idx = queue.findIndex(
+        (row) => row.task_id === taskId && row.step_idx === stepIdx,
+      );
+      if (idx >= 0) queue.splice(idx, 1);
+    }),
+  };
+}
+
 afterEach(() => {
   vi.unstubAllEnvs();
   vi.resetModules();
   vi.clearAllMocks();
+});
+
+describe("externals keeper", () => {
+  it("retries startup verification until pending agents verify", async () => {
+    const { verifyExternalAgentsNow } = await loadKeepers();
+    const log = vi.fn();
+    const warn = vi.fn();
+    let verified = false;
+
+    const summary = await verifyExternalAgentsNow({
+      listExternalAgents: vi.fn(async () => [
+        {
+          config_id: "6",
+          registrant: "0x1234567890123456789012345678901234567890",
+          endpoint_url: "http://127.0.0.1:3011",
+          endpoint_hash: "0x" + "44".repeat(32),
+          capabilities: [],
+          is_active: 1,
+          is_verified: verified ? 1 : 0,
+          last_verified_at: null,
+          last_error: null,
+        },
+      ]),
+      verifyExternalAgent: vi.fn(async () => {
+        verified = true;
+        return true;
+      }),
+      getExternalAgent: vi.fn(),
+      sleep: vi.fn().mockResolvedValue(undefined),
+      startupVerifyIntervalMs: 1,
+      startupVerifyMaxAttempts: 3,
+      logger: { log, warn, error: vi.fn() },
+    });
+
+    expect(summary).toEqual({ total: 1, verified: 1, failed: 0 });
+    expect(log).toHaveBeenCalledWith(
+      "[externals] startup verification complete: 1/1 verified",
+    );
+  });
+
+  it("reports incomplete startup verification after max attempts", async () => {
+    const { verifyExternalAgentsNow } = await loadKeepers();
+    const warn = vi.fn();
+
+    const summary = await verifyExternalAgentsNow({
+      listExternalAgents: vi.fn(async () => [
+        {
+          config_id: "7",
+          registrant: "0x1234567890123456789012345678901234567890",
+          endpoint_url: "http://127.0.0.1:3016",
+          endpoint_hash: "0x" + "55".repeat(32),
+          capabilities: [],
+          is_active: 1,
+          is_verified: 0,
+          last_verified_at: null,
+          last_error: "fetch failed",
+        },
+      ]),
+      verifyExternalAgent: vi.fn().mockResolvedValue(false),
+      getExternalAgent: vi.fn().mockResolvedValue({
+        config_id: "7",
+        last_error: "fetch failed",
+      }),
+      sleep: vi.fn().mockResolvedValue(undefined),
+      startupVerifyIntervalMs: 1,
+      startupVerifyMaxAttempts: 2,
+      logger: { log: vi.fn(), warn, error: vi.fn() },
+    });
+
+    expect(summary).toEqual({ total: 1, verified: 0, failed: 1 });
+    expect(warn).toHaveBeenCalledWith(
+      "[externals] startup verification incomplete: 1/1 still unverified",
+    );
+  });
 });
 
 describe("indexer keeper", () => {
@@ -89,7 +250,7 @@ describe("indexer keeper", () => {
 
     await indexer.tick();
 
-    expect(setCursor).toHaveBeenCalledWith("indexer", 50n);
+    expect(setCursor).toHaveBeenCalledWith("indexer", 99n);
   });
 
   it("indexes task and step lifecycle events into the DB layer", async () => {
@@ -360,11 +521,12 @@ describe("relay keeper", () => {
       chainId: 50312n,
       startBlock: 50n,
       logger: { log: vi.fn(), error: vi.fn(), warn: vi.fn() },
+      ...relayQueueDeps(),
     });
 
     await relay.tick();
 
-    expect(setCursor).toHaveBeenCalledWith("relay", 50n);
+    expect(setCursor).toHaveBeenCalledWith("relay", 99n);
   });
 
   it("submits external results and updates the step state", async () => {
@@ -408,7 +570,9 @@ describe("relay keeper", () => {
       isResultSubmitted: vi.fn().mockResolvedValue(false),
       saveSubmittedResult,
       deleteSubmittedResult: vi.fn().mockResolvedValue(undefined),
-      getStep: vi.fn().mockResolvedValue({ state: StepState.RunningExternal }),
+      getStep: vi.fn().mockResolvedValue(
+        relayStepRow("6", reqId, StepState.RunningExternal),
+      ),
       upsertStep,
       publish,
       getExternalAgent: vi.fn().mockResolvedValue({
@@ -438,9 +602,10 @@ describe("relay keeper", () => {
       chainId: 50312n,
       startBlock: 0n,
       logger: { log: vi.fn(), error: vi.fn(), warn: vi.fn() },
+      ...relayQueueDeps(),
     });
 
-    await relay.tick();
+    await runRelayTicks(relay);
 
     expect(saveSubmittedResult).toHaveBeenCalledOnce();
     expect(submitExternalResult).toHaveBeenCalledOnce();
@@ -461,6 +626,435 @@ describe("relay keeper", () => {
       "step_result_submitted",
       { taskId: "5", stepIdx: 1 },
     );
+  });
+
+  it("re-fetches step state after executeExternalAgent before submitting", async () => {
+    const { createRelay } = await loadKeepers();
+    const saveSubmittedResult = vi.fn().mockResolvedValue(undefined);
+    const upsertStep = vi.fn().mockResolvedValue(undefined);
+    const publish = vi.fn();
+    const submitExternalResult = vi.fn().mockResolvedValue(undefined);
+    const reqId = "0x" + "22".repeat(32);
+    const resultText = "analysis complete";
+
+    // Signature must match the (taskId, stepIdx, reqId, resultText) digest.
+    const digest = buildTwiinDigest({
+      chainId: 50312n,
+      orchestrator: "0x1234567890123456789012345678901234567890",
+      taskId: 5n,
+      stepIdx: 1,
+      externalRequestId: reqId as `0x${string}`,
+      result: resultText,
+    });
+    const signature = await externalAgentAccount.signMessage({
+      message: { raw: digest },
+    });
+
+    const getStep = vi
+      .fn()
+      // Pre-execute gate requires an aligned RunningExternal row.
+      .mockResolvedValueOnce(relayStepRow("6", reqId, StepState.RunningExternal))
+      // Post-execute re-fetch should still allow submission.
+      .mockResolvedValueOnce(relayStepRow("6", reqId, StepState.RunningExternal));
+
+    const relay = createRelay({
+      getBlockNumber: vi.fn().mockResolvedValue(100n),
+      getCursor: vi.fn().mockResolvedValue(10n),
+      setCursor: vi.fn().mockResolvedValue(undefined),
+      getLogs: vi.fn().mockResolvedValue([
+        {
+          args: {
+            taskId: 5n,
+            stepIdx: 1,
+            configId: 6n,
+            registrant: externalAgentAccount.address,
+            endpointHash: "0x" + "44".repeat(32),
+            payload: "0x696e737472756374696f6e",
+            reqId,
+            deadline: BigInt(Math.floor(Date.now() / 1000) + 60),
+          },
+        },
+      ]) as never,
+      isResultSubmitted: vi.fn().mockResolvedValue(false),
+      saveSubmittedResult,
+      deleteSubmittedResult: vi.fn().mockResolvedValue(undefined),
+      getStep,
+      upsertStep,
+      publish,
+      getExternalAgent: vi.fn().mockResolvedValue({
+        config_id: "6",
+        registrant: externalAgentAccount.address,
+        endpoint_url: "https://agent.example",
+        endpoint_hash: "0x" + "44".repeat(32),
+        capabilities: [],
+        is_active: 1,
+        is_verified: 1,
+        last_verified_at: 1,
+        last_error: null,
+      }),
+      setExternalAgentVerification: vi.fn().mockResolvedValue(undefined),
+      submitExternalResult,
+      fetchImpl: vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            result: resultText,
+            signature,
+            registrant: externalAgentAccount.address,
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+      ) as never,
+      addresses: { orchestrator: "0x1234567890123456789012345678901234567890" },
+      chainId: 50312n,
+      startBlock: 0n,
+      logger: { log: vi.fn(), error: vi.fn(), warn: vi.fn() },
+      ...relayQueueDeps(),
+    });
+
+    await runRelayTicks(relay);
+
+    expect(saveSubmittedResult).toHaveBeenCalledOnce();
+    expect(submitExternalResult).toHaveBeenCalledOnce();
+    expect(upsertStep).toHaveBeenCalledWith(
+      "5",
+      1,
+      "6",
+      null,
+      StepState.AwaitingRating,
+      "instruction",
+      reqId,
+      expect.stringMatching(/^0x/),
+      null,
+      null,
+    );
+    expect(publish).toHaveBeenCalledWith(
+      "5",
+      "step_result_submitted",
+      { taskId: "5", stepIdx: 1 },
+    );
+  });
+
+  it("does not poison submitted_results when fresh step state is terminal", async () => {
+    const { createRelay } = await loadKeepers();
+    const saveSubmittedResult = vi.fn().mockResolvedValue(undefined);
+    const upsertStep = vi.fn().mockResolvedValue(undefined);
+    const publish = vi.fn();
+    const submitExternalResult = vi.fn().mockResolvedValue(undefined);
+    const reqId = "0x" + "22".repeat(32);
+    const resultText = "analysis complete";
+
+    const digest = buildTwiinDigest({
+      chainId: 50312n,
+      orchestrator: "0x1234567890123456789012345678901234567890",
+      taskId: 5n,
+      stepIdx: 1,
+      externalRequestId: reqId as `0x${string}`,
+      result: resultText,
+    });
+    const signature = await externalAgentAccount.signMessage({
+      message: { raw: digest },
+    });
+
+    const getStep = vi
+      .fn()
+      .mockResolvedValueOnce(relayStepRow("6", reqId, StepState.RunningExternal))
+      .mockResolvedValueOnce(relayStepRow("6", reqId, StepState.TimedOut));
+
+    const relay = createRelay({
+      getBlockNumber: vi.fn().mockResolvedValue(100n),
+      getCursor: vi.fn().mockResolvedValue(10n),
+      setCursor: vi.fn().mockResolvedValue(undefined),
+      getLogs: vi.fn().mockResolvedValue([
+        {
+          args: {
+            taskId: 5n,
+            stepIdx: 1,
+            configId: 6n,
+            registrant: externalAgentAccount.address,
+            endpointHash: "0x" + "44".repeat(32),
+            payload: "0x696e737472756374696f6e",
+            reqId,
+            deadline: BigInt(Math.floor(Date.now() / 1000) + 60),
+          },
+        },
+      ]) as never,
+      isResultSubmitted: vi.fn().mockResolvedValue(false),
+      saveSubmittedResult,
+      deleteSubmittedResult: vi.fn().mockResolvedValue(undefined),
+      getStep,
+      upsertStep,
+      publish,
+      getExternalAgent: vi.fn().mockResolvedValue({
+        config_id: "6",
+        registrant: externalAgentAccount.address,
+        endpoint_url: "https://agent.example",
+        endpoint_hash: "0x" + "44".repeat(32),
+        capabilities: [],
+        is_active: 1,
+        is_verified: 1,
+        last_verified_at: 1,
+        last_error: null,
+      }),
+      setExternalAgentVerification: vi.fn().mockResolvedValue(undefined),
+      submitExternalResult,
+      fetchImpl: vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            result: resultText,
+            signature,
+            registrant: externalAgentAccount.address,
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+      ) as never,
+      addresses: { orchestrator: "0x1234567890123456789012345678901234567890" },
+      chainId: 50312n,
+      startBlock: 0n,
+      logger: { log: vi.fn(), error: vi.fn(), warn: vi.fn() },
+      ...relayQueueDeps(),
+    });
+
+    await runRelayTicks(relay);
+
+    expect(saveSubmittedResult).not.toHaveBeenCalled();
+    expect(submitExternalResult).not.toHaveBeenCalled();
+    expect(upsertStep).not.toHaveBeenCalled();
+    expect(publish).not.toHaveBeenCalled();
+  });
+
+  it("proceeds via chain fallback when step row is Pending before execute", async () => {
+    const { createRelay } = await loadKeepers();
+    const saveSubmittedResult = vi.fn().mockResolvedValue(undefined);
+    const upsertStep = vi.fn().mockResolvedValue(undefined);
+    const publish = vi.fn();
+    const submitExternalResult = vi.fn().mockResolvedValue(undefined);
+    const fetchImpl = vi.fn();
+    const reqId = "0x" + "22".repeat(32);
+
+    const markRelayJobRetry = vi.fn().mockResolvedValue(undefined);
+
+    const relay = createRelay({
+      getBlockNumber: vi.fn().mockResolvedValue(100n),
+      getCursor: vi.fn().mockResolvedValue(10n),
+      setCursor: vi.fn().mockResolvedValue(undefined),
+      getLogs: vi.fn().mockResolvedValue([
+        {
+          args: {
+            taskId: 5n,
+            stepIdx: 1,
+            configId: 6n,
+            registrant: externalAgentAccount.address,
+            endpointHash: "0x" + "44".repeat(32),
+            payload: "0x696e737472756374696f6e",
+            reqId,
+            deadline: BigInt(Math.floor(Date.now() / 1000) + 60),
+          },
+        },
+      ]) as never,
+      isResultSubmitted: vi.fn().mockResolvedValue(false),
+      saveSubmittedResult,
+      deleteSubmittedResult: vi.fn().mockResolvedValue(undefined),
+      getStep: vi.fn().mockResolvedValue(
+        relayStepRow("6", reqId, StepState.Pending, { req_id: null }),
+      ),
+      readOnChainTask: vi.fn().mockResolvedValue([0, 0n, 0, 0n, 0n, 0n, 1]),
+      upsertStep,
+      publish,
+      getExternalAgent: vi.fn().mockResolvedValue({
+        config_id: "6",
+        registrant: externalAgentAccount.address,
+        endpoint_url: "https://agent.example",
+        endpoint_hash: "0x" + "44".repeat(32),
+        capabilities: [],
+        is_active: 1,
+        is_verified: 1,
+        last_verified_at: 1,
+        last_error: null,
+      }),
+      setExternalAgentVerification: vi.fn().mockResolvedValue(undefined),
+      submitExternalResult,
+      fetchImpl: fetchImpl as never,
+      addresses: { orchestrator: "0x1234567890123456789012345678901234567890" },
+      chainId: 50312n,
+      startBlock: 0n,
+      logger: { log: vi.fn(), error: vi.fn(), warn: vi.fn() },
+      ...relayQueueDeps(),
+      markRelayJobRetry,
+    });
+
+    await runRelayTicks(relay);
+
+    expect(fetchImpl).toHaveBeenCalled();
+    expect(markRelayJobRetry).toHaveBeenCalled();
+  });
+
+  it("retries when step row is stale from task-id reuse (Succeeded + wrong config)", async () => {
+    const { createRelay } = await loadKeepers();
+    const saveSubmittedResult = vi.fn().mockResolvedValue(undefined);
+    const upsertStep = vi.fn().mockResolvedValue(undefined);
+    const publish = vi.fn();
+    const submitExternalResult = vi.fn().mockResolvedValue(undefined);
+    const fetchImpl = vi.fn();
+    const reqId = "0x" + "22".repeat(32);
+    const staleReqId = "0x" + "11".repeat(32);
+
+    const markRelayJobRetry = vi.fn().mockResolvedValue(undefined);
+
+    const relay = createRelay({
+      getBlockNumber: vi.fn().mockResolvedValue(100n),
+      getCursor: vi.fn().mockResolvedValue(10n),
+      setCursor: vi.fn().mockResolvedValue(undefined),
+      getLogs: vi.fn().mockResolvedValue([
+        {
+          args: {
+            taskId: 3n,
+            stepIdx: 0,
+            configId: 7n,
+            registrant: externalAgentAccount.address,
+            endpointHash: "0x" + "44".repeat(32),
+            payload: "0x696e737472756374696f6e",
+            reqId,
+            deadline: BigInt(Math.floor(Date.now() / 1000) + 60),
+          },
+        },
+      ]) as never,
+      isResultSubmitted: vi.fn().mockResolvedValue(false),
+      saveSubmittedResult,
+      deleteSubmittedResult: vi.fn().mockResolvedValue(undefined),
+      getStep: vi.fn().mockResolvedValue(
+        relayStepRow("2", staleReqId, StepState.Succeeded),
+      ),
+      upsertStep,
+      publish,
+      getExternalAgent: vi.fn().mockResolvedValue({
+        config_id: "7",
+        registrant: externalAgentAccount.address,
+        endpoint_url: "https://agent.example",
+        endpoint_hash: "0x" + "44".repeat(32),
+        capabilities: [],
+        is_active: 1,
+        is_verified: 1,
+        last_verified_at: 1,
+        last_error: null,
+      }),
+      setExternalAgentVerification: vi.fn().mockResolvedValue(undefined),
+      submitExternalResult,
+      fetchImpl: fetchImpl as never,
+      addresses: { orchestrator: "0x1234567890123456789012345678901234567890" },
+      chainId: 50312n,
+      startBlock: 0n,
+      logger: { log: vi.fn(), error: vi.fn(), warn: vi.fn() },
+      ...relayQueueDeps(),
+      markRelayJobRetry,
+    });
+
+    await runRelayTicks(relay);
+
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(saveSubmittedResult).not.toHaveBeenCalled();
+    expect(submitExternalResult).not.toHaveBeenCalled();
+    expect(markRelayJobRetry).toHaveBeenCalled();
+  });
+
+  it("enriches external payloads with prior step outputs before execute", async () => {
+    const { createRelay } = await loadKeepers();
+    const priorJson = '{"sentiment":"bullish"}';
+    const priorHex = `0x${Buffer.from(priorJson, "utf8").toString("hex")}` as `0x${string}`;
+    const reqId = "0x" + "33".repeat(32);
+    const resultText = "brief complete";
+    const digest = buildTwiinDigest({
+      chainId: 50312n,
+      orchestrator: "0x1234567890123456789012345678901234567890",
+      taskId: 9n,
+      stepIdx: 1,
+      externalRequestId: reqId as `0x${string}`,
+      result: resultText,
+    });
+    const signature = await externalAgentAccount.signMessage({
+      message: { raw: digest },
+    });
+    const fetchImpl = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          result: resultText,
+          signature,
+          registrant: externalAgentAccount.address,
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      ),
+    ) as never;
+
+    const relay = createRelay({
+      getBlockNumber: vi.fn().mockResolvedValue(100n),
+      getCursor: vi.fn().mockResolvedValue(10n),
+      setCursor: vi.fn().mockResolvedValue(undefined),
+      getLogs: vi.fn().mockResolvedValue([
+        {
+          args: {
+            taskId: 9n,
+            stepIdx: 1,
+            configId: 7n,
+            registrant: externalAgentAccount.address,
+            endpointHash: "0x" + "55".repeat(32),
+            payload: "0x696e737472756374696f6e",
+            reqId,
+            deadline: BigInt(Math.floor(Date.now() / 1000) + 60),
+          },
+        },
+      ]) as never,
+      isResultSubmitted: vi.fn().mockResolvedValue(false),
+      saveSubmittedResult: vi.fn().mockResolvedValue(undefined),
+      deleteSubmittedResult: vi.fn().mockResolvedValue(undefined),
+      getStep: vi.fn().mockResolvedValue(
+        relayStepRow("7", reqId, StepState.RunningExternal),
+      ),
+      upsertStep: vi.fn().mockResolvedValue(undefined),
+      publish: vi.fn(),
+      submitExternalResult: vi.fn().mockResolvedValue(undefined),
+      getExternalAgent: vi.fn().mockResolvedValue({
+        config_id: "7",
+        registrant: externalAgentAccount.address,
+        endpoint_url: "https://agent.example",
+        endpoint_hash: "0x" + "55".repeat(32),
+        capabilities: [],
+        is_active: 1,
+        is_verified: 1,
+        last_verified_at: 1,
+        last_error: null,
+      }),
+      setExternalAgentVerification: vi.fn().mockResolvedValue(undefined),
+      fetchImpl,
+      addresses: { orchestrator: "0x1234567890123456789012345678901234567890" },
+      chainId: 50312n,
+      startBlock: 0n,
+      logger: { log: vi.fn(), error: vi.fn(), warn: vi.fn() },
+      ...relayQueueDeps(),
+      getStepsForTask: vi.fn().mockResolvedValue([
+        {
+          step_idx: 0,
+          config_id: "6",
+          timeout_seconds: null,
+          state: StepState.Succeeded,
+          payload: '{"channel":"somnia"}',
+          req_id: null,
+          result_hex: priorHex,
+          score: null,
+          deadline: null,
+          consensus_validators: null,
+          consensus_receipt_id: null,
+          consensus_median_cost_wei: null,
+        },
+      ]),
+    });
+
+    await runRelayTicks(relay);
+
+    expect(fetchImpl).toHaveBeenCalled();
+    const init = fetchImpl.mock.calls[0]?.[1] as RequestInit | undefined;
+    const body = JSON.parse(String(init?.body)) as { payload: string };
+    const decodedPayload = Buffer.from(body.payload, "hex").toString("utf8");
+    expect(decodedPayload).toContain("Previous step outputs:");
+    expect(decodedPayload).toContain('"sentiment":"bullish"');
   });
 
   it("rolls back dedupe state when chain submission fails", async () => {
@@ -499,7 +1093,9 @@ describe("relay keeper", () => {
       isResultSubmitted: vi.fn().mockResolvedValue(false),
       saveSubmittedResult: vi.fn().mockResolvedValue(undefined),
       deleteSubmittedResult,
-      getStep: vi.fn().mockResolvedValue({ state: StepState.RunningExternal }),
+      getStep: vi.fn().mockResolvedValue(
+        relayStepRow("6", reqId, StepState.RunningExternal),
+      ),
       upsertStep: vi.fn(),
       publish: vi.fn(),
       getExternalAgent: vi.fn().mockResolvedValue({
@@ -515,20 +1111,21 @@ describe("relay keeper", () => {
       }),
       setExternalAgentVerification: vi.fn().mockResolvedValue(undefined),
       submitExternalResult: vi.fn().mockRejectedValue(new Error("rpc failed")),
-      fetchImpl: vi.fn().mockResolvedValue(
-        new Response(
+      fetchImpl: vi.fn(() =>
+        Promise.resolve(new Response(
           JSON.stringify({
-            result: "analysis complete",
+            result: resultText,
             signature,
             registrant: externalAgentAccount.address,
           }),
           { status: 200, headers: { "content-type": "application/json" } },
-        ),
+        )),
       ) as never,
       addresses: { orchestrator: "0x1234567890123456789012345678901234567890" },
       chainId: 50312n,
       startBlock: 0n,
       logger: { log: vi.fn(), error: vi.fn(), warn: vi.fn() },
+      ...relayQueueDeps(),
     });
 
     await relay.tick();
@@ -572,11 +1169,369 @@ describe("relay keeper", () => {
       chainId: 50312n,
       startBlock: 0n,
       logger: { log: vi.fn(), error: vi.fn(), warn: vi.fn() },
+      ...relayQueueDeps(),
     });
 
     await relay.tick();
 
     expect(submitExternalResult).not.toHaveBeenCalled();
+  });
+
+  it("clears stale submitted_results when step is still RunningExternal", async () => {
+    const { createRelay } = await loadKeepers();
+    const reqId = "0x" + "22".repeat(32);
+    const resultText = "analysis complete";
+    const digest = buildTwiinDigest({
+      chainId: 50312n,
+      orchestrator: "0x1234567890123456789012345678901234567890",
+      taskId: 5n,
+      stepIdx: 1,
+      externalRequestId: reqId as `0x${string}`,
+      result: resultText,
+    });
+    const signature = await externalAgentAccount.signMessage({
+      message: { raw: digest },
+    });
+    const deleteSubmittedResult = vi.fn().mockResolvedValue(undefined);
+    const saveSubmittedResult = vi.fn().mockResolvedValue(undefined);
+    const submitExternalResult = vi.fn().mockResolvedValue(undefined);
+    const completeRelayJob = vi.fn().mockResolvedValue(undefined);
+
+    const relay = createRelay({
+      getBlockNumber: vi.fn().mockResolvedValue(100n),
+      getCursor: vi.fn().mockResolvedValue(10n),
+      setCursor: vi.fn().mockResolvedValue(undefined),
+      getLogs: vi.fn().mockResolvedValue([
+        {
+          args: {
+            taskId: 5n,
+            stepIdx: 1,
+            configId: 6n,
+            registrant: externalAgentAccount.address,
+            endpointHash: "0x" + "44".repeat(32),
+            payload: "0x696e737472756374696f6e",
+            reqId,
+            deadline: BigInt(Math.floor(Date.now() / 1000) + 60),
+          },
+        },
+      ]) as never,
+      isResultSubmitted: vi
+        .fn()
+        .mockResolvedValueOnce(true)
+        .mockResolvedValue(false),
+      saveSubmittedResult,
+      deleteSubmittedResult,
+      getStep: vi.fn().mockResolvedValue(
+        relayStepRow("6", reqId, StepState.RunningExternal),
+      ),
+      upsertStep: vi.fn().mockResolvedValue(undefined),
+      publish: vi.fn(),
+      submitExternalResult,
+      getExternalAgent: vi.fn().mockResolvedValue({
+        config_id: "6",
+        registrant: externalAgentAccount.address,
+        endpoint_url: "https://agent.example",
+        endpoint_hash: "0x" + "44".repeat(32),
+        capabilities: [],
+        is_active: 1,
+        is_verified: 1,
+        last_verified_at: 1,
+        last_error: null,
+      }),
+      setExternalAgentVerification: vi.fn().mockResolvedValue(undefined),
+      fetchImpl: vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            result: resultText,
+            signature,
+            registrant: externalAgentAccount.address,
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+      ) as never,
+      addresses: { orchestrator: "0x1234567890123456789012345678901234567890" },
+      chainId: 50312n,
+      startBlock: 0n,
+      logger: { log: vi.fn(), error: vi.fn(), warn: vi.fn() },
+      ...relayQueueDeps(),
+      completeRelayJob,
+    });
+
+    await runRelayTicks(relay);
+
+    expect(deleteSubmittedResult).toHaveBeenCalledWith("5", 1);
+    expect(submitExternalResult).toHaveBeenCalledOnce();
+    expect(completeRelayJob).toHaveBeenCalledOnce();
+    expect(
+      submitExternalResult.mock.invocationCallOrder[0],
+    ).toBeLessThan(completeRelayJob.mock.invocationCallOrder[0]!);
+  });
+
+  it("uses indexer-lag retry when step row stays Pending after execute", async () => {
+    const { createRelay } = await loadKeepers();
+    const reqId = "0x" + "22".repeat(32);
+    const resultText = "analysis complete";
+    const digest = buildTwiinDigest({
+      chainId: 50312n,
+      orchestrator: "0x1234567890123456789012345678901234567890",
+      taskId: 5n,
+      stepIdx: 1,
+      externalRequestId: reqId as `0x${string}`,
+      result: resultText,
+    });
+    const signature = await externalAgentAccount.signMessage({
+      message: { raw: digest },
+    });
+    const relayDeps = relayQueueDeps();
+    const markRelayJobRetry = vi.fn().mockResolvedValue(undefined);
+    const markRelayJobIndexerLagRetry = vi.fn().mockResolvedValue(undefined);
+    relayDeps.markRelayJobRetry = markRelayJobRetry;
+    relayDeps.markRelayJobIndexerLagRetry = markRelayJobIndexerLagRetry;
+
+    const relay = createRelay({
+      getBlockNumber: vi.fn().mockResolvedValue(100n),
+      getCursor: vi.fn().mockResolvedValue(10n),
+      setCursor: vi.fn().mockResolvedValue(undefined),
+      getLogs: vi.fn().mockResolvedValue([
+        {
+          args: {
+            taskId: 5n,
+            stepIdx: 1,
+            configId: 6n,
+            registrant: externalAgentAccount.address,
+            endpointHash: "0x" + "44".repeat(32),
+            payload: "0x696e737472756374696f6e",
+            reqId,
+            deadline: BigInt(Math.floor(Date.now() / 1000) + 60),
+          },
+        },
+      ]) as never,
+      isResultSubmitted: vi.fn().mockResolvedValue(false),
+      saveSubmittedResult: vi.fn(),
+      deleteSubmittedResult: vi.fn().mockResolvedValue(undefined),
+      getStep: vi.fn().mockResolvedValue(
+        relayStepRow("6", reqId, StepState.Pending, { req_id: null }),
+      ),
+      readOnChainTask: vi.fn().mockResolvedValue([0, 0n, 0, 0n, 0n, 0n, 1]),
+      upsertStep: vi.fn(),
+      publish: vi.fn(),
+      submitExternalResult: vi.fn(),
+      getExternalAgent: vi.fn().mockResolvedValue({
+        config_id: "6",
+        registrant: externalAgentAccount.address,
+        endpoint_url: "https://agent.example",
+        endpoint_hash: "0x" + "44".repeat(32),
+        capabilities: [],
+        is_active: 1,
+        is_verified: 1,
+        last_verified_at: 1,
+        last_error: null,
+      }),
+      setExternalAgentVerification: vi.fn().mockResolvedValue(undefined),
+      fetchImpl: vi.fn(() =>
+        Promise.resolve(new Response(
+          JSON.stringify({
+            result: resultText,
+            signature,
+            registrant: externalAgentAccount.address,
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        )),
+      ) as never,
+      addresses: { orchestrator: "0x1234567890123456789012345678901234567890" },
+      chainId: 50312n,
+      startBlock: 0n,
+      logger: { log: vi.fn(), error: vi.fn(), warn: vi.fn() },
+      ...relayDeps,
+    });
+
+    await runRelayTicks(relay, 1);
+
+    expect(markRelayJobIndexerLagRetry).toHaveBeenCalledOnce();
+    expect(markRelayJobRetry).not.toHaveBeenCalled();
+  });
+
+  it("reactivates failed relay jobs when a new dispatch is detected", async () => {
+    const { createRelay } = await loadKeepers();
+    const reqId = "0x" + "22".repeat(32);
+    const deleteSubmittedResult = vi.fn().mockResolvedValue(undefined);
+    const enqueueRelayJob = vi.fn().mockResolvedValue(false);
+    const getRelayJob = vi.fn().mockResolvedValue({
+      status: "failed",
+      attempts: 3,
+      last_error: "exhausted",
+    });
+    const reactivateRelayJob = vi.fn().mockResolvedValue(undefined);
+
+    const relay = createRelay({
+      getBlockNumber: vi.fn().mockResolvedValue(100n),
+      getCursor: vi.fn().mockResolvedValue(10n),
+      setCursor: vi.fn().mockResolvedValue(undefined),
+      getLogs: vi.fn().mockResolvedValue([
+        {
+          args: {
+            taskId: 5n,
+            stepIdx: 1,
+            configId: 6n,
+            registrant: externalAgentAccount.address,
+            endpointHash: "0x" + "44".repeat(32),
+            payload: "0x696e737472756374696f6e",
+            reqId,
+            deadline: BigInt(Math.floor(Date.now() / 1000) + 60),
+          },
+        },
+      ]) as never,
+      isResultSubmitted: vi.fn().mockResolvedValue(false),
+      saveSubmittedResult: vi.fn(),
+      getStep: vi.fn(),
+      upsertStep: vi.fn(),
+      publish: vi.fn(),
+      submitExternalResult: vi.fn(),
+      getExternalAgent: vi.fn(),
+      setExternalAgentVerification: vi.fn(),
+      fetchImpl: vi.fn(),
+      addresses: { orchestrator: "0x1234567890123456789012345678901234567890" },
+      chainId: 50312n,
+      startBlock: 0n,
+      logger: { log: vi.fn(), error: vi.fn(), warn: vi.fn() },
+      ...relayQueueDeps(),
+      deleteSubmittedResult,
+      enqueueRelayJob,
+      getRelayJob,
+      reactivateRelayJob,
+    });
+
+    await relay.tick();
+
+    expect(deleteSubmittedResult).toHaveBeenCalledWith("5", 1);
+    expect(reactivateRelayJob).toHaveBeenCalledWith(
+      expect.objectContaining({
+        taskId: "5",
+        stepIdx: 1,
+        configId: "6",
+        reqId,
+      }),
+    );
+  });
+
+  it("reactivates failed relay jobs for running external steps during recovery scan", async () => {
+    const { createRelay } = await loadKeepers();
+    const reqId = "0x" + "22".repeat(32);
+    const reactivateRelayJob = vi.fn().mockResolvedValue(undefined);
+
+    const relay = createRelay({
+      getBlockNumber: vi.fn().mockResolvedValue(100n),
+      getCursor: vi.fn().mockResolvedValue(100n),
+      setCursor: vi.fn().mockResolvedValue(undefined),
+      getLogs: vi.fn().mockResolvedValue([]) as never,
+      isResultSubmitted: vi.fn().mockResolvedValue(false),
+      saveSubmittedResult: vi.fn(),
+      deleteSubmittedResult: vi.fn(),
+      getStep: vi.fn().mockResolvedValue(
+        relayStepRow("8", reqId, StepState.RunningExternal),
+      ),
+      readOnChainTask: vi.fn().mockResolvedValue([0, 0n, 0, 0n, 0n, 0n, 1]),
+      upsertStep: vi.fn(),
+      publish: vi.fn(),
+      submitExternalResult: vi.fn(),
+      getExternalAgent: vi.fn(),
+      setExternalAgentVerification: vi.fn(),
+      fetchImpl: vi.fn(),
+      addresses: { orchestrator: "0x1234567890123456789012345678901234567890" },
+      chainId: 50312n,
+      startBlock: 0n,
+      logger: { log: vi.fn(), error: vi.fn(), warn: vi.fn() },
+      ...relayQueueDeps(),
+      listFailedRelayJobs: vi.fn().mockResolvedValue([
+        {
+          task_id: "26",
+          step_idx: 0,
+          config_id: "8",
+          req_id: reqId,
+          payload: "0x00",
+          registrant: externalAgentAccount.address,
+          endpoint_hash: "0x" + "44".repeat(32),
+          attempts: 3,
+        },
+      ]),
+      reactivateRelayJob,
+    });
+
+    await relay.tick();
+
+    expect(reactivateRelayJob).toHaveBeenCalledWith(
+      expect.objectContaining({
+        taskId: "26",
+        stepIdx: 0,
+        configId: "8",
+        reqId,
+      }),
+    );
+  });
+
+  it("retries via regular backoff when step is Pending and chain says task not running", async () => {
+    const { createRelay } = await loadKeepers();
+    const reqId = "0x" + "22".repeat(32);
+    const relayDeps = relayQueueDeps();
+    const markRelayJobIndexerLagRetry = vi.fn().mockResolvedValue(undefined);
+    const markRelayJobRetry = vi.fn().mockResolvedValue(undefined);
+    relayDeps.markRelayJobIndexerLagRetry = markRelayJobIndexerLagRetry;
+    relayDeps.markRelayJobRetry = markRelayJobRetry;
+
+    const relay = createRelay({
+      getBlockNumber: vi.fn().mockResolvedValue(100n),
+      getCursor: vi.fn().mockResolvedValue(10n),
+      setCursor: vi.fn().mockResolvedValue(undefined),
+      getLogs: vi.fn().mockResolvedValue([]) as never,
+      isResultSubmitted: vi.fn().mockResolvedValue(false),
+      saveSubmittedResult: vi.fn(),
+      deleteSubmittedResult: vi.fn(),
+      getStep: vi.fn().mockResolvedValue(
+        relayStepRow("6", reqId, StepState.Pending, { req_id: null }),
+      ),
+      readOnChainTask: vi.fn().mockResolvedValue([0, 0n, 0, 0n, 0n, 0n, 0]),
+      upsertStep: vi.fn(),
+      publish: vi.fn(),
+      submitExternalResult: vi.fn(),
+      getExternalAgent: vi.fn().mockResolvedValue({
+        config_id: "6",
+        registrant: externalAgentAccount.address,
+        endpoint_url: "https://agent.example",
+        endpoint_hash: "0x" + "44".repeat(32),
+        capabilities: [],
+        is_active: 1,
+        is_verified: 1,
+        last_verified_at: 1,
+        last_error: null,
+      }),
+      setExternalAgentVerification: vi.fn().mockResolvedValue(undefined),
+      fetchImpl: vi.fn(),
+      nowMs: () => 1_000_000_000_000,
+      addresses: { orchestrator: "0x1234567890123456789012345678901234567890" },
+      chainId: 50312n,
+      startBlock: 0n,
+      logger: { log: vi.fn(), error: vi.fn(), warn: vi.fn() },
+      ...relayDeps,
+      listDueRelayJobs: vi.fn().mockResolvedValue([
+        {
+          task_id: "5",
+          step_idx: 1,
+          config_id: "6",
+          req_id: reqId,
+          payload: "0x696e737472756374696f6e",
+          registrant: externalAgentAccount.address,
+          endpoint_hash: "0x" + "44".repeat(32),
+          attempts: 0,
+        },
+      ]),
+    });
+
+    for (let i = 0; i < 4; i += 1) {
+      await relay.tick();
+    }
+
+    expect(markRelayJobRetry).toHaveBeenCalled();
+    expect(markRelayJobIndexerLagRetry).not.toHaveBeenCalled();
   });
 });
 
@@ -619,6 +1574,170 @@ describe("timeout keeper", () => {
   });
 });
 
+describe("rater helpers", () => {
+  it("prepareResultForRating extracts structured JSON fields", async () => {
+    const { prepareResultForRating, buildRatingPrompt } = await import(
+      "../src/keepers/rater-scoring"
+    );
+    const raw = JSON.stringify({
+      type: "dreamdex-mcp",
+      source: "dexscreener",
+      findings: ["SOMI ~$0.42"],
+      topPair: { symbol: "SOMI", priceUsd: "0.42" },
+      orderbook: { midPrice: "0.42", note: "proxy" },
+    });
+    const prepared = prepareResultForRating(raw);
+    expect(prepared).toContain("type: dreamdex-mcp");
+    expect(prepared).toContain("SOMI ~$0.42");
+    expect(prepared).toContain('"symbol":"SOMI"');
+    expect(prepared.length).toBeLessThanOrEqual(4096);
+
+    const prompt = buildRatingPrompt(
+      '{"action":"orderbook"}',
+      prepared,
+      "\nRATING GUIDANCE: proxy ok",
+    );
+    expect(prompt).toContain("RATING GUIDANCE");
+    expect(prompt).toContain("orderbook:");
+  });
+
+  it("prepareResultForRating falls back to raw text for non-JSON", async () => {
+    const { prepareResultForRating } = await import("../src/keepers/rater-scoring");
+    const raw = "plain text result " + "x".repeat(5000);
+    expect(prepareResultForRating(raw).length).toBe(4096);
+  });
+
+  it("buildAgentRatingHints includes coingecko corroboration guidance", async () => {
+    const { buildAgentRatingHints, prepareResultForRating } = await import(
+      "../src/keepers/rater-scoring"
+    );
+    const raw = JSON.stringify({
+      type: "dreamdex-mcp",
+      source: "coingecko",
+      id: "somnia",
+      somnia: { usd: 0.76, usd_24h_change: -1.2 },
+      findings: ["somnia ~$0.76 (CoinGecko)"],
+    });
+    expect(prepareResultForRating(raw)).toContain('"usd":0.76');
+    expect(buildAgentRatingHints(raw)).toContain("CoinGecko corroboration");
+  });
+
+  it("prepareResultForRating includes reactivity-lens block range and events", async () => {
+    const { prepareResultForRating } = await import("../src/keepers/rater-scoring");
+    const raw = JSON.stringify({
+      type: "reactivity-lens",
+      source: "somnia-reactivity",
+      lookbackBlocks: 1000,
+      fromBlock: "403892195",
+      latestBlock: "403893195",
+      blocksScanned: 1001,
+      summary: "Scanned blocks 403892195–403893195 (1001 blocks). Found 0 FeedPublished.",
+      refreshEvents: { feedPublished: 0, scheduled: 0, skipped: 0 },
+      findings: ["Block window: #403892195–#403893195 (1001 blocks scanned via eth_getLogs)"],
+    });
+    const prepared = prepareResultForRating(raw);
+    expect(prepared).toContain("lookbackBlocks: 1000");
+    expect(prepared).toContain("fromBlock: 403892195");
+    expect(prepared).toContain("blocksScanned: 1001");
+    expect(prepared).toContain('"feedPublished":0');
+  });
+
+  it("buildAgentRatingHints includes reactivity-lens guidance", async () => {
+    const { buildAgentRatingHints } = await import("../src/keepers/rater-scoring");
+    const raw = JSON.stringify({ type: "reactivity-lens", source: "somnia-reactivity" });
+    expect(buildAgentRatingHints(raw)).toContain("reactivity-lens");
+    expect(buildAgentRatingHints(raw)).toContain("Zero events");
+  });
+
+  it("getDeterministicScoreFloor approves valid empty reactivity-lens scans", async () => {
+    const { getDeterministicScoreFloor } = await import("../src/keepers/rater-scoring");
+    const valid = JSON.stringify({
+      type: "reactivity-lens",
+      lookbackBlocks: 1000,
+      fromBlock: "403892195",
+      latestBlock: "403893195",
+      blocksScanned: 1001,
+      refreshEvents: { feedPublished: 0, scheduled: 0, skipped: 0 },
+    });
+    expect(getDeterministicScoreFloor(valid)).toBe(45);
+
+    const derived = JSON.stringify({
+      type: "reactivity-lens",
+      lookbackBlocks: 1000,
+      fromBlock: "100",
+      latestBlock: "1100",
+    });
+    expect(getDeterministicScoreFloor(derived)).toBe(45);
+  });
+
+  it("getDeterministicScoreFloor returns null for errors and invalid scans", async () => {
+    const { getDeterministicScoreFloor } = await import("../src/keepers/rater-scoring");
+    expect(
+      getDeterministicScoreFloor(
+        JSON.stringify({ type: "external-error", error: "rpc down" }),
+      ),
+    ).toBeNull();
+    expect(
+      getDeterministicScoreFloor(
+        JSON.stringify({
+          type: "reactivity-lens",
+          lookbackBlocks: 100,
+          fromBlock: "500",
+          latestBlock: "400",
+        }),
+      ),
+    ).toBeNull();
+  });
+
+  it("prepareResultForRating includes onchain-lens transfer scan fields", async () => {
+    const { prepareResultForRating } = await import("../src/keepers/rater-scoring");
+    const raw = JSON.stringify({
+      type: "onchain-lens",
+      source: "somnia-rpc",
+      blockWindow: 50,
+      latestBlock: 403893195,
+      totalTxSampled: 1200,
+      minTransferStt: 1000,
+      largeTransferCount: 2,
+      largeTransfers: [{ blockNumber: 100, hash: "0xabc", from: "0x1", to: "0x2", valueStt: 1500 }],
+      summary: "Sampled 50 blocks; found 2 native transfers >= 1000 STT",
+      transferScanNote: "native STT tx.value only; ERC-20 not scanned",
+    });
+    const prepared = prepareResultForRating(raw);
+    expect(prepared).toContain("blockWindow: 50");
+    expect(prepared).toContain("largeTransferCount: 2");
+    expect(prepared).toContain("minTransferStt: 1000");
+    expect(prepared).toContain("native STT");
+  });
+
+  it("buildAgentRatingHints includes onchain-lens guidance", async () => {
+    const { buildAgentRatingHints } = await import("../src/keepers/rater-scoring");
+    const raw = JSON.stringify({ type: "onchain-lens", source: "somnia-rpc" });
+    expect(buildAgentRatingHints(raw)).toContain("onchain-lens");
+    expect(buildAgentRatingHints(raw)).toContain("Zero matching transfers");
+  });
+
+  it("getDeterministicScoreFloor approves valid onchain-lens scans", async () => {
+    const { getDeterministicScoreFloor } = await import("../src/keepers/rater-scoring");
+    const withTransfers = JSON.stringify({
+      type: "onchain-lens",
+      blockWindow: 50,
+      latestBlock: 403893195,
+      minTransferStt: 1000,
+      largeTransferCount: 0,
+    });
+    expect(getDeterministicScoreFloor(withTransfers)).toBe(45);
+
+    const activityOnly = JSON.stringify({
+      type: "onchain-lens",
+      blockWindow: 20,
+      latestBlock: 1000,
+      totalTxSampled: 400,
+    });
+    expect(getDeterministicScoreFloor(activityOnly)).toBe(45);
+  });
+});
+
 describe("rater keeper", () => {
   it("rewinds the rater cursor when it is ahead of the chain tip", async () => {
     const { createRater } = await loadKeepers();
@@ -643,7 +1762,7 @@ describe("rater keeper", () => {
 
     await rater.tick();
 
-    expect(setCursor).toHaveBeenCalledWith("rater", 50n);
+    expect(setCursor).toHaveBeenCalledWith("rater", 99n);
   });
 
   it("finalizes acceptable results and publishes approval", async () => {
@@ -696,7 +1815,7 @@ describe("rater keeper", () => {
     expect(publish).toHaveBeenCalledWith(
       "8",
       "step_rated",
-      { taskId: "8", stepIdx: 2, score: 91, approved: true },
+      { taskId: "8", stepIdx: 2, score: 91, reason: "good", approved: true },
     );
   });
 

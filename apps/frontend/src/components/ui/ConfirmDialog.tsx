@@ -1,4 +1,5 @@
-import { useEffect, useId } from 'react'
+import { useEffect, useId, useRef, type ReactNode } from 'react'
+import { createPortal } from 'react-dom'
 import { Loader2 } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { cn } from '@/lib/cn'
@@ -6,7 +7,7 @@ import { cn } from '@/lib/cn'
 type ConfirmDialogProps = {
   open: boolean
   title: string
-  description: React.ReactNode
+  description: ReactNode
   confirmLabel: string
   cancelLabel?: string
   confirmVariant?: 'primary' | 'secondary' | 'outline' | 'danger'
@@ -28,19 +29,61 @@ export function ConfirmDialog({
 }: ConfirmDialogProps) {
   const titleId = useId()
   const descriptionId = useId()
+  const dialogRef = useRef<HTMLDivElement>(null)
+  const previousFocusRef = useRef<HTMLElement | null>(null)
 
   useEffect(() => {
     if (!open) return
+
+    previousFocusRef.current = document.activeElement as HTMLElement | null
+    const previousOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+
+    const focusTimer = window.setTimeout(() => {
+      const cancelBtn = dialogRef.current?.querySelector<HTMLButtonElement>(
+        'button[data-dialog-cancel]',
+      )
+      cancelBtn?.focus()
+    }, 0)
+
     const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && !isLoading) onCancel()
+      if (e.key === 'Escape' && !isLoading) {
+        onCancel()
+        return
+      }
+
+      if (e.key !== 'Tab' || !dialogRef.current) return
+
+      const focusable = dialogRef.current.querySelectorAll<HTMLElement>(
+        'button:not([disabled])',
+      )
+      if (focusable.length === 0) return
+
+      const first = focusable[0]
+      const last = focusable[focusable.length - 1]
+
+      if (e.shiftKey && document.activeElement === first) {
+        e.preventDefault()
+        last.focus()
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault()
+        first.focus()
+      }
     }
+
     document.addEventListener('keydown', onKeyDown)
-    return () => document.removeEventListener('keydown', onKeyDown)
+
+    return () => {
+      window.clearTimeout(focusTimer)
+      document.body.style.overflow = previousOverflow
+      document.removeEventListener('keydown', onKeyDown)
+      previousFocusRef.current?.focus()
+    }
   }, [open, isLoading, onCancel])
 
   if (!open) return null
 
-  return (
+  return createPortal(
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
       <button
         type="button"
@@ -52,6 +95,7 @@ export function ConfirmDialog({
         }}
       />
       <div
+        ref={dialogRef}
         role="alertdialog"
         aria-modal="true"
         aria-labelledby={titleId}
@@ -72,6 +116,7 @@ export function ConfirmDialog({
             variant="outline"
             size="sm"
             disabled={isLoading}
+            data-dialog-cancel
             onClick={onCancel}
           >
             {cancelLabel}
@@ -94,6 +139,7 @@ export function ConfirmDialog({
           </Button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   )
 }

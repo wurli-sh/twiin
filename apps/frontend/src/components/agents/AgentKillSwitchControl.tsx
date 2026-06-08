@@ -11,6 +11,8 @@ type AgentKillSwitchControlProps = {
   isToggling: boolean
   onToggle: (agentId: bigint, current: boolean) => Promise<unknown>
   className?: string
+  dialogOpen?: boolean
+  onDialogOpenChange?: (open: boolean) => void
 }
 
 export function AgentKillSwitchControl({
@@ -18,8 +20,21 @@ export function AgentKillSwitchControl({
   isToggling,
   onToggle,
   className,
+  dialogOpen: controlledOpen,
+  onDialogOpenChange,
 }: AgentKillSwitchControlProps) {
-  const [dialogOpen, setDialogOpen] = useState(false)
+  const [uncontrolledOpen, setUncontrolledOpen] = useState(false)
+  const isControlled = controlledOpen !== undefined && onDialogOpenChange !== undefined
+  const dialogOpen = isControlled ? controlledOpen : uncontrolledOpen
+
+  function setDialogOpen(open: boolean) {
+    if (isControlled) {
+      onDialogOpenChange(open)
+    } else {
+      setUncontrolledOpen(open)
+    }
+  }
+
   const label = formatAgentLabel(agent.name, agent.id)
   const isFrozen = agent.killSwitch
 

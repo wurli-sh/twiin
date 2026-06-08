@@ -7,8 +7,13 @@ import {
   LlmInferenceAgentAbi,
   encodeNativeAgentPayload,
   decodeNativeAgentResult,
+  decodeStepResult,
+  buildPriorStepContext,
+  stepOutputLabelFromResult,
+  enrichExternalPayload,
   decodeTaskCompletionFromLogData,
   validateOraclePlannerPayload,
+  validateExternalAgentPayload,
 } from "../somnia-agents";
 
 describe("encodeNativeAgentPayload", () => {
@@ -126,5 +131,113 @@ describe("decodeNativeAgentResult", () => {
     const logData =
       "0x00000000000000000000000000000000000000000000000000000000000000200000000000000000000000000000000000000000000000000000000000000020";
     expect(decodeTaskCompletionFromLogData(logData)).toBeNull();
+  });
+});
+
+describe("decodeStepResult", () => {
+  it("decodes raw UTF-8 external results", () => {
+    const json = '{"sentiment":"bullish","score":82}';
+    const hex = `0x${Buffer.from(json, "utf8").toString("hex")}` as const;
+    expect(decodeStepResult(hex)).toBe(json);
+  });
+
+  it("prefers native ABI decode over UTF-8 fallback", () => {
+    const hex = encodeAbiParameters([{ type: "string" }], ["hello"]);
+    expect(decodeStepResult(hex)).toBe("hello");
+  });
+});
+
+describe("buildPriorStepContext", () => {
+  it("mirrors on-chain prior context formatting", () => {
+    const json = '{"sentiment":"bullish"}';
+    const hex = `0x${Buffer.from(json, "utf8").toString("hex")}` as const;
+    const context = buildPriorStepContext(
+      [{ stepIdx: 0, configId: 6, resultHex: hex }],
+      1,
+    );
+    expect(context).toContain("Previous step outputs:");
+    expect(context).toContain("external-6");
+    expect(context).toContain('"sentiment":"bullish"');
+  });
+
+  it("uses agent name from JSON result instead of external-N", () => {
+    const json = JSON.stringify({
+      type: "docs-lens",
+      agentName: "docs-lens@twiin",
+      summary: "ok",
+    });
+    const hex = `0x${Buffer.from(json, "utf8").toString("hex")}` as const;
+    const context = buildPriorStepContext(
+      [{ stepIdx: 0, configId: 8, resultHex: hex }],
+      1,
+    );
+    expect(context).toContain("- docs-lens:");
+    expect(context).not.toContain("external-8");
+  });
+});
+
+describe("stepOutputLabelFromResult", () => {
+  it("prefers agentName from decoded JSON", () => {
+    const label = stepOutputLabelFromResult(
+      10,
+      JSON.stringify({ type: "reactivity-lens", agentName: "reactivity-lens@twiin" }),
+    );
+    expect(label).toBe("reactivity-lens");
+  });
+});
+
+describe("enrichExternalPayload", () => {
+  it("appends prior context to plain-text payloads", () => {
+    const payload = enrichExternalPayload(
+      "0x696e737472756374696f6e" as `0x${string}`,
+      "Previous step outputs:\n- external-6: ok",
+    );
+    const decoded = Buffer.from(payload.slice(2), "hex").toString("utf8");
+    expect(decoded).toContain("instruction");
+    expect(decoded).toContain("Previous step outputs:");
+  });
+});
+
+describe("validateExternalAgentPayload", () => {
+  it("accepts docs-lens JSON payload", () => {
+    expect(() =>
+      validateExternalAgentPayload(
+        "docs-lens",
+        '{"question":"How do agent gas fees work?","docPath":"agents"}',
+      ),
+    ).not.toThrow();
+  });
+
+  it("accepts plain-text docs-lens payload", () => {
+    expect(() =>
+      validateExternalAgentPayload("docs-lens", "plain text"),
+    ).not.toThrow();
+  });
+
+  it("rejects invalid dreamdex action", () => {
+    expect(() =>
+      validateExternalAgentPayload(
+        "dreamdex-mcp",
+        '{"action":"bad","pair":"SOMI/USDC"}',
+      ),
+    ).toThrow(/action/i);
+  });
+
+  it("accepts dreamdex coingecko payload", () => {
+    expect(() =>
+      validateExternalAgentPayload(
+        "dreamdex-mcp",
+        '{"action":"coingecko","id":"somnia"}',
+      ),
+    ).not.toThrow();
+  });
+
+  it("accepts briefsmith plain-text payload", () => {
+    expect(() =>
+      validateExternalAgentPayload(
+        "briefsmith",
+        "Format an executive brief from prior outputs",
+      ),
+    ).not.toThrow();
   });
 });

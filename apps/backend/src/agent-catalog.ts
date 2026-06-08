@@ -25,7 +25,7 @@ export type AgentCatalogDeps = {
   readAgent: (configId: bigint) => Promise<{
     name: string;
     lane: number;
-    capabilities: readonly `0x${string}`[];
+    capabilities?: readonly `0x${string}`[];
     costWei: bigint;
     isActive: boolean;
     suspended: boolean;
@@ -157,8 +157,8 @@ export class AgentCatalog {
 
         const external = externalById.get(String(id));
         const caps =
-          agent.capabilities.length > 0
-            ? agent.capabilities.map((c) => c.toLowerCase())
+          (agent.capabilities?.length ?? 0) > 0
+            ? agent.capabilities!.map((c) => c.toLowerCase())
             : NATIVE_CONFIG_CAPABILITIES[id]
               ? [NATIVE_CONFIG_CAPABILITIES[id].toLowerCase()]
               : [];

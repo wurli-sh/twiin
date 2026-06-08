@@ -6,6 +6,8 @@ import {
   CheckCircle2,
   Coins,
   FileText,
+  Loader2,
+  Radio,
   Scale,
   ShieldAlert,
   Sparkles,
@@ -19,14 +21,19 @@ import {
   parseReportMarkdown,
   type ReportSection,
 } from '@/lib/report-display'
+import type { AbortDetail } from '@/lib/task-result-display'
 
 type Props = {
   text: string
   spent?: string
   budget?: string
   aborted?: boolean
+  abortDetail?: AbortDetail
   taskId?: string
   executionMode?: ExecutionMode
+  publishLabel?: string
+  onPublish?: () => void
+  isPublishing?: boolean
 }
 
 const markdownComponents: Components = {
@@ -36,7 +43,9 @@ const markdownComponents: Components = {
     </h2>
   ),
   h3: ({ children }) => (
-    <h3 className="mt-3 mb-1.5 text-xs font-semibold text-foreground">{children}</h3>
+    <h3 className="mt-3 mb-1.5 border-b border-border/60 pb-1 text-[11px] font-semibold uppercase tracking-wide text-foreground first:mt-0">
+      {children}
+    </h3>
   ),
   p: ({ children }) => (
     <p className="mb-2 text-xs leading-relaxed text-foreground/85 last:mb-0">{children}</p>
@@ -127,7 +136,7 @@ function ReportSectionCard({ section, index }: { section: ReportSection; index: 
         <h4 className="text-xs font-semibold leading-snug text-foreground">{section.title}</h4>
       </div>
       {section.content ? (
-        <div className="pl-7">
+        <div className="pl-7 break-words [overflow-wrap:anywhere]">
           <ReactMarkdown components={markdownComponents}>{section.content}</ReactMarkdown>
         </div>
       ) : null}
@@ -173,20 +182,47 @@ export function TaskResultCard({
   spent,
   budget,
   aborted,
+  abortDetail,
   taskId,
   executionMode: _executionMode = 'claude',
+  publishLabel,
+  onPublish,
+  isPublishing = false,
 }: Props) {
   void _executionMode
   const modeTheme = consolePageTheme()
 
   if (aborted) {
+    const failingAgent = abortDetail?.agentName
+
     return (
       <div className="max-w-[92%] overflow-hidden rounded-lg border border-destructive/30 bg-destructive/5 shadow-soft">
         <div className="flex items-center gap-2 border-b border-destructive/20 px-3 py-2">
           <AlertCircle size={14} className="text-destructive" />
           <p className="text-xs font-semibold text-destructive">Task aborted</p>
+          {taskId && (
+            <span className="ml-auto text-[10px] text-destructive/70">Task #{taskId}</span>
+          )}
         </div>
-        <div className="px-3 py-2.5 text-xs leading-relaxed text-destructive/90">
+        <div className="space-y-2 px-3 py-2.5 text-xs leading-relaxed text-destructive/90">
+          {abortDetail?.chainReason && (
+            <p className="font-medium">{abortDetail.chainReason}</p>
+          )}
+          {abortDetail?.stepIdx != null && (
+            <p>
+              Failed at step {abortDetail.stepIdx + 1}
+              {failingAgent ? ` · ${failingAgent}` : ''}
+            </p>
+          )}
+          {abortDetail?.score != null && (
+            <p>
+              Quality score: <span className="font-semibold">{abortDetail.score}/100</span>
+              <span className="text-destructive/70"> (minimum 40 required)</span>
+            </p>
+          )}
+          {abortDetail?.ratingReason && (
+            <p className="text-destructive/80">{abortDetail.ratingReason}</p>
+          )}
           <ReactMarkdown components={markdownComponents}>{text}</ReactMarkdown>
         </div>
       </div>
@@ -262,6 +298,22 @@ export function TaskResultCard({
 
         {parsed.footnote && (
           <p className="text-[10px] leading-relaxed text-muted-foreground">{parsed.footnote}</p>
+        )}
+
+        {onPublish && publishLabel && (
+          <button
+            type="button"
+            onClick={onPublish}
+            disabled={isPublishing}
+            className="inline-flex items-center gap-1.5 rounded-md border border-primary/30 bg-primary/10 px-2.5 py-1.5 text-[11px] font-medium text-primary transition hover:bg-primary/15 disabled:opacity-60"
+          >
+            {isPublishing ? (
+              <Loader2 size={12} className="animate-spin" />
+            ) : (
+              <Radio size={12} />
+            )}
+            {isPublishing ? 'Publishing…' : publishLabel}
+          </button>
         )}
       </div>
 

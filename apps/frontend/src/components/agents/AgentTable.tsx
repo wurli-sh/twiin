@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useRef, useState, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
 import {
   ArrowRight,
@@ -10,6 +10,7 @@ import { AgentKillSwitchControl } from './AgentKillSwitchControl'
 import { AgentStatusLabel } from './AgentStatusLabel'
 import { toast } from 'sonner'
 import { TwiinAvatar } from '@/components/ui/TwiinAvatar'
+import { DropdownPanel } from '@/components/ui/DropdownPanel'
 import { cn } from '@/lib/cn'
 import { formatAgentLabel } from '@/lib/agent-name'
 import type { TwiinAgentInfo } from '@/hooks/useTwiinAgents'
@@ -23,6 +24,8 @@ type AgentTableProps = {
   onSelect: (agentId: string) => void
   onToggleKillSwitch: (agentId: bigint, current: boolean) => Promise<unknown>
   togglingId: bigint | null
+  killSwitchDialogAgentId: string | null
+  onKillSwitchDialogOpenChange: (agentId: string | null) => void
 }
 
 export function AgentTable({
@@ -30,6 +33,8 @@ export function AgentTable({
   onSelect,
   onToggleKillSwitch,
   togglingId,
+  killSwitchDialogAgentId,
+  onKillSwitchDialogOpenChange,
 }: AgentTableProps) {
   const selectedAgentId = useUIStore((s) => s.selectedAgentId)
   const [openMenuId, setOpenMenuId] = useState<string | null>(null)
@@ -40,14 +45,14 @@ export function AgentTable({
       <table className="w-full min-w-[520px] border-collapse text-left">
         <thead className="sticky top-0 z-10 border-b border-primary/20 bg-primary-bright/10">
           <tr>
-            {['Agent', 'Status', 'Wallet', 'Daily', 'Task max', 'Actions'].map((col) => (
+            {['Agent', 'Status', 'Balance', 'Daily', 'Task max', 'Actions'].map((col) => (
               <th
                 key={col || 'actions'}
                 className={cn(
                   'px-2 py-2.5 font-mono text-[10px] font-bold uppercase tracking-widest text-primary/80',
                   col === 'Agent' && 'w-[120px] max-w-[120px]',
                   col === 'Status' && 'w-28',
-                  col === 'Actions' && 'w-10',
+                  col === 'Actions' && 'w-12',
                 )}
               >
                 {col}
@@ -69,7 +74,7 @@ export function AgentTable({
                 className={cn(
                   'cursor-pointer border-b border-border/60 transition-colors hover:bg-primary-bright/15',
                   isSelected &&
-                    'border-l-[3px] border-l-primary-bright bg-primary-bright/20 shadow-[inset_0_0_0_1px_oklch(0.75_0.18_130_/_0.12)]',
+                    'bg-primary-bright/20 shadow-[inset_3px_0_0_var(--color-primary-bright),inset_0_0_0_1px_oklch(0.75_0.18_130_/_0.12)]',
                 )}
               >
                 <td className="w-[120px] max-w-[120px] px-2 py-2.5">
@@ -87,6 +92,10 @@ export function AgentTable({
                       agent={agent}
                       isToggling={isToggling}
                       onToggle={onToggleKillSwitch}
+                      dialogOpen={killSwitchDialogAgentId === idStr}
+                      onDialogOpenChange={(open) =>
+                        onKillSwitchDialogOpenChange(open ? idStr : null)
+                      }
                     />
                   </div>
                 </td>
@@ -99,7 +108,7 @@ export function AgentTable({
                 <td className="w-16 px-2 py-2.5 font-mono text-xs tabular-nums text-foreground">
                   {agent.maxPerTask}
                 </td>
-                <td className="w-10 px-2 py-2.5">
+                <td className="w-12 px-2 py-2.5">
                   <AgentActionsMenu
                     agent={agent}
                     idStr={idStr}
@@ -142,56 +151,52 @@ function AgentActionsMenu({
   onCopy,
 }: AgentActionsMenuProps) {
   const setSelectedAgentId = useUIStore((s) => s.setSelectedAgentId)
-  const menuRef = useRef<HTMLDivElement>(null)
-
-  useEffect(() => {
-    if (!isOpen) return
-    const handler = (e: MouseEvent) => {
-      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
-        onOpenChange(false)
-      }
-    }
-    document.addEventListener('mousedown', handler)
-    return () => document.removeEventListener('mousedown', handler)
-  }, [isOpen, onOpenChange])
+  const triggerRef = useRef<HTMLButtonElement>(null)
 
   return (
-    <div className="relative" ref={menuRef} onClick={(e) => e.stopPropagation()}>
+    <div onClick={(e) => e.stopPropagation()}>
       <button
+        ref={triggerRef}
         type="button"
         title="Actions"
+        aria-label="Agent actions"
+        aria-haspopup="menu"
+        aria-expanded={isOpen}
         onClick={() => onOpenChange(!isOpen)}
         className="inline-flex size-7 cursor-pointer items-center justify-center border border-border text-muted-foreground hover:bg-primary-bright/20 hover:text-foreground"
       >
         <MoreHorizontal size={14} />
       </button>
 
-      {isOpen && (
-        <div className="absolute right-0 top-full z-20 mt-1 min-w-[152px] border border-border bg-card py-1 shadow-elev">
-          <MenuItem
-            icon={<ClipboardCopy size={12} />}
-            label={isCopied ? 'Copied' : 'Copy 6551'}
-            onClick={() => void onCopy()}
-          />
-          <MenuItem
-            icon={<ExternalLink size={12} />}
-            label="Explorer"
-            href={`${EXPLORER}/address/${agent.tbaAddress}`}
-            external
-            onClick={() => onOpenChange(false)}
-          />
-          <MenuItem
-            icon={<ArrowRight size={12} />}
-            label="Open console"
-            onClick={() => {
-              setSelectedAgentId(idStr)
-              onOpenChange(false)
-            }}
-            asLink
-            to="/console"
-          />
-        </div>
-      )}
+      <DropdownPanel
+        anchorRef={triggerRef}
+        open={isOpen}
+        onClose={() => onOpenChange(false)}
+        minWidth={152}
+      >
+        <MenuItem
+          icon={<ClipboardCopy size={12} />}
+          label={isCopied ? 'Copied' : 'Copy 6551'}
+          onClick={() => void onCopy()}
+        />
+        <MenuItem
+          icon={<ExternalLink size={12} />}
+          label="Explorer"
+          href={`${EXPLORER}/address/${agent.tbaAddress}`}
+          external
+          onClick={() => onOpenChange(false)}
+        />
+        <MenuItem
+          icon={<ArrowRight size={12} />}
+          label="Open console"
+          onClick={() => {
+            setSelectedAgentId(idStr)
+            onOpenChange(false)
+          }}
+          asLink
+          to="/console"
+        />
+      </DropdownPanel>
     </div>
   )
 }
@@ -206,7 +211,7 @@ function MenuItem({
   disabled,
   asLink,
 }: {
-  icon: React.ReactNode
+  icon: ReactNode
   label: string
   onClick?: () => void
   href?: string

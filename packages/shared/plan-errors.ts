@@ -18,6 +18,8 @@ export type PlanErrorBody = {
   missingCapabilities?: string[];
   suggestedBudgetWei?: string;
   retryAfterSeconds?: number;
+  agentName?: string;
+  unhealthyConfigId?: number;
 };
 
 export class PlanError extends Error {

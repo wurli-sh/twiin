@@ -21,6 +21,8 @@ type Props = {
   overDailyCap: boolean
   dailyRemaining: number
   maxPerTaskNum: number
+  onRaiseCaps?: () => void
+  isRaisingCaps?: boolean
   modeToggleDisabled?: boolean
   agentSelectorDisabled?: boolean
   showStepsToggle?: boolean
@@ -44,6 +46,8 @@ export function ConsoleTopBar({
   overDailyCap,
   dailyRemaining,
   maxPerTaskNum,
+  onRaiseCaps,
+  isRaisingCaps = false,
   modeToggleDisabled = false,
   agentSelectorDisabled = false,
   showStepsToggle = false,
@@ -152,6 +156,8 @@ export function ConsoleTopBar({
           overDailyCap={overDailyCap}
           dailyRemaining={dailyRemaining}
           perTaskCapStt={maxPerTaskNum > 0 ? maxPerTaskNum.toFixed(2) : undefined}
+          onRaiseCaps={onRaiseCaps}
+          isRaisingCaps={isRaisingCaps}
         />
       </div>
     </div>

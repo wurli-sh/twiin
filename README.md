@@ -62,7 +62,8 @@ twiin/
 ├── apps/
 │   ├── backend/       # Hono — Claude planner, relay/rater/indexer keepers, SSE, SQLite
 │   ├── frontend/      # React 19 + Vite + wagmi — deploy, console, feeds, marketplace
-│   └── discord-bot/   # Demo external HTTP sub-agent (ECDSA-signed results)
+│   ├── docs-lens/       # docs-lens@twiin — Somnia official docs query agent
+│   └── reactivity-lens/  # reactivity-lens@twiin — OracleFeed + reactivity snapshot
 └── docs/              # Spec
 ```
 
@@ -115,7 +116,8 @@ pnpm dev:all
 # Or individually
 pnpm dev:backend
 pnpm dev:frontend
-pnpm dev:discord-bot
+pnpm dev:docs-lens
+pnpm dev:reactivity-lens
 
 # Build everything
 pnpm build
@@ -127,7 +129,8 @@ pnpm build
 pnpm compile                 # Hardhat compile
 pnpm test                    # contract tests
 pnpm deploy:somnia           # deploy to Somnia testnet
-pnpm register:discord-bot    # register demo external agent on-chain
+pnpm register:docs-lens         # register docs-lens external agent on-chain
+pnpm register:reactivity-lens   # register reactivity-lens external agent on-chain
 ```
 
 ---

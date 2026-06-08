@@ -5,6 +5,7 @@ import {
   signExternalResult,
   CAP_WEB_SCRAPE,
   CAP_WEB_SCRAPE_DISCORD,
+  CAP_DATA_SPECIALIZED,
   deriveTwiinAccount,
 } from "./helpers";
 
@@ -232,6 +233,104 @@ describe("AgentOrchestrator — external result flow", () => {
     expect(task.spentWei).to.equal(quotedCost);
   });
 
+  it("injects prior external UTF-8 outputs into downstream analysis payloads", async () => {
+    const d = await deployAll({ useMockApi: true });
+    const [, keeper, user, , externalOp] = await ethers.getSigners();
+    const chainId = (await ethers.provider.getNetwork()).chainId;
+    const mockApi = d.mockApi!;
+    const llmIface = new ethers.Interface([
+      "function inferString(string prompt,string system,bool chainOfThought,string[] allowedValues)",
+    ]);
+
+    await d.agentRegistry
+      .connect(externalOp)
+      .registerExternalAgent(
+        "narrative-lens",
+        "http://pulse.test",
+        ethers.parseEther("0.2"),
+        [CAP_DATA_SPECIALIZED],
+        { value: ethers.parseEther("5") },
+      );
+    await d.factory
+      .connect(user)
+      .deployTwiin("extanalysis", { value: ethers.parseEther("5") });
+    const agentId = 1n;
+    await d.policy.connect(user).toggleKillSwitch(agentId, false);
+
+    const acctAddr = await deriveTwiinAccount(
+      d.registry6551,
+      d.twiinAccountImpl,
+      await d.twiinAgent.getAddress(),
+      agentId,
+    );
+    const acct = await ethers.getContractAt("TwiinAccount", acctAddr);
+    const budget = ethers.parseEther("1");
+    const createCalldata = d.orchestrator.interface.encodeFunctionData(
+      "createTask",
+      [
+        agentId,
+        [
+          {
+            subAgentConfigId: 6n,
+            payload: ethers.toUtf8Bytes('{"channel":"somnia"}'),
+            maxCostWei: ethers.parseEther("0.3"),
+            timeoutSeconds: 900,
+          },
+          {
+            subAgentConfigId: 3n,
+            payload: llmIface.encodeFunctionData("inferString", [
+              "Analyze community sentiment using ONLY prior step outputs.",
+              "system",
+              false,
+              [],
+            ]),
+            maxCostWei: ethers.parseEther("0.5"),
+            timeoutSeconds: 120,
+          },
+        ],
+        budget,
+        0,
+      ],
+    );
+
+    const createTx = await acct
+      .connect(user)
+      .execute(await d.orchestrator.getAddress(), budget, createCalldata, 0);
+    const createReceipt = await createTx.wait();
+    const requestLog = createReceipt!.logs
+      .map((l) => {
+        try {
+          return d.orchestrator.interface.parseLog(l);
+        } catch {
+          return null;
+        }
+      })
+      .find((e) => e?.name === "ExternalAgentRequest");
+
+    const reqId = requestLog!.args.reqId as string;
+    const externalJson = '{"sentiment":"bullish","score":82}';
+    const result = ethers.toUtf8Bytes(externalJson);
+    const sig = await signExternalResult(
+      externalOp,
+      await d.orchestrator.getAddress(),
+      1n,
+      0,
+      reqId,
+      result,
+      chainId,
+    );
+
+    await d.orchestrator.submitExternalResult(1n, 0, result, sig);
+    await d.orchestrator.connect(keeper).finalizeExternalStep(1n, 0, 80);
+
+    const analysisPayload = await mockApi.requestPayloads(1n);
+    const decoded = llmIface.decodeFunctionData("inferString", analysisPayload);
+    const prompt = String(decoded[0]);
+    expect(prompt).to.contain("Previous step outputs:");
+    expect(prompt).to.contain("external-6");
+    expect(prompt).to.contain('"sentiment":"bullish"');
+  });
+
   it("rejected external steps slash the operator deposit", async () => {
     const d = await deployAll();
     const [, keeper, user, , externalOp] = await ethers.getSigners();
@@ -368,6 +467,30 @@ describe("AgentOrchestrator — external result flow", () => {
 });
 
 describe("AgentOrchestrator — refresh preflight", () => {
+  it("publishFeedForOwner allows agent NFT owner to publish", async () => {
+    const d = await deployAll();
+    const [, , user, attacker] = await ethers.getSigners();
+
+    await d.factory
+      .connect(user)
+      .deployTwiin("publishowner", { value: ethers.parseEther("3") });
+    const agentId = 1n;
+
+    await expect(
+      d.refreshManager
+        .connect(user)
+        .publishFeedForOwner(agentId, "health", "ok", 88, 600, 0, ethers.ZeroHash),
+    )
+      .to.emit(d.feed, "FeedPublished")
+      .withArgs(agentId, "health", "ok", 88, (value: bigint) => value > 0n);
+
+    await expect(
+      d.refreshManager
+        .connect(attacker)
+        .publishFeedForOwner(agentId, "health", "bad", 50, 600, 0, ethers.ZeroHash),
+    ).to.be.revertedWithCustomError(d.refreshManager, "NotAllowed");
+  });
+
   it("refreshFromTemplateByKeeper rejects non-keeper", async () => {
     const d = await deployAll();
     const [, , attacker] = await ethers.getSigners();

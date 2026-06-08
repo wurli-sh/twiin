@@ -33,7 +33,12 @@ import {
   requestTrustlessPreflight,
   isTrustlessBudgetTooLowError,
 } from '@/lib/trustless-api'
-import { maxTaskBudgetStt, perTaskCapStt } from '@/lib/agent-budget'
+import {
+  getLowSignalSuggestions,
+  getMaxPromptBudgetStt,
+  suggestedConsoleBudgetStt,
+  type ConsolePromptDef,
+} from '@twiin/shared'
 import type { ExecutionMode } from '@/config/features'
 import { consolePageTheme } from '@/lib/execution-mode-theme'
 import { cn } from '@/lib/cn'
@@ -47,19 +52,19 @@ import {
   getCurrentTurnExecution,
   type SessionEntry,
 } from '@/lib/console-session'
-import { resolveTaskReportText } from '@/lib/task-result-display'
-import { TaskState } from '@/config/contracts'
+import {
+  buildAbortResultText,
+  resolveAbortDetail,
+  resolveTaskReportText,
+} from '@/lib/task-result-display'
+import type { StreamEvent } from '@/hooks/useTaskStream'
 import type { ChainTask, TaskStep } from '@/hooks/useTaskDetail'
+import { TaskState } from '@/config/contracts'
 import { somniaTestnet } from '@/config/chains'
 import { toast } from 'sonner'
 
-const PLAN_FETCH_TIMEOUT_MS = 45_000
-
-const LOW_SIGNAL_PROMPT_SUGGESTIONS = [
-  'Fetch Somnia ecosystem stats: price, 24h change, market cap, and 24h volume.',
-  'Research dreamDEX and tell me whether providing liquidity there is a good idea, including risks, opportunities, and any missing data.',
-  'Fetch current Somnia market sentiment and summarize the price, 24h change, market cap, and 24h volume.',
-]
+const PLAN_FETCH_TIMEOUT_MS = 120_000
+const PLAN_FETCH_TIMEOUT_SECS = PLAN_FETCH_TIMEOUT_MS / 1000
 
 function getLowSignalPromptNudge(rawInput: string): string | null {
   const trimmed = rawInput.trim()
@@ -86,7 +91,7 @@ function getLowSignalPromptNudge(rawInput: string): string | null {
   if (!casualOnly && !punctuationOnly && !repeatedNoise) return null
   if (words.length > 4 || trimmed.length > 24) return null
 
-  return `That prompt is too vague to plan. Maybe try: ${LOW_SIGNAL_PROMPT_SUGGESTIONS.join(' • ')}`
+  return `That prompt is too vague to plan. Maybe try: ${getLowSignalSuggestions().join(' • ')}`
 }
 
 function appendResultForTask(
@@ -96,6 +101,7 @@ function appendResultForTask(
   chainSteps: TaskStep[],
   rawResult: string | undefined,
   abortReason: string | undefined,
+  events: StreamEvent[],
 ): SessionEntry[] {
   if (entries.some((e) => e.kind === 'result' && e.taskId === taskId)) {
     return entries
@@ -106,16 +112,18 @@ function appendResultForTask(
   const isAborted = chainTask.state === TaskState.Aborted
 
   if (isAborted) {
+    const abortDetail = resolveAbortDetail(events, chainSteps, abortReason)
     return [
       ...entries,
       {
         id: createEntryId(),
         kind: 'result',
         taskId,
-        text: abortReason ?? 'Task aborted',
+        text: buildAbortResultText(abortDetail),
         spent: Number(chainTask.spent).toFixed(4),
         budget: Number(chainTask.budget).toFixed(4),
         aborted: true,
+        abortDetail,
       },
     ]
   }
@@ -143,11 +151,10 @@ export function ConsolePage() {
   const selectedAgentId = useUIStore((s) => s.selectedAgentId)
   const setSelectedAgentId = useUIStore((s) => s.setSelectedAgentId)
 
-  const [sessionEntries, setSessionEntries] = useState<SessionEntry[]>(() =>
-    loadPersistedSession(selectedAgentId ?? agents[0]?.id.toString() ?? null),
-  )
+  const [sessionEntries, setSessionEntries] = useState<SessionEntry[]>([])
+  const [sessionRestored, setSessionRestored] = useState(false)
   const [goal, setGoal] = useState('')
-  const [budgetStt, setBudgetStt] = useState('1')
+  const [budgetStt, setBudgetStt] = useState('4.5')
   const [planMismatch, setPlanMismatch] = useState<PlanBudgetMismatch | null>(null)
   const [isPlanning, setIsPlanning] = useState(false)
   const [isApproving, setIsApproving] = useState(false)
@@ -200,6 +207,7 @@ export function ConsolePage() {
   const composerLocked =
     isPlanning ||
     isApproving ||
+    isRaisingCaps ||
     hasPendingPlan ||
     Boolean(activeTaskId && taskRunning) ||
     !agentId ||
@@ -244,6 +252,7 @@ export function ConsolePage() {
           e.id === planEntryId && e.kind === 'plan' ? { ...e, status } : e,
         ),
       )
+      if (status !== 'pending') clearPersistedSession()
     },
     [],
   )
@@ -254,6 +263,13 @@ export function ConsolePage() {
     )
     if (terminal) setDetailVersion((v) => v + 1)
   }, [events])
+
+  useEffect(() => {
+    if (sessionRestored || !agentId) return
+    const persisted = loadPersistedSession(agentId)
+    if (persisted.length > 0) setSessionEntries(persisted)
+    setSessionRestored(true)
+  }, [agentId, sessionRestored])
 
   useEffect(() => {
     persistSession(agentId, sessionEntries)
@@ -267,11 +283,7 @@ export function ConsolePage() {
 
   useEffect(() => {
     if (!agent || sessionEntries.length > 0) return
-    const affordable = maxTaskBudgetStt(agent, executionMode)
-    const cap = perTaskCapStt(agent, executionMode)
-    if (affordable > 0) {
-      setBudgetStt(Math.min(affordable, cap).toFixed(2))
-    }
+    setBudgetStt(suggestedConsoleBudgetStt(agent))
   }, [agent?.id.toString(), sessionEntries.length, executionMode])
 
   useEffect(() => {
@@ -292,6 +304,7 @@ export function ConsolePage() {
         chainSteps,
         rawResult,
         streamedAbortReason,
+        events,
       ),
     )
   }, [
@@ -380,21 +393,29 @@ export function ConsolePage() {
         appendEntry({
           id: createEntryId(),
           kind: 'error',
-          text: 'Planning timed out after 45s. Try again.',
+          text: `Planning timed out after ${PLAN_FETCH_TIMEOUT_SECS}s. Try again.`,
         })
-        toast.error('Planning timed out — try again')
+        toast.error(`Planning timed out after ${PLAN_FETCH_TIMEOUT_SECS}s — try again`)
       } else if (isPlanOverBudgetError(e)) {
         setPlanMismatch({ estimatedStt: e.estimatedStt, budgetStt: e.budgetStt })
       } else if (isPlanNoAgentError(e)) {
+        const agentHint = e.agentName
+          ? `${e.agentName}${e.unhealthyConfigId != null ? ` (configId ${e.unhealthyConfigId})` : ''}`
+          : null
         appendEntry({
           id: createEntryId(),
           kind: 'error',
-          text:
-            e.missingCapabilities?.length
+          text: agentHint
+            ? `${e.message} Start it with pnpm dev:agents (or deploy to a public URL the backend can reach).`
+            : e.missingCapabilities?.length
               ? `No capable agent available (${e.missingCapabilities.join(', ')}). Register an external agent or raise budget.`
               : e.message,
         })
-        toast.error('No capable agent available for this goal')
+        toast.error(
+          agentHint
+            ? `External agent offline: ${agentHint}`
+            : 'No capable agent available for this goal',
+        )
       } else if (isPlanUnavailableError(e)) {
         appendEntry({
           id: createEntryId(),
@@ -523,20 +544,8 @@ export function ConsolePage() {
       toast.error('Enter a valid budget in STT')
       return
     }
-    const maxPerTask = Number(
-      executionMode === 'trustless' ? agent.maxPerTaskTrustless : agent.maxPerTask,
-    )
-    if (maxPerTask > 0 && budgetNum > maxPerTask) {
-      const label =
-        executionMode === 'trustless' ? agent.maxPerTaskTrustless : agent.maxPerTask
-      toast.error(`Budget exceeds per-task cap (${label} STT). Lower budget or update policy.`)
-      return
-    }
-    const dailyLeft = Math.max(0, Number(agent.dailyCap) - Number(agent.dailySpent))
-    if (dailyLeft > 0 && budgetNum > dailyLeft) {
-      toast.error(`Budget exceeds daily cap remaining (${dailyLeft.toFixed(2)} STT).`)
-      return
-    }
+    const policyReady = await ensurePolicyCapsForBudget(budgetNum)
+    if (!policyReady) return
     if (budgetNum > Number(agent.tbaBalance)) {
       toast.error(`6551 wallet only has ${agent.tbaBalance} STT. Fund the agent or lower budget.`)
       return
@@ -574,6 +583,7 @@ export function ConsolePage() {
           chainSteps,
           rawResult,
           streamedAbortReason,
+          events,
         ),
       )
       setActiveTaskId(null)
@@ -609,20 +619,32 @@ export function ConsolePage() {
     }
   }
 
-  async function handleRaiseCapsAndRetry(estimatedStt: number) {
-    if (!agent) return
-    const taskCap = Math.ceil(estimatedStt * 10) / 10 + 0.5
+  async function ensurePolicyCapsForBudget(budgetNum: number): Promise<boolean> {
+    if (!agent) return false
+
+    const maxPerTask = Number(
+      executionMode === 'trustless' ? agent.maxPerTaskTrustless : agent.maxPerTask,
+    )
+    const dailyLeft = Math.max(0, Number(agent.dailyCap) - Number(agent.dailySpent))
+    const needsRaise =
+      (maxPerTask > 0 && budgetNum > maxPerTask) ||
+      (dailyLeft > 0 && budgetNum > dailyLeft) ||
+      (dailyLeft <= 0 && budgetNum > 0)
+
+    if (!needsRaise) return true
+
+    const taskCap = Math.ceil(budgetNum * 10) / 10 + 0.5
     const dailyCap = Math.max(taskCap * 2, 5)
-    const nextBudget = taskCap.toFixed(1)
 
     if (Number(agent.tbaBalance) < taskCap) {
       toast.error(`Fund the 6551 wallet with at least ${taskCap.toFixed(1)} STT first (Agents page).`)
-      return
+      return false
     }
 
     setIsRaisingCaps(true)
     try {
-      const trustlessCap = executionMode === 'trustless' ? taskCap : Number(agent.maxPerTaskTrustless)
+      const trustlessCap =
+        executionMode === 'trustless' ? taskCap : Number(agent.maxPerTaskTrustless)
       await updatePolicy({
         agentId: agent.id,
         dailyCapStt: dailyCap.toFixed(1),
@@ -632,21 +654,31 @@ export function ConsolePage() {
       })
       toast.success(
         executionMode === 'trustless'
-          ? `Policy updated — ${taskCap.toFixed(1)} STT per trustless task`
-          : `Policy updated — ${taskCap.toFixed(1)} STT per task`,
+          ? `Policy raised — ${taskCap.toFixed(1)} STT per trustless task`
+          : `Policy raised — ${taskCap.toFixed(1)} STT per task`,
       )
       await refetchAgents()
-      setBudgetStt(nextBudget)
-      const lastUser = [...sessionEntries].reverse().find((e) => e.kind === 'user')
-      const trimmed = lastUser?.kind === 'user' ? lastUser.text : goal.trim()
-      if (trimmed) {
-        if (executionMode === 'trustless') await runTrustless(trimmed, nextBudget)
-        else await runPlan(trimmed, nextBudget)
-      }
+      return true
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Policy update failed')
+      return false
     } finally {
       setIsRaisingCaps(false)
+    }
+  }
+
+  async function handleRaiseCapsAndRetry(estimatedStt: number) {
+    const taskCap = Math.ceil(estimatedStt * 10) / 10 + 0.5
+    const nextBudget = taskCap.toFixed(1)
+    const policyReady = await ensurePolicyCapsForBudget(estimatedStt)
+    if (!policyReady) return
+
+    setBudgetStt(nextBudget)
+    const lastUser = [...sessionEntries].reverse().find((e) => e.kind === 'user')
+    const trimmed = lastUser?.kind === 'user' ? lastUser.text : goal.trim()
+    if (trimmed) {
+      if (executionMode === 'trustless') await runTrustless(trimmed, nextBudget)
+      else await runPlan(trimmed, nextBudget)
     }
   }
 
@@ -710,10 +742,19 @@ export function ConsolePage() {
     setMobileExecutionPanelOpen((open) => !open)
   }
 
-  function handlePromptSelect(prompt: string) {
-    const match = prompt.match(/Budget:\s*([\d.]+)\s*STT/i)
-    if (match) setBudgetStt(match[1])
-    setGoal(prompt.replace(/\.\s*Budget:.*/i, '').trim())
+  async function handlePromptSelect(prompt: ConsolePromptDef) {
+    setGoal(prompt.goal)
+    const budgetNum = Number(prompt.budgetStt)
+    if (agent) {
+      const policyReady = await ensurePolicyCapsForBudget(budgetNum)
+      if (!policyReady) return
+    }
+    setBudgetStt(prompt.budgetStt)
+  }
+
+  async function handleRaiseCapsFromWarning() {
+    if (!agent || Number.isNaN(budgetNum) || budgetNum <= 0) return
+    await ensurePolicyCapsForBudget(budgetNum)
   }
 
   if (!isConnected) {
@@ -746,6 +787,10 @@ export function ConsolePage() {
           overDailyCap={Boolean(overDailyCap)}
           dailyRemaining={dailyRemaining}
           maxPerTaskNum={maxPerTaskNum}
+          onRaiseCaps={
+            agent && (overPerTaskCap || overDailyCap) ? handleRaiseCapsFromWarning : undefined
+          }
+          isRaisingCaps={isRaisingCaps}
           modeToggleDisabled={modeToggleDisabled}
           agentSelectorDisabled={isPlanning || isApproving}
           showStepsToggle={hasActivity}
@@ -822,6 +867,12 @@ export function ConsolePage() {
                 disabled={composerLocked || isPlanning}
                 onSelect={handlePromptSelect}
               />
+              {agent && Number(agent.maxPerTask) < getMaxPromptBudgetStt() && (
+                <p className="mt-2 text-center text-[10px] text-warning">
+                  Suggested prompts need up to {getMaxPromptBudgetStt()} STT per task — raise max per
+                  task on the Agents page.
+                </p>
+              )}
             </motion.div>
           </div>
         ) : (

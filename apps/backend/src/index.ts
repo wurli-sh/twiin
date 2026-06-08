@@ -40,10 +40,13 @@ async function bootstrap(): Promise<void> {
     if (env.ENABLE_TRUSTLESS_JANICE) {
       startTrustlessResumeKeeper();
     }
+    console.log("[twiin-backend] external-agent bootstrap started");
     void createExternalAgentBootstrap()
       .run()
-      .then(() => {
-        console.log("[twiin-backend] external-agent bootstrap complete");
+      .then((summary) => {
+        console.log(
+          `[twiin-backend] external-agent bootstrap complete (${summary.verified}/${summary.total} verified)`,
+        );
         startExternalHealthRefresh();
       })
       .catch((error) => {

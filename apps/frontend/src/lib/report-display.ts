@@ -1,3 +1,5 @@
+import { formatReportSectionContent } from '@/lib/agent-output-display'
+
 export type ReportSection = {
   title: string
   content: string
@@ -99,15 +101,10 @@ export function parseReportMarkdown(text: string): ParsedReport {
         title = pick.title.replace(/^Section\s+\d+:\s*/i, '').trim()
       }
     }
-    return { title, sections, footnote, isMetricTable: false }
+    return finalizeSections(title, sections, footnote)
   }
 
-    return {
-      title,
-      sections: [{ title: '', content: working }],
-      footnote,
-      isMetricTable: false,
-    }
+    return finalizeSections(title, [{ title: '', content: working }], footnote)
   }
 
   const sections = blocks.map((block) => {
@@ -132,7 +129,28 @@ export function parseReportMarkdown(text: string): ParsedReport {
     }
   }
 
-  return { title, sections, footnote, isMetricTable: false }
+  return {
+    title,
+    sections: sections.map((section) => ({
+      ...section,
+      content: formatReportSectionContent(section.content, section.title),
+    })),
+    footnote,
+    isMetricTable: false,
+  }
+}
+
+function finalizeSections(
+  title: string,
+  sections: ReportSection[],
+  footnote?: string,
+): ParsedReport {
+  const formattedSections = sections.map((section) => ({
+    ...section,
+    content: formatReportSectionContent(section.content, section.title),
+  }))
+
+  return { title, sections: formattedSections, footnote, isMetricTable: false }
 }
 
 export function budgetUsagePercent(spent: string, budget: string): number {

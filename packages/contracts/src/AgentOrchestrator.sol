@@ -77,6 +77,8 @@ contract AgentOrchestrator is
     uint256 public constant JANICE_CONFIG_ID         = 0;
     uint256 private constant ANALYSIS_CONFIG_ID      = 3;
     uint256 private constant REPORTER_CONFIG_ID      = 4;
+    uint256 private constant EXTERNAL_MIN_CONFIG_ID  = 6;
+    uint256 private constant MAX_PRIOR_CONTEXT_CHARS = 4096;
 
     bytes32 public constant CAP_ONCHAIN_EXECUTE = keccak256("onchain.execute");
     uint8   private constant RESPONSE_STATUS_SUCCESS = uint8(ResponseStatus.Success);
@@ -520,6 +522,9 @@ contract AgentOrchestrator is
         if (step.subAgentConfigId == 1) return "web-intel";
         if (step.subAgentConfigId == ANALYSIS_CONFIG_ID) return "analysis";
         if (step.subAgentConfigId == REPORTER_CONFIG_ID) return "reporter";
+        if (step.subAgentConfigId >= EXTERNAL_MIN_CONFIG_ID) {
+            return string.concat("external-", _uintToString(step.subAgentConfigId));
+        }
 
         bytes4 selector = _selectorOf(step.payload);
         bytes memory argsData = _payloadArgs(step.payload);
@@ -565,7 +570,41 @@ contract AgentOrchestrator is
             return abi.decode(resultData, (string));
         }
 
+        if (step.subAgentConfigId >= EXTERNAL_MIN_CONFIG_ID) {
+            return _decodeExternalStepResult(resultData);
+        }
+
         return "";
+    }
+
+    function _decodeExternalStepResult(bytes memory resultData) internal pure returns (string memory) {
+        if (resultData.length == 0) return "";
+        if (!_isPrintableUtf8(resultData)) return "";
+        return _truncateForPriorContext(string(resultData));
+    }
+
+    function _isPrintableUtf8(bytes memory data) internal pure returns (bool) {
+        if (data.length == 0) return false;
+        uint256 printable;
+        for (uint256 i = 0; i < data.length; i++) {
+            bytes1 b = data[i];
+            if (b == 0x00) return false;
+            if (uint8(b) == 9 || uint8(b) == 10 || uint8(b) == 13 || uint8(b) >= 32) {
+                printable++;
+            }
+        }
+        return printable * 10 >= data.length * 9;
+    }
+
+    function _truncateForPriorContext(string memory text) internal pure returns (string memory) {
+        bytes memory raw = bytes(text);
+        if (raw.length <= MAX_PRIOR_CONTEXT_CHARS) return text;
+
+        bytes memory truncated = new bytes(MAX_PRIOR_CONTEXT_CHARS);
+        for (uint256 i = 0; i < MAX_PRIOR_CONTEXT_CHARS; i++) {
+            truncated[i] = raw[i];
+        }
+        return string.concat(string(truncated), "...");
     }
 
     function _appendContextToLlmPayload(

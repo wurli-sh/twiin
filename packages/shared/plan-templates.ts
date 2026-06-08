@@ -1,7 +1,8 @@
 import { NativeConfigId } from "./constants";
 
 export type PlanStepTemplate = {
-  configId: number;
+  configId?: number;
+  agentName?: string;
   payload: string;
   maxCostWei: string;
   timeoutSeconds: number;
@@ -69,7 +70,6 @@ export function buildPriceStatsTemplate(goal: string): PlanTemplate {
         payload: JSON.stringify({
           url: "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd&include_market_cap=true&include_24hr_vol=true&include_24hr_change=true",
           selector: "bitcoin.usd",
-          decimals: 8,
         }),
         maxCostWei: "0",
         timeoutSeconds: 90,

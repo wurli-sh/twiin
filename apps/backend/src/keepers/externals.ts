@@ -3,15 +3,22 @@ import { publicClient } from "../clients";
 import { addresses, defaultStartBlock } from "../contracts";
 import {
   deactivateExternalAgent,
+  getCursor,
   getExternalAgent,
   listExternalAgents,
+  setCursor,
   upsertExternalAgent,
 } from "../db";
 import { env } from "../env";
 import { verifyExternalAgentCacheEntry } from "./relay";
 
 const CHUNK = 500n;
-const HEALTH_REFRESH_MS = 5 * 60 * 1000;
+const EXTERNAL_REGISTRY_CURSOR = "externals-registry";
+const FAST_FORWARD_LAG = 10_000n;
+const FAST_FORWARD_TAIL = 500n;
+const STARTUP_VERIFY_INTERVAL_MS = 5_000;
+const STARTUP_VERIFY_MAX_ATTEMPTS = 24;
+const UNVERIFIED_REFRESH_MS = 30_000;
 
 const externalAgentRegisteredEvent = parseAbiItem(
   "event ExternalAgentRegistered(uint256 indexed configId, address indexed registrant, string endpointUrl, bytes32 endpointHash, bytes32[] caps, uint256 costWei)",
@@ -42,13 +49,32 @@ type ExternalBootstrapDeps = {
   upsertExternalAgent: typeof upsertExternalAgent;
   deactivateExternalAgent: typeof deactivateExternalAgent;
   listExternalAgents: typeof listExternalAgents;
+  getCursor: typeof getCursor;
+  setCursor: typeof setCursor;
+  verifyExternalAgent: typeof verifyExternalAgentCacheEntry;
+  sleep: (ms: number) => Promise<void>;
+  startupVerifyIntervalMs: number;
+  startupVerifyMaxAttempts: number;
   logger: Pick<Console, "log" | "warn" | "error">;
 };
 
-export function createExternalAgentBootstrap(
+export type ExternalVerificationSummary = {
+  total: number;
+  verified: number;
+  failed: number;
+};
+
+export async function verifyExternalAgentsNow(
   overrides: Partial<ExternalBootstrapDeps> = {},
-) {
-  const deps: ExternalBootstrapDeps = {
+): Promise<ExternalVerificationSummary> {
+  const deps = createExternalDeps(overrides);
+  return runStartupVerification(deps);
+}
+
+function createExternalDeps(
+  overrides: Partial<ExternalBootstrapDeps> = {},
+): ExternalBootstrapDeps {
+  return {
     getBlockNumber: () => publicClient.getBlockNumber(),
     getLogs: (args) =>
       publicClient.getLogs(args) as Promise<Array<{ args: RegistryLogArgs }>>,
@@ -58,22 +84,40 @@ export function createExternalAgentBootstrap(
     upsertExternalAgent,
     deactivateExternalAgent,
     listExternalAgents,
+    getCursor,
+    setCursor,
+    verifyExternalAgent: verifyExternalAgentCacheEntry,
+    sleep,
+    startupVerifyIntervalMs: STARTUP_VERIFY_INTERVAL_MS,
+    startupVerifyMaxAttempts: STARTUP_VERIFY_MAX_ATTEMPTS,
     logger: console,
     ...overrides,
   };
+}
+
+export function createExternalAgentBootstrap(
+  overrides: Partial<ExternalBootstrapDeps> = {},
+) {
+  const deps = createExternalDeps(overrides);
 
   return {
-    async run(): Promise<void> {
-      const latest = await deps.getBlockNumber();
-      let from = deps.startBlock;
+    async run(): Promise<ExternalVerificationSummary> {
+      deps.logger.log("[externals] verifying external agents from cache...");
+      const summary = await runStartupVerification(deps);
 
-      while (from <= latest) {
-        const to = from + CHUNK < latest ? from + CHUNK : latest;
-        await processRange(deps, from, to);
-        from = to + 1n;
-      }
+      void syncRegistryFromChain(deps)
+        .then(async () => {
+          deps.logger.log("[externals] registry sync complete, re-checking agents...");
+          const after = await runStartupVerification(deps);
+          deps.logger.log(
+            `[externals] post-sync verification: ${after.verified}/${after.total} verified`,
+          );
+        })
+        .catch((error) => {
+          deps.logger.error("[externals] registry sync failed:", error);
+        });
 
-      await verifyUnverifiedAgents(deps);
+      return summary;
     },
   };
 }
@@ -81,41 +125,126 @@ export function createExternalAgentBootstrap(
 export function startExternalHealthRefresh(
   overrides: Partial<ExternalBootstrapDeps> = {},
 ): void {
-  const bootstrap = createExternalAgentBootstrap(overrides);
-  const tick = async () => {
+  const deps = createExternalDeps(overrides);
+
+  const tickUnverified = async () => {
     try {
-      const agents = await listExternalAgents({ activeOnly: true });
-      for (const agent of agents) {
-        const ok = await verifyExternalAgentCacheEntry(agent.config_id);
-        if (!ok) {
-          console.warn(
-            `[externals] health refresh failed for config=${agent.config_id}`,
-          );
-        }
-      }
+      await verifyPendingExternalAgents(deps, "health refresh");
     } catch (error) {
-      console.error("[externals] health refresh error:", error);
+      deps.logger.error("[externals] health refresh error:", error);
     }
   };
 
-  void tick();
+  void tickUnverified();
   setInterval(() => {
-    void tick();
-  }, HEALTH_REFRESH_MS);
+    void tickUnverified();
+  }, UNVERIFIED_REFRESH_MS);
 }
 
-async function verifyUnverifiedAgents(
+async function runStartupVerification(
   deps: ExternalBootstrapDeps,
+): Promise<ExternalVerificationSummary> {
+  for (let attempt = 1; attempt <= deps.startupVerifyMaxAttempts; attempt++) {
+    const activeAgents = await deps.listExternalAgents({ activeOnly: true });
+    const pending = activeAgents.filter((agent) => agent.is_verified !== 1);
+
+    if (pending.length === 0) {
+      deps.logger.log(
+        `[externals] startup verification complete: ${activeAgents.length}/${activeAgents.length} verified`,
+      );
+      return {
+        total: activeAgents.length,
+        verified: activeAgents.length,
+        failed: 0,
+      };
+    }
+
+    deps.logger.log(
+      `[externals] verifying ${pending.length} external agent(s) at startup (attempt ${attempt}/${deps.startupVerifyMaxAttempts})`,
+    );
+
+    await verifyPendingExternalAgents(deps, "startup");
+
+    const remaining = (await deps.listExternalAgents({ activeOnly: true })).filter(
+      (agent) => agent.is_verified !== 1,
+    );
+    if (remaining.length === 0) {
+      deps.logger.log(
+        `[externals] startup verification complete: ${activeAgents.length}/${activeAgents.length} verified`,
+      );
+      return {
+        total: activeAgents.length,
+        verified: activeAgents.length,
+        failed: 0,
+      };
+    }
+
+    if (attempt < deps.startupVerifyMaxAttempts) {
+      await deps.sleep(deps.startupVerifyIntervalMs);
+    }
+  }
+
+  const activeAgents = await deps.listExternalAgents({ activeOnly: true });
+  const remaining = activeAgents.filter((agent) => agent.is_verified !== 1);
+  deps.logger.warn(
+    `[externals] startup verification incomplete: ${remaining.length}/${activeAgents.length} still unverified`,
+  );
+
+  return {
+    total: activeAgents.length,
+    verified: activeAgents.length - remaining.length,
+    failed: remaining.length,
+  };
+}
+
+async function verifyPendingExternalAgents(
+  deps: ExternalBootstrapDeps,
+  context: "startup" | "health refresh",
 ): Promise<void> {
   const activeAgents = await deps.listExternalAgents({ activeOnly: true });
-  for (const agent of activeAgents) {
-    if (agent.is_verified === 1) continue;
-    const ok = await verifyExternalAgentCacheEntry(agent.config_id);
-    if (!ok) {
-      deps.logger.warn(
-        `[externals] boot verification failed for config=${agent.config_id}`,
+  const pending = activeAgents.filter((agent) => agent.is_verified !== 1);
+
+  for (const agent of pending) {
+    const ok = await deps.verifyExternalAgent(agent.config_id);
+    if (ok) {
+      deps.logger.log(
+        `[externals] verified config=${agent.config_id} ${agent.endpoint_url}`,
       );
+      continue;
     }
+
+    const row = await deps.getExternalAgent(agent.config_id);
+    deps.logger.warn(
+      `[externals] ${context} verify failed config=${agent.config_id} ${agent.endpoint_url} error=${row?.last_error ?? "unknown"}`,
+    );
+  }
+}
+
+async function syncRegistryFromChain(deps: ExternalBootstrapDeps): Promise<void> {
+  deps.logger.log("[externals] syncing registry from chain...");
+  const latest = await deps.getBlockNumber();
+  const stored = await deps.getCursor(EXTERNAL_REGISTRY_CURSOR);
+  let from =
+    stored === 0n && deps.startBlock > 0n ? deps.startBlock : stored;
+  if (from === 0n) from = deps.startBlock;
+
+  const lag = latest > from ? latest - from : 0n;
+  if (lag > FAST_FORWARD_LAG) {
+    const fastForwardTo =
+      latest > FAST_FORWARD_TAIL ? latest - FAST_FORWARD_TAIL : 0n;
+    if (fastForwardTo > from) {
+      deps.logger.warn(
+        `[externals] registry lag ${lag} blocks; fast-forwarding cursor to ${fastForwardTo}`,
+      );
+      from = fastForwardTo;
+    }
+  }
+
+  while (from <= latest) {
+    const to = from + CHUNK < latest ? from + CHUNK : latest;
+    await processRange(deps, from, to);
+    await deps.setCursor(EXTERNAL_REGISTRY_CURSOR, to + 1n);
+    from = to + 1n;
   }
 }
 
@@ -180,4 +309,8 @@ function normalizeCapabilities(
   return Array.isArray(caps)
     ? caps.filter((value): value is `0x${string}` => typeof value === "string")
     : [];
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }

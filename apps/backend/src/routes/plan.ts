@@ -6,12 +6,21 @@ import { encodeFunctionData, formatEther, parseEther } from "viem";
 import {
   AgentLane,
   AgentOrchestratorAbi,
+  buildConfigIdByName,
   buildGenericTemplates,
+  buildConsoleGoalTemplates,
   encodeStepPayload,
+  isChainActivityGoal,
+  isEcosystemHealthGoal,
+  isLpRiskOracleGoal,
+  isReceiptAuditGoal,
   NativeConfigId,
   PlanError,
   PlanErrorCode,
   PlanMode,
+  MAX_CONSOLE_TEMPLATE_STEPS,
+  resolveTemplateSteps,
+  validateExternalAgentPayload,
 } from "@twiin/shared";
 import { z } from "zod";
 import type { IncomingMessage } from "http";
@@ -35,6 +44,8 @@ import {
   parsePlannerStepsFromToolInput,
   parsePlannerStepsJson,
 } from "../planner-json";
+import { verifyExternalAgentsNow } from "../keepers/externals";
+import { verifyExternalAgentCacheEntry } from "../keepers/relay";
 import { logTaskApi, logTaskTimeline } from "../task-log";
 
 const rateWindows = new Map<string, { count: number; resetAt: number }>();
@@ -90,6 +101,7 @@ type AgentRecord = {
   suspended: boolean;
   name: string;
   costWei: bigint;
+  capabilities?: readonly `0x${string}`[];
 };
 
 type PlannerContentBlock = {
@@ -131,7 +143,6 @@ const NATIVE_AGENT_LABELS: Record<number, string> = {
 };
 
 const FALLBACK_COST_LINES = [
-  `- configId ${NativeConfigId.WEB_INTEL} (web-intel@twiin): exact authorization ~0.33 STT`,
   `- configId ${NativeConfigId.ORACLE} (somnia-oracle@twiin): exact authorization ~0.12 STT`,
   `- configId ${NativeConfigId.ANALYSIS} (analysis-bot@twiin): exact authorization ~0.24 STT`,
   `- configId ${NativeConfigId.REPORTER} (reporter-bot@twiin): exact authorization ~0.24 STT`,
@@ -149,7 +160,7 @@ const SUBMIT_PLAN_TOOL = {
       steps: {
         type: "array",
         minItems: 1,
-        maxItems: 6,
+        maxItems: MAX_CONSOLE_TEMPLATE_STEPS,
         items: {
           type: "object",
           properties: {
@@ -168,7 +179,8 @@ const SUBMIT_PLAN_TOOL = {
 
 const AGENT_CONTEXT_HEADER = `
 Rules:
-- Max 6 steps total.
+- Max ${MAX_CONSOLE_TEMPLATE_STEPS} steps total — plans with more are rejected.
+- Use the fewest steps that still corroborate; never pad with redundant agents.
 - Steps run sequentially; each step can reference "previous results" in its payload.
 - timeoutSeconds must be between 60 and 600.
 - maxCostWei will be normalized server-side to the exact contract-required authorization. Still return a reasonable decimal wei string.
@@ -220,20 +232,45 @@ Call submit_plan with steps shaped as:
 {"steps":[{"configId": number, "payload": "string", "maxCostWei": "decimal string", "timeoutSeconds": number}]}`;
 }
 
+async function estimateTemplateCost(
+  deps: PlanRouterDeps,
+  steps: StepSpec[],
+): Promise<bigint> {
+  const requestDeposit = await deps.readRequestDeposit();
+  let total = 0n;
+  for (const step of steps) {
+    const agent = await deps.readAgent(BigInt(step.configId));
+    const isNative = agent.lane === AgentLane.SomniaNative;
+    total += isNative
+      ? requestDeposit + agent.costWei * 3n
+      : agent.costWei;
+  }
+  return total;
+}
+
 const AGENT_CONTEXT = `
 Available sub-agents (use their configId):
-- configId ${NativeConfigId.WEB_INTEL} (web-intel@twiin): Scrapes a web page and extracts data via LLM. payload=JSON {"url":"https://...","prompt":"what to extract"}.
-  For a numeric field add "output":"number" (optional "min"/"max" as 0 to disable bounds). Only use when you know the exact HTTPS URL.
+- Do NOT use configId ${NativeConfigId.WEB_INTEL} (web-intel@twiin) in any plan — web scraping is disabled for planning.
 - configId ${NativeConfigId.ORACLE} (somnia-oracle@twiin): Fetches a JSON API with a DIRECT endpoint (not search/discovery).
-  payload=JSON {"url":"https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd","selector":"bitcoin.usd","decimals":8} for prices (selector MUST be a leaf path like coin.usd, never just the coin id).
+  payload=JSON {"url":"https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd","selector":"bitcoin.usd"} for prices (selector MUST be a leaf path like coin.usd, never just the coin id). Do not use decimals with CoinGecko — fetchString returns the API value directly.
   NEVER use /search? URLs or selectors like coins.0.id — they fail when the API returns empty results.
 - configId ${NativeConfigId.ANALYSIS} (analysis-bot@twiin): Analyzes text/data, produces insights. payload=plain text instruction
 - configId ${NativeConfigId.REPORTER} (reporter-bot@twiin): Writes a final report from data. payload=plain text instruction
 
-For research / "should I LP" / unknown-token goals without a known CoinGecko id: use analysis-bot then reporter-bot (2 steps). Do NOT invent CoinGecko search URLs.
-If the user did not provide a concrete HTTPS URL, do not invent one. Prefer analysis/reporter or a verified external agent instead.
+Console external agents (resolve by name in templates; use exact configId from catalog when planning manually):
+- docs-lens: Official Somnia docs query (question, docPath). Uses docs.somnia.network/{docPath}.md?ask= API.
+  Valid docPath examples: "readme" (default, cross-doc), "developer/building-dapps", "developer/building-dapps/example-applications/building-a-simple-dex-on-somnia".
+  NEVER use invented paths like "defi" or "agents" — they 404 and hang with ?ask=.
+- reactivity-lens: Somnia reactivity / OracleFeed snapshot (agentId, topic, lookbackBlocks).
+- dreamdex-mcp: dreamDEX / DexScreener market data (pair, action). Actions: orderbook, pairs, snapshot, coingecko (external CoinGecko price fetch — prefer over somnia-oracle for LP corroboration).
+- onchain-lens: Somnia RPC block/tx activity snapshot.
+- receipt-auditor: Somnia agent receipt forensics (requestId or "latest").
+- briefsmith: Publish-ready executive brief from prior step outputs (Markdown). Prefer over reporter-bot for console pipelines.
 
-For verification goals (stats, sentiment, market snapshots): never rely on a single source. Corroborate across web-intel (parse) + somnia-oracle (JSON) + analysis-bot synthesis.
+Default LP pipeline when externals are registered: dreamdex-mcp (orderbook) + docs-lens + dreamdex-mcp (coingecko) + analysis-bot + briefsmith. Do not use somnia-oracle unless the user explicitly requests native/on-chain oracle verification — native oracle depends on Somnia validator callbacks and may timeout on testnet.
+If the user did not provide a concrete HTTPS URL, do not invent one. Prefer dreamdex-mcp coingecko, analysis-bot, or a verified external agent instead.
+
+For verification goals (stats, sentiment, market snapshots): never rely on a single source. Corroborate across docs-lens + somnia-oracle (JSON) + analysis-bot synthesis.
 
 ${AGENT_CONTEXT_HEADER}
 `.trim();
@@ -260,18 +297,13 @@ function isSomniaStatsGoal(goal: string): boolean {
   );
 }
 
-function somniaSentimentOracleStep(
-  selector: string,
-  opts?: { decimals?: number },
-): StepSpec {
-  const payload: Record<string, string | number> = {
-    url: SOMNIA_SENTIMENT_SOURCE_URL,
-    selector,
-  };
-  if (opts?.decimals !== undefined) payload.decimals = opts.decimals;
+function somniaSentimentOracleStep(selector: string): StepSpec {
   return {
     configId: NativeConfigId.ORACLE,
-    payload: JSON.stringify(payload),
+    payload: JSON.stringify({
+      url: SOMNIA_SENTIMENT_SOURCE_URL,
+      selector,
+    }),
     maxCostWei: "0",
     timeoutSeconds: 90,
   };
@@ -288,24 +320,11 @@ function buildSomniaCorroboratedTemplate(): PlanTemplateResult {
     source: "template",
     verificationTier: "corroborated",
     steps: [
-      {
-        configId: NativeConfigId.WEB_INTEL,
-        payload: JSON.stringify({
-          url: "https://somnia.network",
-          prompt:
-            "Extract any live Somnia network metrics shown on the page (TPS, validators, ecosystem stats). Return concise facts only.",
-        }),
-        maxCostWei: "0",
-        timeoutSeconds: 120,
-      },
-      somniaSentimentOracleStep("somnia.usd", { decimals: 8 }),
-      somniaSentimentOracleStep("somnia.usd_24h_change"),
-      somniaSentimentOracleStep("somnia.usd_market_cap", { decimals: 8 }),
-      somniaSentimentOracleStep("somnia.usd_24h_vol", { decimals: 8 }),
+      somniaSentimentOracleStep("somnia.usd"),
       {
         configId: NativeConfigId.ANALYSIS,
         payload:
-          "Corroborate ONLY prior step outputs (web scrape + JSON oracle fields). Compare sources on price, 24h change, market cap, and volume. If key numerics disagree materially, set confidence <= 50. If they agree, confidence >= 85. Output JSON: {confidence, priceUsd, change24h, marketCapUsd, volume24hUsd, agreementNotes}.",
+          "Corroborate ONLY prior step JSON oracle/market fields. Extract price, 24h change, and market cap from the prior output. If key numerics are missing or inconsistent, set confidence <= 50. If present and consistent, confidence >= 85. Output JSON: {confidence, priceUsd, change24h, marketCapUsd, agreementNotes}.",
         maxCostWei: "0",
         timeoutSeconds: 120,
       },
@@ -325,12 +344,11 @@ function buildSomniaSentimentFallbackTemplate(): PlanTemplateResult {
     source: "template",
     verificationTier: "single",
     steps: [
-      somniaSentimentOracleStep("somnia.usd", { decimals: 8 }),
-      somniaSentimentOracleStep("somnia.usd_24h_change"),
+      somniaSentimentOracleStep("somnia.usd"),
       {
         configId: NativeConfigId.REPORTER,
         payload:
-          'Write a concise Somnia sentiment snapshot for the user using ONLY prior step outputs. Include price and 24h change. State clearly that this is a lower-budget single-source oracle summary and avoid implying multi-source verification.',
+          'Write a concise Somnia sentiment snapshot for the user using ONLY prior step outputs. Include price and 24h change. Oracle values are decimal strings in USD — use them exactly as given, do not rescale. State clearly that this is a lower-budget single-source oracle summary and avoid implying multi-source verification.',
         maxCostWei: "0",
         timeoutSeconds: 120,
       },
@@ -343,14 +361,11 @@ function buildSomniaStatsFallbackTemplate(): PlanTemplateResult {
     source: "template",
     verificationTier: "single",
     steps: [
-      somniaSentimentOracleStep("somnia.usd", { decimals: 8 }),
-      somniaSentimentOracleStep("somnia.usd_24h_change"),
-      somniaSentimentOracleStep("somnia.usd_market_cap", { decimals: 8 }),
-      somniaSentimentOracleStep("somnia.usd_24h_vol", { decimals: 8 }),
+      somniaSentimentOracleStep("somnia.usd"),
       {
         configId: NativeConfigId.REPORTER,
         payload:
-          "Write a concise Somnia stats snapshot for the user using ONLY prior step outputs. Include price, 24h change, market cap, and 24h volume. State clearly that this is a lower-budget single-source oracle summary.",
+          "Write a concise Somnia stats snapshot for the user using ONLY prior step outputs. Include price, 24h change, market cap, and 24h volume. Oracle values are decimal strings in USD — use them exactly as given, do not rescale. State clearly that this is a lower-budget single-source oracle summary.",
         maxCostWei: "0",
         timeoutSeconds: 120,
       },
@@ -368,12 +383,39 @@ function buildSomniaTemplates(goal: string): PlanTemplateResult[] {
   return [buildSomniaCorroboratedTemplate(), buildSomniaStatsFallbackTemplate()];
 }
 
-function buildAllTemplates(goal: string): PlanTemplateResult[] {
+async function buildAllTemplates(
+  deps: PlanRouterDeps,
+  goal: string,
+): Promise<PlanTemplateResult[]> {
   const generic = buildGenericTemplates(goal).map((template) => ({
     source: "template" as const,
     verificationTier: template.verificationTier,
     steps: template.steps,
   }));
+
+  const candidates = await deps.agentCatalog.loadCandidates();
+  const configIdByName = buildConfigIdByName(
+    candidates.map((agent) => ({
+      name: agent.name,
+      configId: agent.configId,
+    })),
+  );
+
+  const consoleGoal: PlanTemplateResult[] = [];
+  for (const template of buildConsoleGoalTemplates(goal)) {
+    const resolved = resolveTemplateSteps(template.steps, configIdByName);
+    if (resolved) {
+      consoleGoal.push({
+        source: "template",
+        verificationTier: template.verificationTier,
+        steps: resolved,
+      });
+    }
+  }
+  if (consoleGoal.length > 0) {
+    return [...consoleGoal, ...generic];
+  }
+
   if (isSomniaSentimentGoal(goal) || isSomniaStatsGoal(goal)) {
     return [...buildSomniaTemplates(goal), ...generic];
   }
@@ -384,37 +426,200 @@ function planErrorResponse(error: PlanError) {
   return error.body;
 }
 
+const EXTERNAL_HEALTH_TTL_SECONDS = 300;
+
+function isConsoleGoal(goal: string): boolean {
+  return (
+    isLpRiskOracleGoal(goal) ||
+    isEcosystemHealthGoal(goal) ||
+    isReceiptAuditGoal(goal) ||
+    isChainActivityGoal(goal)
+  );
+}
+
+async function needsExternalVerification(
+  deps: PlanRouterDeps,
+): Promise<boolean> {
+  try {
+    const agents = await deps.listExternalAgents({ activeOnly: true });
+    const now = Math.floor(Date.now() / 1000);
+    return agents.some(
+      (agent) =>
+        agent.is_verified !== 1 ||
+        agent.last_verified_at == null ||
+        now - agent.last_verified_at >= EXTERNAL_HEALTH_TTL_SECONDS,
+    );
+  } catch {
+    return false;
+  }
+}
+
+function externalVerificationChanged(
+  before: Awaited<ReturnType<typeof listExternalAgents>>,
+  after: Awaited<ReturnType<typeof listExternalAgents>>,
+): boolean {
+  return before.some((row) => {
+    const next = after.find((agent) => agent.config_id === row.config_id);
+    return (
+      next != null &&
+      (next.is_verified !== row.is_verified ||
+        next.last_verified_at !== row.last_verified_at)
+    );
+  });
+}
+
+async function ensureFreshExternalAgents(deps: PlanRouterDeps): Promise<void> {
+  if (!(await needsExternalVerification(deps))) return;
+
+  const before = await deps.listExternalAgents({ activeOnly: true });
+  try {
+    await verifyExternalAgentsNow();
+    const after = await deps.listExternalAgents({ activeOnly: true });
+    if (externalVerificationChanged(before, after)) {
+      deps.agentCatalog.invalidate();
+    }
+  } catch (error) {
+    console.warn("[plan] external pre-verify failed (non-fatal):", error);
+  }
+}
+
+async function buildConsoleTemplateGuidance(
+  deps: PlanRouterDeps,
+  goal: string,
+): Promise<string> {
+  const candidates = await deps.agentCatalog.loadCandidates();
+  const configIdByName = buildConfigIdByName(
+    candidates.map((agent) => ({
+      name: agent.name,
+      configId: agent.configId,
+    })),
+  );
+
+  const lines: string[] = [];
+  for (const template of buildConsoleGoalTemplates(goal)) {
+    const resolved = resolveTemplateSteps(template.steps, configIdByName);
+    if (!resolved) continue;
+    lines.push(
+      `- Pipeline "${template.label}" (${template.verificationTier} verification): ${JSON.stringify(resolved)}`,
+    );
+  }
+
+  if (lines.length === 0) return "";
+  return `\n\nRecommended console pipelines for this goal:\n${lines.join("\n")}\nFollow the closest matching pipeline unless the user goal clearly requires a different decomposition. Use exact configIds from the catalog above.`;
+}
+
+async function tryTemplateMatch(
+  deps: PlanRouterDeps,
+  goal: string,
+  opts: {
+    totalBudget: bigint;
+    budgetWei: string;
+    substitutions: Array<{ from: number; to: number }>;
+    allowBudgetExceeded?: boolean;
+  },
+): Promise<{
+  matched: boolean;
+  steps: StepSpec[] | null;
+  onChainSteps: Awaited<ReturnType<typeof normalizePlanSteps>> | null;
+  totalEstimated: bigint;
+  verificationTier: "corroborated" | "single";
+  planSource: PlanRequestSource;
+}> {
+  let steps: StepSpec[] | null = null;
+  let onChainSteps: Awaited<ReturnType<typeof normalizePlanSteps>> | null = null;
+  let totalEstimated = 0n;
+  let verificationTier: "corroborated" | "single" = "single";
+  let planSource: PlanRequestSource = "llm";
+  let cheapestEstimate: bigint | null = null;
+  let cheapestStepCount = 0;
+
+  for (const candidate of await buildAllTemplates(deps, goal)) {
+    let roughEstimate: bigint | null = null;
+    try {
+      roughEstimate = await estimateTemplateCost(deps, candidate.steps);
+      if (cheapestEstimate == null || roughEstimate < cheapestEstimate) {
+        cheapestEstimate = roughEstimate;
+        cheapestStepCount = candidate.steps.length;
+      }
+    } catch {
+      /* skip unpriceable templates */
+    }
+
+    try {
+      const normalized = await normalizePlanSteps(deps, candidate.steps, {
+        totalBudget: opts.totalBudget,
+        substitutions: opts.substitutions,
+      });
+      const estimated = normalized.reduce((sum, s) => sum + s.maxCostWei, 0n);
+      if (cheapestEstimate == null || estimated < cheapestEstimate) {
+        cheapestEstimate = estimated;
+        cheapestStepCount = normalized.length;
+      }
+      if (estimated <= opts.totalBudget) {
+        steps = candidate.steps;
+        onChainSteps = normalized;
+        totalEstimated = estimated;
+        verificationTier = candidate.verificationTier;
+        planSource = candidate.source;
+        return {
+          matched: true,
+          steps,
+          onChainSteps,
+          totalEstimated,
+          verificationTier,
+          planSource,
+        };
+      }
+    } catch (error) {
+      if (error instanceof PlanError && error.code === PlanErrorCode.NO_CAPABLE_AGENT) {
+        throw error;
+      }
+    }
+  }
+
+  if (cheapestEstimate != null && cheapestEstimate > opts.totalBudget) {
+    if (opts.allowBudgetExceeded) {
+      return {
+        matched: false,
+        steps,
+        onChainSteps,
+        totalEstimated,
+        verificationTier,
+        planSource,
+      };
+    }
+    throw new PlanError(
+      PlanErrorCode.BUDGET_EXCEEDED,
+      "planned step costs exceed task budget",
+      422,
+      {
+        estimatedCostWei: cheapestEstimate.toString(),
+        budgetWei: opts.budgetWei,
+        requiredStepCount: cheapestStepCount,
+        suggestedBudgetWei: cheapestEstimate.toString(),
+      },
+    );
+  }
+
+  return {
+    matched: false,
+    steps,
+    onChainSteps,
+    totalEstimated,
+    verificationTier,
+    planSource,
+  };
+}
+
 export function createPlanRouter(
   overrides: Partial<PlanRouterDeps> = {},
 ): Hono {
-  const defaultCatalog = new AgentCatalog({
-    readNextConfigId: () => agentRegistryContract.read.nextConfigId(),
-    readAgent: (configId) => agentRegistryContract.read.get([configId]),
-    readRequestDeposit: () =>
-      publicClient.readContract({
-        address: deployment.agentsApi as `0x${string}`,
-        abi: [
-          {
-            type: "function",
-            name: "getRequestDeposit",
-            stateMutability: "view",
-            inputs: [],
-            outputs: [{ name: "", type: "uint256" }],
-          },
-        ],
-        functionName: "getRequestDeposit",
-      }),
-    readByCapability: (cap) => agentRegistryContract.read.getByCapability([cap]),
-    listExternalAgents,
-    capabilityNameById,
-  });
-
-  const deps: PlanRouterDeps = {
+  const baseDeps = {
     anthropic: new Anthropic({ apiKey: env.ANTHROPIC_API_KEY }),
     env,
     addresses: { orchestrator: addresses.orchestrator },
     readNextConfigId: () => agentRegistryContract.read.nextConfigId(),
-    readAgent: (configId) => agentRegistryContract.read.get([configId]),
+    readAgent: (configId: bigint) => agentRegistryContract.read.get([configId]),
     readRequestDeposit: () =>
       publicClient.readContract({
         address: deployment.agentsApi as `0x${string}`,
@@ -432,10 +637,28 @@ export function createPlanRouter(
     savePlanRequest,
     listExternalAgents,
     capabilityNameById,
-    agentCatalog: defaultCatalog,
     plannerBudgetGuard: createAnthropicBudgetGuard(env),
+  };
+
+  const usesInjectedReadAgent = overrides.readAgent !== undefined;
+
+  const deps: PlanRouterDeps = {
+    ...baseDeps,
     ...overrides,
-    agentCatalog: overrides.agentCatalog ?? defaultCatalog,
+    agentCatalog:
+      overrides.agentCatalog ??
+      new AgentCatalog({
+        readNextConfigId:
+          overrides.readNextConfigId ?? baseDeps.readNextConfigId,
+        readAgent: overrides.readAgent ?? baseDeps.readAgent,
+        readRequestDeposit:
+          overrides.readRequestDeposit ?? baseDeps.readRequestDeposit,
+        readByCapability: usesInjectedReadAgent
+          ? async () => []
+          : (cap) => agentRegistryContract.read.getByCapability([cap]),
+        listExternalAgents: overrides.listExternalAgents ?? listExternalAgents,
+        capabilityNameById,
+      }),
   };
 
   const router = new Hono();
@@ -491,6 +714,7 @@ export function createPlanRouter(
     }
 
     const { goal, personalAgentId, budgetWei } = body;
+    const planStartedAt = Date.now();
     logTaskApi("/api/plan", {
       personalAgentId,
       budgetWei,
@@ -501,6 +725,7 @@ export function createPlanRouter(
 
     let costLines = FALLBACK_COST_LINES;
     let cheapestCostWei = FALLBACK_CHEAPEST_COST_WEI;
+    const costContextStartedAt = Date.now();
     try {
       const costContext = await buildPlannerCostContext(deps);
       if (costContext.costLines) costLines = costContext.costLines;
@@ -510,11 +735,20 @@ export function createPlanRouter(
     } catch (e) {
       console.warn("[plan] cost context read failed, using defaults:", e);
     }
+    logTaskTimeline("plan_timing", {
+      phase: "cost_context",
+      ms: Date.now() - costContextStartedAt,
+      goalPreview: goal.slice(0, 80),
+    });
     const cheapestCostEth = formatEther(cheapestCostWei || 1n);
     const maxAffordableSteps =
       cheapestCostWei > 0n
         ? Number((totalBudget + cheapestCostWei - 1n) / cheapestCostWei)
         : 1;
+
+    if (isConsoleGoal(goal)) {
+      await ensureFreshExternalAgents(deps);
+    }
 
     let agentContext = AGENT_CONTEXT;
     try {
@@ -526,13 +760,32 @@ export function createPlanRouter(
       /* non-fatal */
     }
 
-    const systemPrompt = buildSystemPrompt(
-      agentContext,
-      costLines,
-      budgetEth,
-      cheapestCostEth,
-      Math.max(1, maxAffordableSteps),
-    );
+    const templateGuidanceStartedAt = Date.now();
+    let templateGuidance = "";
+    if (isConsoleGoal(goal)) {
+      try {
+        templateGuidance = await buildConsoleTemplateGuidance(deps, goal);
+      } catch (error) {
+        console.warn("[plan] template guidance failed (non-fatal):", error);
+      }
+    }
+    logTaskTimeline("plan_timing", {
+      phase: "template_guidance",
+      ms: Date.now() - templateGuidanceStartedAt,
+      goalPreview: goal.slice(0, 80),
+    });
+
+    const systemPrompt =
+      buildSystemPrompt(
+        agentContext,
+        costLines,
+        budgetEth,
+        cheapestCostEth,
+        Math.min(
+          Math.max(1, maxAffordableSteps),
+          MAX_CONSOLE_TEMPLATE_STEPS,
+        ),
+      ) + templateGuidance;
 
     let steps: StepSpec[] | null = null;
     let onChainSteps: Awaited<ReturnType<typeof normalizePlanSteps>> | null =
@@ -544,45 +797,18 @@ export function createPlanRouter(
     const substitutions: Array<{ from: number; to: number }> = [];
 
     const tryTemplates = async (): Promise<boolean> => {
-      let cheapestEstimate: bigint | null = null;
-      let cheapestStepCount = 0;
-
-      for (const candidate of buildAllTemplates(goal)) {
-        try {
-          const normalized = await normalizePlanSteps(deps, candidate.steps, {
-            totalBudget,
-            substitutions,
-          });
-          const estimated = normalized.reduce((sum, s) => sum + s.maxCostWei, 0n);
-          if (cheapestEstimate == null || estimated < cheapestEstimate) {
-            cheapestEstimate = estimated;
-            cheapestStepCount = normalized.length;
-          }
-          if (estimated <= totalBudget) {
-            steps = candidate.steps;
-            onChainSteps = normalized;
-            totalEstimated = estimated;
-            verificationTier = candidate.verificationTier;
-            planSource = candidate.source;
-            return true;
-          }
-        } catch (error) {
-          if (error instanceof PlanError) throw error;
-        }
-      }
-
-      if (cheapestEstimate != null && cheapestEstimate > totalBudget) {
-        throw new PlanError(
-          PlanErrorCode.BUDGET_EXCEEDED,
-          "planned step costs exceed task budget",
-          422,
-          {
-            estimatedCostWei: cheapestEstimate.toString(),
-            budgetWei,
-            requiredStepCount: cheapestStepCount,
-            suggestedBudgetWei: cheapestEstimate.toString(),
-          },
-        );
+      const result = await tryTemplateMatch(deps, goal, {
+        totalBudget,
+        budgetWei,
+        substitutions,
+      });
+      if (result.matched && result.steps && result.onChainSteps) {
+        steps = result.steps;
+        onChainSteps = result.onChainSteps;
+        totalEstimated = result.totalEstimated;
+        verificationTier = result.verificationTier;
+        planSource = result.planSource;
+        return true;
       }
       return false;
     };
@@ -604,15 +830,43 @@ export function createPlanRouter(
         }
         throw error;
       }
+    } else if (isConsoleGoal(goal)) {
+      try {
+        const matched = await tryTemplates();
+        if (!matched) {
+          throw new PlanError(
+            PlanErrorCode.NO_CAPABLE_AGENT,
+            "no console template matched — register external agents (pnpm dev:agents) and ensure budget meets template minimum",
+            422,
+          );
+        }
+      } catch (error) {
+        if (error instanceof PlanError) {
+          return c.json(planErrorResponse(error), error.status as 422);
+        }
+        throw error;
+      }
     }
 
     if (!steps || !onChainSteps) {
+      if (isConsoleGoal(goal)) {
+        return c.json(
+          planErrorResponse(
+            new PlanError(
+              PlanErrorCode.NO_CAPABLE_AGENT,
+              "console goal requires a curated template plan",
+              422,
+            ),
+          ),
+          422,
+        );
+      }
       let llmFailed = false;
       for (let attempt = 0; attempt < 2; attempt++) {
         const plannerGoal =
           attempt === 0
             ? goal
-            : `${goal}\n\n[Hard constraint: total step costs must be <= ${budgetEth} STT. Use at most ${Math.max(1, maxAffordableSteps)} step(s). Prefer the cheapest configId.]`;
+            : `${goal}\n\n[Hard constraint: total step costs must be <= ${budgetEth} STT. Use at most ${Math.min(Math.max(1, maxAffordableSteps), MAX_CONSOLE_TEMPLATE_STEPS)} step(s). Prefer the cheapest configId.]`;
         const plannerSystem =
           attempt === 0
             ? systemPrompt
@@ -623,11 +877,17 @@ You MUST return fewer or cheaper steps. The sum of exact authorization costs can
 
         try {
           plannerAttempts++;
+          const claudeStartedAt = Date.now();
           steps = await parsePlannerStepsFromMessage(
             deps,
             plannerSystem,
             plannerGoal,
           );
+          logTaskTimeline("plan_timing", {
+            phase: "claude",
+            ms: Date.now() - claudeStartedAt,
+            attempt: plannerAttempts,
+          });
         } catch (e) {
           console.error("[plan] planner failed:", e);
           llmFailed = true;
@@ -635,16 +895,31 @@ You MUST return fewer or cheaper steps. The sum of exact authorization costs can
         }
 
         try {
+          const normalizeStartedAt = Date.now();
           onChainSteps = await normalizePlanSteps(deps, steps, {
             totalBudget,
             substitutions,
+          });
+          logTaskTimeline("plan_timing", {
+            phase: "normalize",
+            ms: Date.now() - normalizeStartedAt,
+            attempt: plannerAttempts,
+            stepCount: onChainSteps.length,
           });
         } catch (error) {
           if (error instanceof PlanError) {
             return c.json(planErrorResponse(error), error.status as 422);
           }
-          llmFailed = true;
-          break;
+          return c.json(
+            {
+              error:
+                error instanceof Error
+                  ? error.message
+                  : "planner selected invalid agents",
+              code: PlanErrorCode.INVALID_REQUEST,
+            },
+            422,
+          );
         }
 
         totalEstimated = onChainSteps.reduce((sum, s) => sum + s.maxCostWei, 0n);
@@ -742,6 +1017,12 @@ You MUST return fewer or cheaper steps. The sum of exact authorization costs can
       });
     }
 
+    logTaskTimeline("plan_timing", {
+      phase: "total",
+      ms: Date.now() - planStartedAt,
+      source: planSource,
+    });
+
     logTaskTimeline("plan_ready", {
       planId,
       personalAgentId,
@@ -816,6 +1097,100 @@ function extractPlannerSteps(message: PlannerMessage): StepSpec[] {
   return parsePlannerStepsJson(raw) as StepSpec[];
 }
 
+function parseWebIntelRedirectIntent(step: StepSpec): {
+  question: string;
+  docPath: string;
+  marketIntent: boolean;
+} {
+  let question = "What does the official Somnia documentation say about this topic?";
+  let docPath = "readme";
+  let marketIntent = false;
+
+  try {
+    const parsed = JSON.parse(step.payload) as {
+      url?: unknown;
+      prompt?: unknown;
+      question?: unknown;
+      docPath?: unknown;
+    };
+    if (typeof parsed.question === "string" && parsed.question.trim()) {
+      question = parsed.question.trim();
+    } else if (typeof parsed.prompt === "string" && parsed.prompt.trim()) {
+      question = parsed.prompt.trim();
+    }
+    if (typeof parsed.docPath === "string" && parsed.docPath.trim()) {
+      docPath = parsed.docPath.trim();
+    }
+    const url = typeof parsed.url === "string" ? parsed.url.toLowerCase() : "";
+    const combined = `${url} ${question}`.toLowerCase();
+    marketIntent =
+      url.includes("coingecko") ||
+      url.includes("dexscreener") ||
+      /price|market|dex|pair|token|cap|volume|liquidity/.test(combined);
+    if (url.includes("docs.somnia")) {
+      docPath = "readme";
+    }
+  } catch {
+    if (step.payload.trim()) {
+      question = step.payload.trim();
+    }
+  }
+
+  return { question, docPath, marketIntent };
+}
+
+async function redirectDisabledWebIntel(
+  deps: PlanRouterDeps,
+  step: StepSpec,
+): Promise<StepSpec> {
+  const candidates = await deps.agentCatalog.loadCandidates();
+  const { question, docPath, marketIntent } = parseWebIntelRedirectIntent(step);
+
+  const dreamdex = candidates.find(
+    (c) =>
+      c.healthy &&
+      c.isActive &&
+      !c.suspended &&
+      (c.name === "dreamdex-mcp" || c.name === "dreamdex-mcp@twiin"),
+  );
+  if (marketIntent && dreamdex) {
+    return {
+      ...step,
+      configId: dreamdex.configId,
+      payload: JSON.stringify({ action: "coingecko", id: "somnia" }),
+    };
+  }
+
+  const docsLens = candidates.find(
+    (c) =>
+      c.healthy &&
+      c.isActive &&
+      !c.suspended &&
+      (c.name === "docs-lens" || c.name === "docs-lens@twiin"),
+  );
+  if (docsLens) {
+    return {
+      ...step,
+      configId: docsLens.configId,
+      payload: JSON.stringify({ question, docPath }),
+    };
+  }
+
+  if (dreamdex) {
+    return {
+      ...step,
+      configId: dreamdex.configId,
+      payload: JSON.stringify({ action: "coingecko", id: "somnia" }),
+    };
+  }
+
+  throw new PlanError(
+    PlanErrorCode.NO_CAPABLE_AGENT,
+    "web-intel (configId 1) is disabled for planning — use docs-lens or dreamdex-mcp via a console prompt",
+    422,
+  );
+}
+
 async function normalizePlanSteps(
   deps: PlanRouterDeps,
   steps: StepSpec[],
@@ -831,17 +1206,38 @@ async function normalizePlanSteps(
     timeoutSeconds: number;
   }[]
 > {
+  if (steps.length === 0 || steps.length > MAX_CONSOLE_TEMPLATE_STEPS) {
+    throw new PlanError(
+      PlanErrorCode.INVALID_REQUEST,
+      `plan has ${steps.length} steps; planner limit is ${MAX_CONSOLE_TEMPLATE_STEPS}`,
+      422,
+    );
+  }
+
   const nextConfigId = await deps.readNextConfigId();
   const requestDeposit = await deps.readRequestDeposit();
   let spent = 0n;
   const used = new Set<number>();
 
   const normalized = [];
-  for (const step of steps) {
+  for (let i = 0; i < steps.length; i++) {
+    let step = steps[i]!;
+    if (step.configId === NativeConfigId.WEB_INTEL) {
+      const from = step.configId;
+      step = await redirectDisabledWebIntel(deps, step);
+      steps[i] = step;
+      opts.substitutions.push({ from, to: step.configId });
+      logTaskTimeline("plan_substitution", {
+        from,
+        to: step.configId,
+        reason: "web_intel_disabled",
+      });
+    }
+
     let configIdNum = step.configId;
     let remainingBudget = opts.totalBudget - spent;
 
-    const resolveStep = async (configId: number) => {
+    const resolveStep = async (configId: number, allowExternalRefresh = true) => {
       const configIdBig = BigInt(configId);
       if (configIdBig >= nextConfigId) {
         throw new PlanError(
@@ -850,10 +1246,7 @@ async function normalizePlanSteps(
           422,
         );
       }
-      if (
-        configId === NativeConfigId.JANICE ||
-        configId === NativeConfigId.EXECUTOR
-      ) {
+      if (configId === NativeConfigId.JANICE || configId === NativeConfigId.EXECUTOR) {
         throw new PlanError(
           PlanErrorCode.NO_CAPABLE_AGENT,
           `planner selected reserved configId ${configId}`,
@@ -862,24 +1255,46 @@ async function normalizePlanSteps(
       }
 
       const agent = await deps.readAgent(configIdBig);
-      const catalogAgent = (await deps.agentCatalog.loadCandidates()).find(
+      let catalogAgent = (await deps.agentCatalog.loadCandidates()).find(
         (c) => c.configId === configId,
       );
-      const healthy = catalogAgent?.healthy ?? false;
+      const isNative = agent.lane === AgentLane.SomniaNative;
+      let healthy = isNative
+        ? agent.isActive && !agent.suspended
+        : (catalogAgent?.healthy ?? false);
 
-      if (!agent.name || !agent.isActive || agent.suspended || !healthy) {
+      if (
+        allowExternalRefresh &&
+        !isNative &&
+        agent.name &&
+        !healthy
+      ) {
+        const refreshed = await verifyExternalAgentCacheEntry(configId.toString());
+        if (refreshed) {
+          deps.agentCatalog.invalidate();
+          catalogAgent = (await deps.agentCatalog.loadCandidates(true)).find(
+            (c) => c.configId === configId,
+          );
+          healthy = catalogAgent?.healthy ?? false;
+        }
+      }
+
+      if (!agent.name || !healthy) {
         const alt = await deps.agentCatalog.substitute(
           configId,
           remainingBudget,
           used,
         );
         if (!alt) {
+          const label = agent.name || `configId ${configId}`;
           throw new PlanError(
             PlanErrorCode.NO_CAPABLE_AGENT,
-            `no healthy agent available for configId ${configId}`,
+            `no healthy agent available for ${label} (configId ${configId}). Run external agents (pnpm dev:agents) and ensure the planner backend can reach their /health endpoint.`,
             422,
             {
               missingCapabilities: catalogAgent?.capabilityNames ?? [],
+              agentName: agent.name || undefined,
+              unhealthyConfigId: configId,
             },
           );
         }
@@ -888,10 +1303,9 @@ async function normalizePlanSteps(
           from: configId,
           to: alt.configId,
         });
-        return resolveStep(alt.configId);
+        return resolveStep(alt.configId, false);
       }
 
-      const isNative = agent.lane === AgentLane.SomniaNative;
       const exactCostWei = isNative
         ? requestDeposit + agent.costWei * 3n
         : agent.costWei;
@@ -910,7 +1324,8 @@ async function normalizePlanSteps(
 
       used.add(configId);
       spent += exactCostWei;
-      const payloadText = hardenPlannerPayload(configId, step.payload);
+      const payloadText = hardenPlannerPayload(configId, step.payload, agent.name);
+      if (!isNative) validateExternalAgentPayload(agent.name, payloadText);
       const payload = encodeStepPayload(configId, payloadText, isNative);
       return {
         subAgentConfigId: BigInt(configId),
@@ -926,7 +1341,37 @@ async function normalizePlanSteps(
   return normalized;
 }
 
-function hardenPlannerPayload(configId: number, payload: string): string {
+const DOCS_LENS_BAD_DOC_PATHS = new Set(["defi", "agents"]);
+
+function hardenDocsLensPayload(payload: string): string {
+  try {
+    const parsed = JSON.parse(payload) as Record<string, unknown>;
+    if (typeof parsed.docPath === "string") {
+      const normalized = parsed.docPath
+        .trim()
+        .replace(/^\/+|\/+$/g, "")
+        .replace(/\.md$/i, "")
+        .toLowerCase();
+      if (DOCS_LENS_BAD_DOC_PATHS.has(normalized)) {
+        parsed.docPath = "readme";
+      }
+    } else {
+      parsed.docPath = "readme";
+    }
+    return JSON.stringify(parsed);
+  } catch {
+    return payload;
+  }
+}
+
+function hardenPlannerPayload(
+  configId: number,
+  payload: string,
+  agentName?: string | null,
+): string {
+  if (agentName === "docs-lens" || agentName === "docs-lens@twiin") {
+    payload = hardenDocsLensPayload(payload);
+  }
   if (
     configId !== NativeConfigId.ANALYSIS &&
     configId !== NativeConfigId.REPORTER

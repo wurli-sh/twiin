@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { AgentLane, isExternalHealthy } from "@twiin/shared";
 import { capabilityNameById, agentRegistryContract } from "../contracts";
 import { listExternalAgents } from "../db";
 import { isUpstreamAvailabilityError } from "../errors";
@@ -79,6 +80,9 @@ export function createAgentsRouter(
       throw error;
     }
 
+    const nowSeconds = Math.floor(Date.now() / 1000);
+    const healthTtlSeconds = 300;
+
     const agents = chainAgents
       .map((agent, index) => {
         if (!agent.name) return null;
@@ -112,6 +116,16 @@ export function createAgentsRouter(
           lastVerifiedAt: external?.last_verified_at ?? null,
           lastError: external?.last_error ?? null,
           updatedAt: external?.updated_at ?? null,
+          healthy:
+            agent.lane === AgentLane.SomniaNative
+              ? agent.isActive && !agent.suspended
+              : isExternalHealthy({
+                  lane: agent.lane,
+                  isVerified: external?.is_verified === 1,
+                  lastVerifiedAt: external?.last_verified_at ?? null,
+                  nowSeconds,
+                  healthTtlSeconds,
+                }),
         };
       })
       .filter((agent) => agent !== null)

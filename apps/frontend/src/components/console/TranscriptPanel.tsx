@@ -1,4 +1,4 @@
-import { useRef, useEffect } from 'react'
+import { useCallback, useEffect, useMemo, useRef } from 'react'
 import { motion } from 'framer-motion'
 import { PlanApproval } from './PlanApproval'
 import { PlanBudgetRecovery, type PlanBudgetMismatch } from './PlanBudgetRecovery'
@@ -18,6 +18,9 @@ import {
   getPlanForExecution,
 } from '@/lib/console-session'
 import { resolveExecutionPhase } from '@/lib/agent-status-copy'
+import { configIdLabel } from '@/lib/config-names'
+import { extractPublishFeedParams } from '@/lib/publish-feed-params'
+import { usePublishFeed } from '@/hooks/usePublishFeed'
 import type { TwiinAgentInfo } from '@/hooks/useTwiinAgents'
 import type { StreamEvent } from '@/hooks/useTaskStream'
 import type { ChainTask, TaskStep } from '@/hooks/useTaskDetail'
@@ -89,10 +92,16 @@ export function TranscriptPanel({
   executionMode = 'claude',
 }: Props) {
   const modeTheme = consolePageTheme()
+  const { publishFeed, isPublishing } = usePublishFeed()
   const bottomRef = useRef<HTMLDivElement>(null)
   const activeExecutionId = sessionEntries.findLast((e) => e.kind === 'execution')?.id
   const currentTurnExecution = getCurrentTurnExecution(sessionEntries)
   const trustlessEvents = events.filter((ev) => isTrustlessStreamEvent(ev.type))
+  const rejectionEvents = events.filter(
+    (ev) =>
+      ev.type === 'step_rejected' ||
+      (ev.type === 'step_rated' && ev.data.approved === false),
+  )
   const pendingReportTaskId =
     activeTaskId &&
     currentTurnExecution?.taskId === activeTaskId &&
@@ -100,6 +109,19 @@ export function TranscriptPanel({
     !sessionEntries.some((e) => e.kind === 'result' && e.taskId === activeTaskId)
       ? activeTaskId
       : null
+
+  const publishParams = useMemo(
+    () =>
+      chainTask?.state === TaskState.Completed
+        ? extractPublishFeedParams(chainSteps)
+        : null,
+    [chainSteps, chainTask?.state],
+  )
+
+  const handlePublishFeed = useCallback(async () => {
+    if (!agent || !publishParams) return
+    await publishFeed(BigInt(agent.id), publishParams)
+  }, [agent, publishFeed, publishParams])
 
   useEffect(() => {
     requestAnimationFrame(() => {
@@ -182,7 +204,13 @@ export function TranscriptPanel({
             const isActive = entry.id === activeExecutionId && entry.taskId === activeTaskId
             const isRunning = isActive && chainTask?.state === TaskState.Running
 
-            if (!isActive || chainTask?.state === TaskState.Completed) return null
+            const isTerminal =
+              chainTask?.state === TaskState.Completed ||
+              chainTask?.state === TaskState.Aborted
+            const hasResult = sessionEntries.some(
+              (e) => e.kind === 'result' && e.taskId === entry.taskId,
+            )
+            if (!isActive || isTerminal || hasResult) return null
 
             const planEntry = getPlanForExecution(sessionEntries, entry.taskId)
             const trustless = executionMode === 'trustless'
@@ -224,6 +252,11 @@ export function TranscriptPanel({
           }
 
           if (entry.kind === 'result') {
+            const showPublish =
+              !entry.aborted &&
+              entry.taskId === activeTaskId &&
+              publishParams != null &&
+              agent != null
             return (
               <AgentBlock key={entry.id}>
                 <TaskResultCard
@@ -231,8 +264,16 @@ export function TranscriptPanel({
                   spent={entry.spent}
                   budget={entry.budget}
                   aborted={entry.aborted}
+                  abortDetail={entry.abortDetail}
                   taskId={entry.taskId}
                   executionMode={executionMode}
+                  publishLabel={
+                    showPublish
+                      ? `Publish to feed (${publishParams.confidence}% confidence)`
+                      : undefined
+                  }
+                  onPublish={showPublish ? () => void handlePublishFeed() : undefined}
+                  isPublishing={isPublishing}
                 />
               </AgentBlock>
             )
@@ -249,6 +290,31 @@ export function TranscriptPanel({
           }
 
           return null
+        })}
+
+        {rejectionEvents.map((ev) => {
+          const stepIdx = typeof ev.data.stepIdx === 'number' ? ev.data.stepIdx : null
+          const score = typeof ev.data.score === 'number' ? ev.data.score : null
+          const reason = typeof ev.data.reason === 'string' ? ev.data.reason : null
+          const step = stepIdx != null ? chainSteps.find((s) => s.stepIdx === stepIdx) : null
+          const agentName = step ? configIdLabel(Number(step.configId)) : null
+          return (
+            <AgentBlock key={`reject-ev-${ev.id}`}>
+              <div className="max-w-[92%] rounded-md border border-destructive/25 bg-destructive/5 px-3 py-2 text-xs text-destructive">
+                <p className="font-semibold">
+                  Step rejected
+                  {stepIdx != null ? ` · step ${stepIdx + 1}` : ''}
+                  {agentName ? ` · ${agentName}` : ''}
+                </p>
+                {score != null && (
+                  <p className="mt-1 tabular-nums">
+                    Score {score}/100 <span className="text-destructive/70">(min 40)</span>
+                  </p>
+                )}
+                {reason && <p className="mt-1 text-destructive/80">{reason}</p>}
+              </div>
+            </AgentBlock>
+          )
         })}
 
         {trustlessEvents.map((ev) => (

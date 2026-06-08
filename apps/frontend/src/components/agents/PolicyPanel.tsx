@@ -21,6 +21,8 @@ type PolicyPanelProps = {
   agent: TwiinAgentInfo
   onUpdated: () => void
   onToggleKillSwitch: (agentId: bigint, current: boolean) => Promise<unknown>
+  killSwitchDialogAgentId: string | null
+  onKillSwitchDialogOpenChange: (agentId: string | null) => void
 }
 
 function parsePositiveStt(value: string, label: string): string | null {
@@ -29,7 +31,13 @@ function parsePositiveStt(value: string, label: string): string | null {
  return null
 }
 
-export function PolicyPanel({ agent, onUpdated, onToggleKillSwitch }: PolicyPanelProps) {
+export function PolicyPanel({
+  agent,
+  onUpdated,
+  onToggleKillSwitch,
+  killSwitchDialogAgentId,
+  onKillSwitchDialogOpenChange,
+}: PolicyPanelProps) {
   const [isTogglingKillSwitch, setIsTogglingKillSwitch] = useState(false)
  const { isSaving, loadPullApproval, updatePolicy, subscribePull, revokePull } =
  useAgentPolicy()
@@ -178,6 +186,10 @@ export function PolicyPanel({ agent, onUpdated, onToggleKillSwitch }: PolicyPane
             agent={agent}
             isToggling={isTogglingKillSwitch}
             onToggle={handleToggleKillSwitch}
+            dialogOpen={killSwitchDialogAgentId === agent.id.toString()}
+            onDialogOpenChange={(open) =>
+              onKillSwitchDialogOpenChange(open ? agent.id.toString() : null)
+            }
           />
         </div>
       </div>

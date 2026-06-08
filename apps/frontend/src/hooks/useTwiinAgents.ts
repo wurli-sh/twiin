@@ -152,6 +152,11 @@ export function useTwiinAgents() {
       args: [agentId, !currentState],
     } as never)
 
+    setAgents((prev) =>
+      prev.map((agent) =>
+        agent.id === agentId ? { ...agent, killSwitch: !currentState } : agent,
+      ),
+    )
     window.setTimeout(() => void loadAgents(), 2000)
     return tx
   }

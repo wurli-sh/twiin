@@ -35,7 +35,7 @@ describe("agent-catalog", () => {
     ).toBe(false);
   });
 
-  it("picks substitute by shared capability within budget", () => {
+  it("does not substitute web.scrape agents to other scrapers", () => {
     const candidates = [
       base({ configId: 1, exactCostWei: 200n }),
       base({
@@ -47,7 +47,27 @@ describe("agent-catalog", () => {
       }),
     ];
     const alt = pickSubstitute(candidates, 1, 160n);
-    expect(alt?.configId).toBe(7);
+    expect(alt).toBeNull();
+  });
+
+  it("picks substitute by shared capability within budget", () => {
+    const candidates = [
+      base({
+        configId: 2,
+        capabilities: [CapabilityId.JSON_FETCH],
+        capabilityNames: ["json.fetch"],
+        exactCostWei: 200n,
+      }),
+      base({
+        configId: 3,
+        capabilities: [CapabilityId.JSON_FETCH],
+        capabilityNames: ["json.fetch"],
+        exactCostWei: 150n,
+        rank: 1,
+      }),
+    ];
+    const alt = pickSubstitute(candidates, 2, 160n);
+    expect(alt?.configId).toBe(3);
   });
 
   it("resolves by capability sorted by rank", () => {

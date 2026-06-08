@@ -712,6 +712,37 @@ export async function enqueueRelayJob(input: {
   return (result.rowsAffected ?? 0) > 0;
 }
 
+export async function listFailedRelayJobs(
+  limit = 20,
+): Promise<
+  {
+    task_id: string;
+    step_idx: number;
+    config_id: string;
+    req_id: string;
+    payload: string;
+    registrant: string;
+    endpoint_hash: string;
+    attempts: number;
+  }[]
+> {
+  return db
+    .select({
+      task_id: relayJobs.taskId,
+      step_idx: relayJobs.stepIdx,
+      config_id: relayJobs.configId,
+      req_id: relayJobs.reqId,
+      payload: relayJobs.payload,
+      registrant: relayJobs.registrant,
+      endpoint_hash: relayJobs.endpointHash,
+      attempts: relayJobs.attempts,
+    })
+    .from(relayJobs)
+    .where(eq(relayJobs.status, "failed"))
+    .orderBy(relayJobs.updatedAt)
+    .limit(limit);
+}
+
 export async function listDueRelayJobs(
   nowSeconds: number,
   limit = 20,
@@ -766,6 +797,68 @@ export async function markRelayJobRetry(
       updatedAt: Math.floor(Date.now() / 1000),
     })
     .where(and(eq(relayJobs.taskId, taskId), eq(relayJobs.stepIdx, stepIdx)));
+}
+
+/** Retry without incrementing attempts or marking failed — for indexer-lag waits. */
+export async function markRelayJobIndexerLagRetry(
+  taskId: string,
+  stepIdx: number,
+  nextRetryAt: number,
+  lastError: string,
+): Promise<void> {
+  await db
+    .update(relayJobs)
+    .set({
+      nextRetryAt,
+      status: "retry",
+      lastError,
+      updatedAt: Math.floor(Date.now() / 1000),
+    })
+    .where(and(eq(relayJobs.taskId, taskId), eq(relayJobs.stepIdx, stepIdx)));
+}
+
+export async function reactivateRelayJob(input: {
+  taskId: string;
+  stepIdx: number;
+  configId: string;
+  reqId: string;
+  payload: string;
+  registrant: string;
+  endpointHash: string;
+}): Promise<void> {
+  const now = Math.floor(Date.now() / 1000);
+  await db
+    .insert(relayJobs)
+    .values({
+      taskId: input.taskId,
+      stepIdx: input.stepIdx,
+      configId: input.configId,
+      reqId: input.reqId,
+      payload: input.payload,
+      registrant: input.registrant,
+      endpointHash: input.endpointHash,
+      attempts: 0,
+      nextRetryAt: now,
+      status: "pending",
+      lastError: null,
+      createdAt: now,
+      updatedAt: now,
+    })
+    .onConflictDoUpdate({
+      target: [relayJobs.taskId, relayJobs.stepIdx],
+      set: {
+        configId: input.configId,
+        reqId: input.reqId,
+        payload: input.payload,
+        registrant: input.registrant,
+        endpointHash: input.endpointHash,
+        attempts: 0,
+        nextRetryAt: now,
+        status: "pending",
+        lastError: null,
+        updatedAt: now,
+      },
+    });
 }
 
 export async function completeRelayJob(
@@ -993,6 +1086,16 @@ export async function upsertExternalAgent(
   capabilities: string[],
 ): Promise<void> {
   const updatedAt = Math.floor(Date.now() / 1000);
+  const existing = await getExternalAgent(configId);
+  const metadataChanged =
+    !existing ||
+    existing.registrant.toLowerCase() !== registrant.toLowerCase() ||
+    existing.endpoint_url !== endpointUrl ||
+    existing.endpoint_hash !== endpointHash;
+  const isVerified = metadataChanged ? 0 : (existing?.is_verified ?? 0);
+  const lastVerifiedAt = metadataChanged ? null : (existing?.last_verified_at ?? null);
+  const lastError = metadataChanged ? null : (existing?.last_error ?? null);
+
   await db
     .insert(externalAgents)
     .values({
@@ -1002,9 +1105,9 @@ export async function upsertExternalAgent(
       endpointHash,
       capabilitiesJson: JSON.stringify(capabilities),
       isActive: 1,
-      isVerified: 0,
-      lastVerifiedAt: null,
-      lastError: null,
+      isVerified,
+      lastVerifiedAt,
+      lastError,
       updatedAt,
     })
     .onConflictDoUpdate({
@@ -1015,9 +1118,9 @@ export async function upsertExternalAgent(
         endpointHash,
         capabilitiesJson: JSON.stringify(capabilities),
         isActive: 1,
-        isVerified: 0,
-        lastVerifiedAt: null,
-        lastError: null,
+        isVerified,
+        lastVerifiedAt,
+        lastError,
         updatedAt,
       },
     });

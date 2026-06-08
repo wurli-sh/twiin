@@ -15,6 +15,12 @@ export const NativeConfigId = {
   EXECUTOR: 5,
 } as const;
 
+/** First configId assigned to ExternalHTTP agents (AgentRegistry). */
+export const EXTERNAL_MIN_CONFIG_ID = 6;
+
+/** Max chars injected into LLM prior-context (matches AgentOrchestrator.sol). */
+export const MAX_PRIOR_CONTEXT_CHARS = 4096;
+
 // Capability IDs — computed as keccak256(toBytes(name)), matching deploy.ts exactly
 const cap = (s: string) => keccak256(toBytes(s));
 
@@ -82,4 +88,8 @@ export const INFER_TOOLS_CHAT_MAX_ITERATIONS = 8;
 export const JANICE_ROUND_BUFFER_MULTIPLIER = 3;
 /** Gate 0 — minimum budget covers two Janice iterations */
 export const MIN_TRUSTLESS_BUDGET_MULTIPLIER = 2;
+/** On-chain AgentOrchestrator.createTask step cap */
+export const MAX_TASK_STEPS = 8;
+/** Console suggested-prompt pipeline step cap */
+export const MAX_CONSOLE_TEMPLATE_STEPS = 5;
 export const JANICE_SOMNIA_AGENT_ID = 12847293847561029384n;

@@ -1,4 +1,4 @@
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import { motion } from 'framer-motion'
 import { Shield } from 'lucide-react'
 import { cn } from '@/lib/cn'
@@ -78,6 +78,7 @@ export function AgentsPage() {
   const activeTab = useUIStore((s) => s.activeAgentsTab)
   const setActiveTab = useUIStore((s) => s.setActiveAgentsTab)
   const selectedAgentId = useUIStore((s) => s.selectedAgentId)
+  const [killSwitchDialogAgentId, setKillSwitchDialogAgentId] = useState<string | null>(null)
 
   const agentIds = useMemo(() => agents.map((a) => a.id), [agents])
   const selectedAgent = useMemo(
@@ -159,7 +160,7 @@ export function AgentsPage() {
           animate={{ opacity: 1, y: 0 }}
           transition={{ delay: 0.1 }}
         >
-          <section className="min-w-0 overflow-hidden border border-border bg-card shadow-card sm:p-5 p-3">
+          <section className="min-w-0 overflow-visible border border-border bg-card shadow-card sm:p-5 p-3">
             {!isConnected ? (
               <div className="border border-border py-16 text-center">
                 <p className="text-sm font-medium text-muted-foreground">
@@ -173,6 +174,8 @@ export function AgentsPage() {
                 error={error}
                 onRefresh={() => void refetchAgents()}
                 onToggleKillSwitch={toggleKillSwitch}
+                killSwitchDialogAgentId={killSwitchDialogAgentId}
+                onKillSwitchDialogOpenChange={setKillSwitchDialogAgentId}
               />
             )}
           </section>
@@ -183,6 +186,8 @@ export function AgentsPage() {
                 agent={selectedAgent}
                 onUpdated={() => void refetchAgents()}
                 onToggleKillSwitch={toggleKillSwitch}
+                killSwitchDialogAgentId={killSwitchDialogAgentId}
+                onKillSwitchDialogOpenChange={setKillSwitchDialogAgentId}
               />
             ) : (
               <SelectAgentPlaceholder />

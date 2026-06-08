@@ -3,6 +3,7 @@ import type { AgentStatusPhase } from '@/lib/agent-status-copy'
 import type { PlanResponse } from '@/lib/plan-api'
 import type { TaskStep } from '@/hooks/useTaskDetail'
 import type { StreamEvent } from '@/hooks/useTaskStream'
+import type { AbortDetail } from '@/lib/task-result-display'
 
 export type PlanStatus = 'pending' | 'approved' | 'rejected' | 'expired'
 
@@ -28,6 +29,7 @@ export type SessionEntry =
       spent?: string
       budget?: string
       aborted?: boolean
+      abortDetail?: AbortDetail
     }
   | { id: string; kind: 'error'; text: string }
 

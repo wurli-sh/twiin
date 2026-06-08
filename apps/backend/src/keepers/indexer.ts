@@ -193,9 +193,7 @@ export function createIndexer(overrides: Partial<IndexerDeps> = {}) {
     const latest = await deps.getBlockNumber();
     const stored = await deps.getCursor(CURSOR_KEY);
     if (stored > latest) {
-      const rewindTo = deps.startBlock > 0n && deps.startBlock <= latest
-        ? deps.startBlock
-        : latest;
+      const rewindTo = latest > 1n ? latest - 1n : 0n;
       console.warn(
         `[indexer] cursor ${stored} is ahead of latest block ${latest}; rewinding to ${rewindTo}`,
       );

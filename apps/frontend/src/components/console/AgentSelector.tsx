@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState } from 'react'
+import { useRef, useState } from 'react'
 import { ChevronDown, Wallet } from 'lucide-react'
 import { formatAgentLabel } from '@/lib/agent-name'
 import type { TwiinAgentInfo } from '@/hooks/useTwiinAgents'
+import { DropdownPanel } from '@/components/ui/DropdownPanel'
 import { cn } from '@/lib/cn'
 
 type AgentSelectorProps = {
@@ -22,17 +23,8 @@ export function AgentSelector({
   compact,
 }: AgentSelectorProps) {
   const [open, setOpen] = useState(false)
-  const rootRef = useRef<HTMLDivElement>(null)
-  const selected = agents.find((a) => a.id.toString() === selectedId) ?? agents[0]
-
-  useEffect(() => {
-    if (!open) return
-    function handleClick(e: MouseEvent) {
-      if (!rootRef.current?.contains(e.target as Node)) setOpen(false)
-    }
-    document.addEventListener('mousedown', handleClick)
-    return () => document.removeEventListener('mousedown', handleClick)
-  }, [open])
+  const triggerRef = useRef<HTMLButtonElement>(null)
+  const selected = agents.find((a) => a.id.toString() === selectedId) ?? null
 
   const footprint = cn(
     'flex min-h-[36px] items-center rounded-lg border border-border-strong',
@@ -59,10 +51,13 @@ export function AgentSelector({
   }
 
   return (
-    <div ref={rootRef} className="relative">
+    <div>
       <button
+        ref={triggerRef}
         type="button"
         disabled={disabled}
+        aria-haspopup="listbox"
+        aria-expanded={open}
         onClick={() => setOpen((v) => !v)}
         className={cn(
           'flex cursor-pointer items-center gap-2 rounded-lg border border-border-strong bg-background px-2.5 py-1.5 text-xs font-medium transition-colors hover:border-primary hover:bg-primary-bright/10 disabled:cursor-not-allowed disabled:opacity-50',
@@ -84,49 +79,57 @@ export function AgentSelector({
         />
       </button>
 
-      {open && (
-        <div className="absolute right-0 top-full z-50 mt-1.5 min-w-[220px] overflow-hidden rounded-xl border border-border-strong bg-background shadow-card">
-          <div className="border-b border-border px-3 py-2">
-            <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-              Your agents
-            </p>
-          </div>
-          <ul className="max-h-56 overflow-y-auto py-1">
-            {agents.map((agent) => {
-              const isSelected = agent.id.toString() === (selectedId ?? selected?.id.toString())
-              return (
-                <li key={agent.id.toString()}>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      onSelect(agent.id.toString())
-                      setOpen(false)
-                    }}
-                    className={cn(
-                      'flex w-full cursor-pointer items-center px-3 py-2.5 text-left text-xs transition-colors hover:bg-muted',
-                      isSelected && 'bg-primary-bright/15',
-                    )}
-                  >
-                    <div className="min-w-0 flex-1">
-                      <p className="truncate font-semibold text-foreground">
-                        {formatAgentLabel(agent.name, agent.id)}
-                      </p>
-                      <p className="text-[10px] text-muted-foreground">
-                        {agent.tbaBalance} STT · cap {agent.maxPerTask} STT
-                      </p>
-                    </div>
-                    {agent.killSwitch && (
-                      <span className="shrink-0 rounded bg-destructive/10 px-1.5 py-0.5 text-[9px] font-bold uppercase text-destructive">
-                        Off
-                      </span>
-                    )}
-                  </button>
-                </li>
-              )
-            })}
-          </ul>
+      <DropdownPanel
+        anchorRef={triggerRef}
+        open={open}
+        onClose={() => setOpen(false)}
+        align="end"
+        minWidth={220}
+        role="listbox"
+        className="rounded-xl border-border-strong bg-background shadow-card"
+      >
+        <div className="border-b border-border px-3 py-2">
+          <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+            Your agents
+          </p>
         </div>
-      )}
+        <ul className="max-h-56 overflow-y-auto py-1">
+          {agents.map((agent) => {
+            const isSelected = agent.id.toString() === selectedId
+            return (
+              <li key={agent.id.toString()}>
+                <button
+                  type="button"
+                  role="option"
+                  aria-selected={isSelected}
+                  onClick={() => {
+                    onSelect(agent.id.toString())
+                    setOpen(false)
+                  }}
+                  className={cn(
+                    'flex w-full cursor-pointer items-center px-3 py-2.5 text-left text-xs transition-colors hover:bg-muted',
+                    isSelected && 'bg-primary-bright/15',
+                  )}
+                >
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate font-semibold text-foreground">
+                      {formatAgentLabel(agent.name, agent.id)}
+                    </p>
+                    <p className="text-[10px] text-muted-foreground">
+                      {agent.tbaBalance} STT · cap {agent.maxPerTask} STT
+                    </p>
+                  </div>
+                  {agent.killSwitch && (
+                    <span className="shrink-0 rounded bg-destructive/10 px-1.5 py-0.5 text-[9px] font-bold uppercase text-destructive">
+                      Off
+                    </span>
+                  )}
+                </button>
+              </li>
+            )
+          })}
+        </ul>
+      </DropdownPanel>
     </div>
   )
 }

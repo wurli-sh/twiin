@@ -100,7 +100,9 @@ export function Hero() {
           initial="hidden"
           animate="visible"
         >
-          <HeroConsolePreview />
+          <div className="rounded-xl shadow-card ring-1 ring-border/60">
+            <HeroConsolePreview />
+          </div>
         </motion.div>
       </div>
     </section>

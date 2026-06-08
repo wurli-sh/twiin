@@ -28,7 +28,13 @@ describe("db bootstrap", () => {
     );
 
     await ensureSchema();
-    await savePlanRequest("1", "smoke", "[]", "100");
+    await savePlanRequest({
+      planId: "test-plan",
+      personalAgentId: "1",
+      goal: "smoke",
+      stepsJson: "[]",
+      budgetWei: "100",
+    });
 
     await expect(getStepsForTask("1")).resolves.toEqual([]);
   });

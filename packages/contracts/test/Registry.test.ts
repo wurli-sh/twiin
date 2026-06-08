@@ -236,7 +236,7 @@ describe("AgentRegistry", () => {
     ).to.be.revertedWith("active step pending");
   });
 
-  it("double registration same registrant is rejected", async () => {
+  it("same registrant can register multiple agents", async () => {
     const { agentRegistry } = await deployAll();
     const [, , , , op] = await ethers.getSigners();
 
@@ -249,16 +249,19 @@ describe("AgentRegistry", () => {
         [CAP_WEB_SCRAPE],
         { value: ethers.parseEther("5") },
       );
-    await expect(
-      agentRegistry
-        .connect(op)
-        .registerExternalAgent(
-          "second",
-          "http://second.test",
-          ethers.parseEther("0.1"),
-          [CAP_WEB_SCRAPE],
-          { value: ethers.parseEther("5") },
-        ),
-    ).to.be.revertedWith("already registered");
+
+    const secondTx = await agentRegistry
+      .connect(op)
+      .registerExternalAgent(
+        "second",
+        "http://second.test",
+        ethers.parseEther("0.1"),
+        [CAP_WEB_SCRAPE],
+        { value: ethers.parseEther("5") },
+      );
+    await secondTx.wait();
+
+    const configId = await agentRegistry.nextConfigId();
+    expect(configId).to.equal(8n);
   });
 });

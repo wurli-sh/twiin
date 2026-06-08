@@ -8,6 +8,8 @@ type Props = {
   overDailyCap: boolean
   dailyRemaining: number
   perTaskCapStt?: string
+  onRaiseCaps?: () => void
+  isRaisingCaps?: boolean
   className?: string
 }
 
@@ -23,6 +25,8 @@ export function BudgetWarningsBar({
   overDailyCap,
   dailyRemaining,
   perTaskCapStt,
+  onRaiseCaps,
+  isRaisingCaps = false,
   className,
 }: Props) {
   if (!agent) return null
@@ -82,6 +86,16 @@ export function BudgetWarningsBar({
           </li>
         ))}
       </ul>
+      {onRaiseCaps && (overPerTaskCap || overDailyCap) ? (
+        <button
+          type="button"
+          onClick={onRaiseCaps}
+          disabled={isRaisingCaps}
+          className="shrink-0 rounded-md border border-destructive/40 bg-background px-2.5 py-1 text-xs font-medium text-destructive transition-colors hover:bg-destructive/10 disabled:opacity-50"
+        >
+          {isRaisingCaps ? 'Raising…' : 'Raise caps'}
+        </button>
+      ) : null}
     </div>
   )
 }

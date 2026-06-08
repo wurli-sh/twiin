@@ -126,7 +126,14 @@ export function SubAgentRow({ agent, rank, showRank = true, accent = 'leaderboar
  )}
  </p>
  {!isNative && (agent.endpointUrl || agent.lastError) && (
- <p className="mt-1 text-[11px] text-muted-foreground">
+ <p
+ className="mt-1 truncate text-[11px] text-muted-foreground"
+ title={
+ agent.endpointUrl
+ ? `${agent.endpointUrl}${agent.lastError ? ` · ${agent.lastError}` : ''}`
+ : agent.lastError ?? 'No endpoint cached'
+ }
+ >
  {agent.endpointUrl ? agent.endpointUrl : 'No endpoint cached'}
  {agent.lastError ? ` · ${agent.lastError}` : ''}
  </p>

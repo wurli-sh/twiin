@@ -9,7 +9,7 @@ import {
 } from "viem";
 import { AgentOrchestratorAbi } from "./abis";
 import { INFER_TOOLS_CHAT_MAX_ITERATIONS } from "./constants";
-import { decodeNativeAgentResult } from "./somnia-agents";
+import { decodeStepResult } from "./somnia-agents";
 
 /** Matches Somnia LLM Inference agent — docs.somnia.network/agents/base-agents/llm-inference */
 export const JaniceInferenceAbi = [
@@ -161,7 +161,7 @@ export function formatToolResultContent(
     }
     const decoded =
       step.resultHex != null
-        ? decodeNativeAgentResult(step.resultHex)
+        ? decodeStepResult(step.resultHex)
         : null;
     const resultText = decoded ?? (step.resultHex ? step.resultHex : "no result");
     return `Step ${step.stepIdx} completed with state ${step.state}. Result: ${resultText}`;

@@ -13,6 +13,8 @@ export type CreateTaskPreflight = {
 }
 
 const REVERT_HINTS: Record<string, string> = {
+  '0x9d6f73cb': `Plan has too many steps (on-chain limit is 8). Re-plan with fewer steps.`,
+  'badstepcount': 'Plan has too many steps (on-chain limit is 8). Re-plan with fewer steps.',
   'kill switch active': 'Kill switch is ON — go to Agents and click Enable first.',
   'exceeds per-task cap': 'Task budget exceeds your per-task cap (default 1 STT). Lower the budget or raise policy limits.',
   'daily cap exceeded': 'Task budget would exceed the daily cap (default 2 STT).',
@@ -20,7 +22,7 @@ const REVERT_HINTS: Record<string, string> = {
   'value != budgetWei': '6551 wallet balance is too low for this budget. Fund the agent wallet on Agents.',
   'not owner': 'Connected wallet is not the NFT owner for this agent.',
   'not agent': '6551 account does not match the agent ID in the plan.',
-  'bad step count': 'Invalid step count in the plan.',
+  'bad step count': 'Plan has too many steps (on-chain limit is 8). Re-plan with fewer steps.',
   'no budget': 'Task budget must be greater than 0.',
 }
 

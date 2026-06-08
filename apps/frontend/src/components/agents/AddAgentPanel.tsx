@@ -78,7 +78,7 @@ export function AddAgentPanel({
         ) : (
           <>
             Register an HTTP worker on-chain with{' '}
-            <code className="rounded bg-muted px-1 py-0.5 text-xs">web.scrape.discord</code>{' '}
+            <code className="rounded bg-muted px-1 py-0.5 text-xs">data.specialized</code>{' '}
             capability and a 5 STT deposit.
           </>
         )}

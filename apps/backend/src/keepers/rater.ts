@@ -1,7 +1,14 @@
 import { parseAbiItem, type AbiEvent } from "viem";
 import Anthropic from "@anthropic-ai/sdk";
 import { StepState } from "@twiin/shared";
+import {
+  buildAgentRatingHints,
+  buildRatingPrompt,
+  getDeterministicScoreFloor,
+  prepareResultForRating,
+} from "./rater-scoring";
 import { publicClient } from "../clients";
+import { enqueueKeeperWrite } from "../keeper-writes";
 import { addresses, defaultStartBlock, orchestratorContract } from "../contracts";
 import { createAnthropicBudgetGuard } from "../budget";
 import { env } from "../env";
@@ -24,6 +31,7 @@ const MAX_RPC_LOG_RANGE = 1_000n;
 const FAST_FORWARD_LAG_THRESHOLD = 100_000n;
 const FAST_FORWARD_TAIL = 10_000n;
 const MIN_QUALITY = 40;
+
 const externalResultPendingEvent = parseAbiItem(
   "event ExternalResultPending(uint256 indexed taskId, uint8 stepIdx, address registrant, bytes result)",
 ) as AbiEvent;
@@ -76,7 +84,9 @@ export function createRater(overrides: Partial<RaterDeps> = {}) {
     upsertStep,
     publish,
     finalizeExternalStep: (args) =>
-      orchestratorContract.write.finalizeExternalStep(args),
+      enqueueKeeperWrite(() =>
+        orchestratorContract.write.finalizeExternalStep(args),
+      ),
     logger: console,
     ...overrides,
   };
@@ -87,9 +97,7 @@ export function createRater(overrides: Partial<RaterDeps> = {}) {
     const latest = await deps.getBlockNumber();
     const stored = await deps.getCursor(CURSOR_KEY);
     if (stored > latest) {
-      const rewindTo = deps.startBlock > 0n && deps.startBlock <= latest
-        ? deps.startBlock
-        : latest;
+      const rewindTo = latest > 1n ? latest - 1n : 0n;
       deps.logger.warn(
         `[rater] cursor ${stored} is ahead of latest block ${latest}; rewinding to ${rewindTo}`,
       );
@@ -178,17 +186,22 @@ async function rateStep(
   const stepRecord = await deps.getStep(taskIdStr, stepIdx);
   const instruction = stepRecord?.payload ?? "(unknown instruction)";
 
-  const score = await scoreWithClaude(
+  deps.logger.log(
+    `[rater] task=${taskIdStr} step=${stepIdx} instruction=${instruction.slice(0, 200)} result=${resultText.slice(0, 200)}`,
+  );
+
+  const { score, reason } = await scoreWithClaude(
     deps.anthropic,
     deps.budgetGuard,
     instruction,
     resultText,
   );
-  deps.logger.log(`[rater] task=${taskIdStr} step=${stepIdx} score=${score}`);
+  deps.logger.log(`[rater] task=${taskIdStr} step=${stepIdx} score=${score} reason="${reason}"`);
   logTaskTimeline("rater_scored", {
     taskId: taskIdStr,
     stepIdx,
     score,
+    reason,
   });
 
   await deps.saveSubmittedRating(taskIdStr, stepIdx, score);
@@ -233,6 +246,7 @@ async function rateStep(
     taskId: taskIdStr,
     stepIdx,
     score,
+    reason,
     approved: score >= MIN_QUALITY,
   });
   logTaskTimeline("rater_finalized", {
@@ -248,15 +262,10 @@ async function scoreWithClaude(
   budgetGuard: ReturnType<typeof createAnthropicBudgetGuard>,
   instruction: string,
   result: string,
-): Promise<number> {
-  const prompt = `Rate the quality of this AI agent's work on a scale of 0-100.
-A score >= 40 means the result is acceptable and payment will be released.
-
-INSTRUCTION: ${instruction.slice(0, 800)}
-
-RESULT: ${result.slice(0, 1200)}
-
-Respond with ONLY a JSON object: {"score": <number 0-100>, "reason": "<one sentence>"}`;
+): Promise<{ score: number; reason: string }> {
+  const resultForRating = prepareResultForRating(result);
+  const agentHints = buildAgentRatingHints(result);
+  const prompt = buildRatingPrompt(instruction, resultForRating, agentHints);
 
   try {
     budgetGuard.ensureRequestAllowed();
@@ -270,12 +279,15 @@ Respond with ONLY a JSON object: {"score": <number 0-100>, "reason": "<one sente
     const text =
       msg.content[0].type === "text" ? msg.content[0].text.trim() : "";
     const json = text.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
-    const parsed = JSON.parse(json) as { score: number };
-    return Math.max(0, Math.min(100, Math.round(parsed.score)));
+    const parsed = JSON.parse(json) as { score: number; reason?: string };
+    const haikuScore = Math.max(0, Math.min(100, Math.round(parsed.score)));
+    const floor = getDeterministicScoreFloor(result);
+    const score = floor != null ? Math.max(floor, haikuScore) : haikuScore;
+    return { score, reason: parsed.reason ?? "no reason given" };
   } catch (e) {
     budgetGuard.noteFailure(e);
     console.error("[rater] scoring failed, withholding payment (score=0):", e);
-    return 0;
+    return { score: 0, reason: String(e) };
   }
 }
 
