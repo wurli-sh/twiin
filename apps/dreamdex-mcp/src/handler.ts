@@ -310,14 +310,12 @@ function buildDexscreenerSuccess(
   return JSON.stringify(payload);
 }
 
-async function fetchCoingeckoMetrics(coinId: string): Promise<CoingeckoCoinMetrics> {
+async function fetchCoingeckoMetrics(coinId: string): Promise<CoingeckoCoinMetrics | null> {
   const url = buildCoingeckoUrl(coinId);
   const res = await fetch(url, { signal: AbortSignal.timeout(5_000) });
   if (!res.ok) throw new Error(`CoinGecko ${res.status}`);
   const data = (await res.json()) as Record<string, unknown>;
-  const metrics = extractCoingeckoMetrics(data, coinId);
-  if (!metrics) throw new Error(`CoinGecko missing data for id=${coinId}`);
-  return metrics;
+  return extractCoingeckoMetrics(data, coinId) ?? null;
 }
 
 function buildCoingeckoSuccess(
@@ -418,7 +416,17 @@ export async function executeDreamdex(input: ExternalExecuteInput): Promise<stri
     const coinId = parseCoingeckoId(parsed.json);
     try {
       const metrics = await fetchCoingeckoMetrics(coinId);
-      return buildCoingeckoSuccess(env, coinId, metrics);
+      if (metrics) return buildCoingeckoSuccess(env, coinId, metrics);
+      return JSON.stringify({
+        type: "dreamdex-mcp",
+        agentName: env.AGENT_NAME,
+        source: "coingecko",
+        action: "coingecko",
+        id: coinId,
+        available: false,
+        findings: [`CoinGecko does not track "${coinId}" — price data unavailable for ecosystem health assessment`],
+        ts: new Date().toISOString(),
+      });
     } catch (error) {
       return structuredError(env.AGENT_NAME, "coingecko", String(error), {
         action: "coingecko",
