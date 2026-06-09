@@ -28,11 +28,25 @@ export type ExternalBaseEnv = z.infer<typeof BaseEnvSchema> & {
   REGISTRATION_DEPOSIT_WEI: bigint;
 };
 
+function renderDefaults(source: NodeJS.ProcessEnv): Partial<z.infer<typeof BaseEnvSchema>> {
+  if (!source.RENDER) return {};
+  return {
+    HOST: "0.0.0.0",
+    ...(source.RENDER_EXTERNAL_URL && !source.EXTERNAL_PUBLIC_URL
+      ? { EXTERNAL_PUBLIC_URL: source.RENDER_EXTERNAL_URL }
+      : {}),
+  };
+}
+
 export function loadBaseEnv(
   source: NodeJS.ProcessEnv = process.env,
   defaults?: Partial<z.infer<typeof BaseEnvSchema>>,
 ): ExternalBaseEnv {
-  const parsed = BaseEnvSchema.parse({ ...defaults, ...source });
+  const parsed = BaseEnvSchema.parse({
+    ...renderDefaults(source),
+    ...defaults,
+    ...source,
+  });
   return {
     ...parsed,
     AGENT_COST_WEI: parseEther(parsed.AGENT_COST_STT),

@@ -34,6 +34,7 @@
     "register:agent-adapter": "pnpm --filter @twiin/agent-adapter register:somnia",
     "agents:audit": "node --env-file-if-exists=.env.external-agents.local --env-file-if-exists=.env.external-agents node_modules/.pnpm/tsx@4.22.4/node_modules/tsx/dist/cli.mjs packages/external-kit/scripts/register-all.ts --audit",
     "agents:register": "node --env-file-if-exists=.env.external-agents.local --env-file-if-exists=.env.external-agents node_modules/.pnpm/tsx@4.22.4/node_modules/tsx/dist/cli.mjs packages/external-kit/scripts/register-all.ts",
+    "register:render-agents": "node --env-file-if-exists=scripts/register-render-agents.env.local --env-file-if-exists=scripts/register-render-agents.env node_modules/.pnpm/tsx@4.22.4/node_modules/tsx/dist/cli.mjs scripts/register-render-agents.ts",
     "verify:external": "pnpm --filter @twiin/backend verify:externals",
     "restore:external-keys": "node scripts/restore-external-agent-keys.cjs",
     "dev:docs-lens": "pnpm --filter @twiin/docs-lens dev",

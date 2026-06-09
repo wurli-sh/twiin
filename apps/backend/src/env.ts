@@ -65,4 +65,11 @@ const EnvSchema = z
 
 export type Env = z.infer<typeof EnvSchema>;
 
-export const env = EnvSchema.parse(process.env);
+function loadProcessEnv(): NodeJS.ProcessEnv {
+  if (process.env.RENDER && process.env.TRUST_PROXY === undefined) {
+    return { ...process.env, TRUST_PROXY: "true" };
+  }
+  return process.env;
+}
+
+export const env = EnvSchema.parse(loadProcessEnv());
