@@ -39,7 +39,7 @@ const ANALYSIS_CORROBORATE =
   "Corroborate ONLY prior step outputs. Compare sources; if key numerics or narratives disagree materially, confidence <= 50. If they agree, confidence >= 75. Output JSON: {confidence, summary, agreementNotes, risks}. Never invent facts.";
 
 const BRIEFSMITH_PAYLOAD =
-  "Format an executive brief with sections: Executive Summary, Key Metrics, Corroboration Notes, Risks & Gaps, Confidence Score, Sources. Use ONLY prior outputs below. Markdown only. Never invent numbers or dates.";
+  "Synthesize the prior agent outputs into a structured executive brief. Your primary job is to answer the user's question using the collected data and draw a clear, data-driven conclusion. Include sections: Executive Summary, Key Metrics, Conclusion (direct answer to the question), Corroboration Notes, Risks & Gaps, Confidence Score, Sources. Use ONLY the prior context below. Markdown only. Never invent numbers or dates. If the prior context contains a healthScore or confidence score, surface it prominently in the conclusion.";
 
 export function resolveTemplateSteps(
   steps: PlanStepTemplate[],
@@ -209,8 +209,8 @@ export function buildEcosystemHealthTemplate(): ConsolePlanTemplate {
       {
         agentName: ExternalAgentName.DOCS_LENS,
         payload: JSON.stringify({
-          question: "What agents, oracles, and dev tools does Somnia expose?",
-          docPath: "developer/building-dapps",
+          question: "What agents, oracles, LLM inference, and developer tools does Somnia offer? List agent capabilities including JSON API requests, LLM parse website, consensus, receipts, gas fees, and infrastructure details.",
+          docPath: "agents/readme",
         }),
         maxCostWei: "0",
         timeoutSeconds: 120,
@@ -224,7 +224,16 @@ export function buildEcosystemHealthTemplate(): ConsolePlanTemplate {
       DREAMDEX_COINGECKO_STEP,
       {
         configId: NativeConfigId.ANALYSIS,
-        payload: `${ANALYSIS_CORROBORATE} Score Somnia ecosystem health 0-100 in the JSON summary field.`,
+        payload: `${ANALYSIS_CORROBORATE}
+Rules for this analysis:
+- If a step returned an error or no data, note it in agreementNotes — do not invent data to fill gaps.
+- Score ecosystem health based on SOLELY the data received:
+  - 0-25: no data or all sources errored
+  - 26-50: only 1 data source available, limited information
+  - 51-75: 2+ sources with corroborating data
+  - 76-100: multiple rich sources agreeing strongly
+- If no prior step data exists, output {confidence:0, summary:"No data available — pipeline produced no results", agreementNotes:"All prior steps returned empty", risks:["Complete data failure"], healthScore:0}
+Output JSON must include: {confidence, summary, agreementNotes, risks, healthScore}. Never fabricate numbers.`,
         maxCostWei: "0",
         timeoutSeconds: 120,
       },

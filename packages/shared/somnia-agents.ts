@@ -628,6 +628,24 @@ function truncateForPriorContext(text: string): string {
   return `${text.slice(0, MAX_PRIOR_CONTEXT_CHARS)}...`;
 }
 
+/** Strip large fields from agent JSON before prior-context truncation. */
+export function slimStepResultForContext(decoded: string): string {
+  const trimmed = decoded.trim();
+  if (!trimmed.startsWith("{")) return decoded;
+
+  try {
+    const parsed = JSON.parse(trimmed) as Record<string, unknown>;
+    if (parsed.type === "docs-lens") {
+      const { excerpt: _excerpt, ...slim } = parsed;
+      return JSON.stringify(slim);
+    }
+  } catch {
+    /* plain text or truncated JSON */
+  }
+
+  return decoded;
+}
+
 /**
  * Builds prior-step context for external relay enrichment (mirrors on-chain _priorStepContext).
  */
@@ -648,7 +666,9 @@ export function buildPriorStepContext(
       decoded,
       step.payload ?? undefined,
     );
-    lines.push(`- ${label}: ${truncateForPriorContext(decoded)}`);
+    lines.push(
+      `- ${label}: ${truncateForPriorContext(slimStepResultForContext(decoded))}`,
+    );
   }
 
   if (lines.length === 0) return "";

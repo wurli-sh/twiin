@@ -9,6 +9,7 @@ import {
   decodeNativeAgentResult,
   decodeStepResult,
   buildPriorStepContext,
+  slimStepResultForContext,
   stepOutputLabelFromResult,
   enrichExternalPayload,
   decodeTaskCompletionFromLogData,
@@ -173,6 +174,46 @@ describe("buildPriorStepContext", () => {
     );
     expect(context).toContain("- docs-lens:");
     expect(context).not.toContain("external-8");
+  });
+
+  it("strips docs-lens excerpt from prior context to avoid truncation", () => {
+    const json = JSON.stringify({
+      type: "docs-lens",
+      agentName: "docs-lens@twiin",
+      question: "What agents does Somnia offer?",
+      answered: true,
+      summary: "• Agents (Somnia Agents)",
+      excerpt: "x".repeat(10_000),
+      findings: ["Official Somnia docs query"],
+    });
+    const hex = `0x${Buffer.from(json, "utf8").toString("hex")}` as const;
+    const context = buildPriorStepContext(
+      [{ stepIdx: 0, configId: 8, resultHex: hex }],
+      1,
+    );
+    const payload = context.split(": ").slice(1).join(": ");
+    const parsed = JSON.parse(payload.replace(/\.\.\.$/, "")) as Record<string, unknown>;
+    expect(parsed.excerpt).toBeUndefined();
+    expect(parsed.summary).toContain("Agents");
+    expect(context.length).toBeLessThan(500);
+  });
+});
+
+describe("slimStepResultForContext", () => {
+  it("removes excerpt from docs-lens JSON", () => {
+    const raw = JSON.stringify({
+      type: "docs-lens",
+      summary: "• Overview — content",
+      excerpt: "y".repeat(8000),
+    });
+    const slimmed = slimStepResultForContext(raw);
+    const parsed = JSON.parse(slimmed) as Record<string, unknown>;
+    expect(parsed.excerpt).toBeUndefined();
+    expect(parsed.summary).toContain("Overview");
+  });
+
+  it("returns non-JSON text unchanged", () => {
+    expect(slimStepResultForContext("plain text")).toBe("plain text");
   });
 });
 
