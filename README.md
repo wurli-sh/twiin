@@ -28,35 +28,113 @@ Own the AI agent that plans, hires, reaches consensus, and publishes — all on-
 
 ## Architecture
 
-```
-deployTwiin(name) -> NFT + ERC-6551 wallet + policy
-       |
-       v  one sig: twiinAccount.execute(orchestrator, createTask, budget)
-AgentOrchestrator --locks budget--> dispatches steps
-       |                    |
-  native lane           external lane
-  (Somnia validators)   (HTTP + ECDSA result -> Haiku rates -> pay)
-       |                    |
-       v                    v
-OracleFeed.publishFeed --[Reactivity]--> RefreshManager auto-refresh stale feeds
+### Agent Deployment
 
-Frontend (React/Vite/wagmi)          Backend (Hono :3001)
-  wagmi reads chain (source of truth)   POST /api/plan, GET /api/stream (SSE)
-  SSE for live UX                     relay / rater / indexer / externals / timeouts
+```
+User mints TwiinAgent NFT
+        |
+        v  TwiinFactory.deployTwiin(name)
+   +------------------------------------+
+   |   TwiinFactory                     |
+   |   mints ERC-721 NFT                |
+   |   deploys ERC-6551 wallet          |
+   |   claims name@twiin                |
+   |   seeds AgentPolicy (2 STT daily)  |
+   +---------------+--------------------+
+                   |
+                   v  deterministic CREATE2
+   +------------------------------------+
+   |   TwiinAccount (6551 TBA)          |
+   |   holds STT, signs via execute()   |
+   +------------------------------------+
+```
+
+### Task Execution
+
+```
+User signs twiinAccount.execute(orchestrator, createTask, budgetWei)
+        |
+        v  one sig, budget locked
+   +------------------------------------+
+   |   AgentOrchestrator                |
+   |   locks budget in AgentVault       |
+   |   dispatches up to 8 steps         |
+   |   enforces 30min deadline          |
+   +-------+----------------------------+
+           |
+      +----+----+
+      |         |
+      v         v
++-----------+  +-------------------+
+|Native Lane|  |  External Lane    |
+|Somnia val |  |  7 HTTP agents   |
+|subcomm 3  |  |  ECDSA-signed    |
+|Haiku rates|  |  Haiku rates     |
+|score≥40   |  |  score≥40 pays   |
++-----------+  +-------------------+
+      |         |
+      +----+----+
+           |
+           v  StepCompleted event
+   +------------------------------------+
+   |   OracleFeed.publishFeed           |
+   |   (value + confidence + TTL)       |
+   +---------------+--------------------+
+                   |
+                   v  [Somnia Reactivity subscription]
+   +------------------------------------+
+   |   RefreshManager                   |
+   |   auto-refresh stale feeds         |
+   |   (on-chain, no off-chain cron)    |
+   +------------------------------------+
+```
+
+### Frontend → Backend → Contracts
+
+```
+Frontend (React 19 + Vite + wagmi)
+  |  wagmi reads chain (source of truth — balances, Elo, feeds)
+  |  SSE for live UX stream
+  v
+Backend (Hono :3001)
+  |-- POST /api/plan        Claude Haiku planner
+  |-- GET  /api/stream/:id  SSE task execution stream
+  |-- GET  /api/tasks/:id   Task state from AgentOrchestrator
+  |-- GET  /api/agents      Registered external agents
+  v
+Keeper Loop (5 keepers, 4-6s poll)
+  |-- relay — Routes assigned steps to Claude Sonnet or HTTP POST
+  |-- rater — Claude Haiku rates completed steps
+  |-- indexer — Polls on-chain events → SQLite → SSE
+  |-- externals — Dispatches ExternalAgentRequest to registered HTTP agents
+  |-- timeouts — Slashes expired external steps at deadline
+  v
+Smart Contracts (Solidity 0.8.30)
+  AgentOrchestrator -> AgentVault -> OracleFeed
+       |-> AgentPolicy (daily cap, kill switch)
+       |-> AgentRegistry (two-lane: native + external)
 ```
 
 ### Directory Structure
 
 ```
 twiin/
-├── packages/contracts/    # Solidity 0.8.30 — orchestration, policy, oracle
-├── packages/shared/       # ABIs, addresses, digest + ERC-6551 helpers
-├── packages/external-kit/ # HTTP server + on-chain registration helpers
-├── apps/backend/          # Claude planner, 5 keepers, SSE, SQLite
-├── apps/frontend/         # deploy flow, console, feeds, marketplace
-├── apps/*-lens/ etc.      # 7 external agents (briefsmith, docs-lens, dreamdex-mcp,
-│                          # onchain-lens, reactivity-lens, receipt-auditor, agent-adapter)
-└── docs/                  # Banner, UI specs, assets
+├── packages/
+│   ├── contracts/      # Solidity 0.8.30 — 11 contracts + interfaces
+│   ├── shared/         # ABIs, addresses, digest, 6551 helpers
+│   └── external-kit/   # HTTP server + on-chain registration helpers
+├── apps/
+│   ├── backend/        # Hono, Claude planner, 5 keepers, SSE, SQLite
+│   ├── frontend/       # React/Vite — deploy, console, feeds, marketplace
+│   ├── briefsmith/     # Executive brief agent (Anthropic Haiku)
+│   ├── docs-lens/      # Somnia docs query agent
+│   ├── dreamdex-mcp/   # Market/dex data agent
+│   ├── onchain-lens/   # Block/tx snapshot agent
+│   ├── reactivity-lens/ # OracleFeed event scanner
+│   ├── receipt-auditor/ # Agent receipt forensics
+│   └── agent-adapter/  # Generic HTTP proxy adapter
+├── demo/               # Banner and demo assets
+└── docs/               # Specifications and references
 ```
 
 ---
@@ -77,6 +155,50 @@ twiin/
 | 4 | `reporter-bot@twiin` | `12847293847561029384` | 0.24 STT | `llm.report` |
 | 5 | `executor-bot@twiin` | `12847293847561029384` | 0.24 STT | `onchain.execute` |
 - **External lane** — 7 HTTP agents in-repo; ECDSA-signed results (`\x19Twiin External Result v1\n`); timeout fallback
+
+### Contract Cascade
+
+```
+TwiinFactory.deployTwiin(name)
+     |
+     v
+TwiinAgent (ERC-721) + TwiinNames (name@twiin)
+     |
+     v  [ERC-6551 CREATE2]
+TwiinAccount (deterministic 6551 wallet, holds STT)
+     |
+     v  twiinAccount.execute(orchestrator, createTask, budgetWei)
+AgentOrchestrator
+     |-- locks budget in AgentVault
+     |-- checks daily + per-task caps via AgentPolicy
+     |-- routes step via AgentRegistry (two-lane Elo/capability sort)
+     |
+     |-- NativeLane: dispatches to Somnia validator subcommittee (3 of 6)
+     |       |-- validators execute via Somnia Agents API
+     |       |-- emit StepUpdated(Completed) -> Haiku rates -> score≥40 pays
+     |
+     |-- ExternalLane: dispatches HTTP request via keepers
+     |       |-- agent signs result with ECDSA (\x19Twiin v1 domain separator)
+     |       |-- submitExternalResult -> Haiku rates -> score≥40 pays
+     |       |-- timeout fallback at deadline (keeper slashes)
+     |
+     |-- emits StepUpdated per state transition
+     |-- final TaskCompleted -> publishFeed on OracleFeed
+     |
+     v  [Somnia Reactivity subscription chain]
+OracleFeed (publishFeed)
+     |
+     v  [Reactive subscription #1]
+RefreshManager
+     |-- checks latest feed TTL
+     |-- calls TwiinAccount.subscribePull for refresh budget
+     |-- calls pullForRefresh on OracleFeed
+     |
+     v  [Reactive subscription #2]
+OracleFeed (auto-refresh stale feeds, no off-chain cron)
+```
+
+**11 contracts** | **6 native agents** | **7 external agents** | **5 keepers** | **2 reactive subscriptions** | **Somnia Shannon Testnet**
 
 ---
 
@@ -139,4 +261,3 @@ pnpm agents:register
 
 ---
 
-**11 contracts** | **6 native agents** | **7 external agents** | **5 keepers** | **Somnia Shannon Testnet**
