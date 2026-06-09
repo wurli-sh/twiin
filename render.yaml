@@ -1,0 +1,56 @@
+# Twiin — Render Blueprint (backend only, free tier)
+#
+# Deploys twiin-backend: Hono API + keepers. Native Somnia agents (configIds 0–5) work
+# without external HTTP agents. External-agent pipelines need separate deploy later.
+#
+# Setup:
+#   1. Render Dashboard → New → Blueprint → connect this repo
+#   2. Fill secret env vars when prompted
+#   3. Fund the keeper wallet (STT on Somnia testnet) — address is in deploy logs
+#   4. Ping /health every 10 min so free tier doesn't spin down (UptimeRobot, cron-job.org)
+#   5. Point Vercel /api rewrites at https://twiin-backend.onrender.com/api/:path*
+
+envVarGroups:
+  - name: twiin-backend
+    envVars:
+      - key: NODE_VERSION
+        value: "20"
+      - key: SOMNIA_RPC_URL
+        value: https://dream-rpc.somnia.network/
+      - key: KEEPER_PRIVATE_KEY
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: TURSO_DB_URL
+        sync: false
+      - key: TURSO_AUTH_TOKEN
+        sync: false
+      - key: PLAN_SECRET
+        sync: false
+
+services:
+  - type: web
+    name: twiin-backend
+    runtime: node
+    plan: free
+    region: oregon
+    buildCommand: >-
+      pnpm install --frozen-lockfile &&
+      pnpm --filter @twiin/shared build &&
+      pnpm --filter @twiin/backend build
+    startCommand: node apps/backend/dist/index.js
+    healthCheckPath: /health
+    buildFilter:
+      paths:
+        - apps/backend/**
+        - packages/shared/**
+        - pnpm-lock.yaml
+        - package.json
+        - pnpm-workspace.yaml
+        - render.yaml
+    envVars:
+      - fromGroup: twiin-backend
+      - key: START_BLOCK
+        value: "403140418"
+      - key: RUN_KEEPERS
+        value: "true"
