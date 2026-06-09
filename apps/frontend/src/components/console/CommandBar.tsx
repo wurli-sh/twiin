@@ -15,6 +15,8 @@ type Props = {
   submitDisabled?: boolean
   isPlanning?: boolean
   showHint?: boolean
+  placeholder?: string
+  hint?: string
 }
 
 export function CommandBar({
@@ -27,6 +29,8 @@ export function CommandBar({
   submitDisabled,
   isPlanning,
   showHint = true,
+  placeholder = 'Tell your Twiin what to accomplish…',
+  hint,
 }: Props) {
   const inputDisabled = disabled || isPlanning
   const sendDisabled = (submitDisabled ?? disabled) || isPlanning
@@ -82,8 +86,8 @@ export function CommandBar({
             disabled={inputDisabled}
             onKeyDown={handleKeyDown}
             onInput={handleAutoResize}
-            placeholder="Tell your Twiin what to accomplish…"
-            className="command-bar-textarea flex-1 resize-none border-none bg-transparent p-0 py-1.5 text-sm leading-snug text-foreground outline-none placeholder:text-muted-foreground/70"
+            placeholder={placeholder}
+            className="command-bar-textarea flex-1 resize-none border-none bg-transparent p-0 py-1.5 text-sm leading-snug text-foreground outline-none placeholder:text-muted-foreground/70 disabled:cursor-not-allowed disabled:opacity-60"
             style={{ height: '36px', maxHeight: '200px', overflowY: 'auto' }}
           />
           <div className="mt-0.5 flex h-9 shrink-0 items-center gap-0.5 rounded border border-border bg-muted px-1.5 py-1 text-[10px] text-muted-foreground">
@@ -129,7 +133,8 @@ export function CommandBar({
         </div>
         {showHint && (
           <p className="mt-1.5 text-center text-xs text-muted-foreground/70">
-            {isPlanning ? 'Planning your task…' : 'Enter to plan · Shift+Enter for newline'}
+            {hint ??
+              (isPlanning ? 'Planning your task…' : 'Enter to plan · Shift+Enter for newline')}
           </p>
         )}
       </form>

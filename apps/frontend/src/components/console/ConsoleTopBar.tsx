@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react'
 import { ListChecks, SquarePen } from 'lucide-react'
 import type { TwiinAgentInfo } from '@/hooks/useTwiinAgents'
 import { AgentSelector } from '@/components/console/AgentSelector'
@@ -25,6 +26,7 @@ type Props = {
   stepsToggleActive?: boolean
   stepProgressLabel?: string | null
   onStepsToggle?: () => void
+  accessBar?: ReactNode
 }
 
 export function ConsoleTopBar({
@@ -47,6 +49,7 @@ export function ConsoleTopBar({
   stepsToggleActive = false,
   stepProgressLabel = null,
   onStepsToggle,
+  accessBar,
 }: Props) {
   return (
     <div className="sticky top-0 z-30 shrink-0 border-b border-border/80 bg-background/95 pb-2 backdrop-blur-sm">
@@ -132,7 +135,8 @@ export function ConsoleTopBar({
         </div>
       </div>
 
-      <div className="mt-2 min-h-[40px]">
+      <div className="mt-2 min-h-[40px] space-y-2">
+        {accessBar}
         <BudgetWarningsBar
           agent={agent}
           lowBalance={lowBalance}

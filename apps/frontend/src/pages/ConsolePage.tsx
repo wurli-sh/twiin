@@ -6,8 +6,8 @@ import { ExecutionSidebar } from '@/components/console/ExecutionSidebar'
 import { getExecutionStepSummary } from '@/components/console/ExecutionPanel'
 import { CommandBar } from '@/components/console/CommandBar'
 import { ConsoleTopBar } from '@/components/console/ConsoleTopBar'
+import { ConsoleAccessBar } from '@/components/console/ConsoleAccessBar'
 import { SuggestedPrompts } from '@/components/console/SuggestedPrompts'
-import { TwiinAvatar } from '@/components/ui/TwiinAvatar'
 import { TextLoop } from '@/components/ui/TextLoop'
 import { useTwiinAgents } from '@/hooks/useTwiinAgents'
 import { useCreateTask } from '@/hooks/useCreateTask'
@@ -15,6 +15,7 @@ import { useAgentPolicy } from '@/hooks/useAgentPolicy'
 import { useTaskStream } from '@/hooks/useTaskStream'
 import { useTaskDetail } from '@/hooks/useTaskDetail'
 import { useWallet } from '@/hooks/useWallet'
+import { useNetworkGuard } from '@/hooks/useNetworkGuard'
 import { useUIStore } from '@/stores/ui'
 import { type PlanBudgetMismatch } from '@/components/console/PlanBudgetRecovery'
 import {
@@ -140,6 +141,7 @@ function appendResultForTask(
 
 export function ConsolePage() {
   const { isConnected } = useWallet()
+  const { wrongNetwork } = useNetworkGuard()
   const { agents, isLoading: agentsLoading, refetchAgents } = useTwiinAgents()
   const selectedAgentId = useUIStore((s) => s.selectedAgentId)
   const setSelectedAgentId = useUIStore((s) => s.setSelectedAgentId)
@@ -193,7 +195,10 @@ export function ConsolePage() {
   const overDailyCap =
     agent && !Number.isNaN(budgetNum) && dailyRemaining > 0 && budgetNum > dailyRemaining
 
+  const walletBlocked = !isConnected || wrongNetwork
+
   const composerLocked =
+    walletBlocked ||
     isPlanning ||
     isApproving ||
     isRaisingCaps ||
@@ -652,21 +657,19 @@ export function ConsolePage() {
     setBudgetStt(prompt.budgetStt)
   }
 
+  const commandPlaceholder = walletBlocked
+    ? 'Connect wallet to send a goal…'
+    : !agentId
+      ? 'Deploy an agent to start planning…'
+      : 'Tell your Twiin what to accomplish…'
+
+  const commandHint = walletBlocked
+    ? 'Wallet required to plan and approve on-chain tasks'
+    : undefined
+
   async function handleRaiseCapsFromWarning() {
     if (!agent || Number.isNaN(budgetNum) || budgetNum <= 0) return
     await ensurePolicyCapsForBudget(budgetNum)
-  }
-
-  if (!isConnected) {
-    return (
-      <div className="flex h-full flex-col items-center justify-center px-4 text-center">
-        <TwiinAvatar name="janice" size="lg" className="mb-5" />
-        <h1 className="text-2xl font-bold text-foreground">Twiin Console</h1>
-        <p className="mt-2 max-w-sm text-sm text-muted-foreground">
-          Connect your wallet to plan tasks, approve steps, and watch live execution.
-        </p>
-      </div>
-    )
   }
 
   return (
@@ -689,11 +692,17 @@ export function ConsolePage() {
             agent && (overPerTaskCap || overDailyCap) ? handleRaiseCapsFromWarning : undefined
           }
           isRaisingCaps={isRaisingCaps}
-          agentSelectorDisabled={isPlanning || isApproving}
+          agentSelectorDisabled={walletBlocked || isPlanning || isApproving}
           showStepsToggle={hasActivity}
           stepsToggleActive={executionPanelOpen || mobileExecutionPanelOpen}
           stepProgressLabel={stepProgressLabel}
           onStepsToggle={handleStepsToggle}
+          accessBar={
+            <ConsoleAccessBar
+              agentsLoading={agentsLoading}
+              hasAgents={agents.length > 0}
+            />
+          }
         />
 
         {!hasActivity ? (
@@ -759,6 +768,8 @@ export function ConsolePage() {
                 disabled={composerLocked}
                 submitDisabled={submitDisabled}
                 isPlanning={isPlanning}
+                placeholder={commandPlaceholder}
+                hint={commandHint}
               />
               <SuggestedPrompts
                 disabled={composerLocked || isPlanning}
@@ -806,6 +817,8 @@ export function ConsolePage() {
                   submitDisabled={submitDisabled}
                   isPlanning={isPlanning}
                   showHint={false}
+                  placeholder={commandPlaceholder}
+                  hint={commandHint}
                 />
               </div>
             </div>
