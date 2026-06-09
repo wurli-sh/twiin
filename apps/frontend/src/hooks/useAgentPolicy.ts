@@ -7,6 +7,7 @@ import {
   TwiinAccountAbi,
 } from '@/config/contracts'
 import { readContract } from '@/lib/read-contract'
+import { parsePoliciesTuple, type PoliciesTuple } from '@/lib/agent-policy-read'
 import { somniaTestnet } from '@/config/chains'
 
 export type PullApproval = {
@@ -79,6 +80,14 @@ export function useAgentPolicy() {
           // Deployed policy may predate getAllowedContracts — keep factory seed allowlist.
         }
 
+        const policy = await readContract<PoliciesTuple>(publicClient, {
+          address: CONTRACTS.policy.address,
+          abi: AgentPolicyAbi,
+          functionName: 'policies',
+          args: [input.agentId],
+        })
+        const parsed = parsePoliciesTuple(policy)
+
         const tx = await writeContractAsync({
           chainId: somniaTestnet.id,
           address: CONTRACTS.policy.address,
@@ -88,6 +97,7 @@ export function useAgentPolicy() {
             input.agentId,
             parseEther(input.dailyCapStt),
             parseEther(input.maxPerTaskStt),
+            parsed.maxPerTaskWeiTrustless,
             allowedContracts,
             input.killSwitch,
           ],

@@ -35,15 +35,15 @@ export function Hero() {
 
           <motion.div variants={fadeInLeft}>
             <h1
-              aria-label="Your named agent. Plans. Executes. Publishes."
+              aria-label="Own the AI agent. Plans. Hires. Verifies. Publishes."
               className="text-balance text-4xl font-bold leading-[1.1] tracking-tight text-foreground sm:text-5xl lg:text-6xl xl:text-7xl"
             >
               <BlurReveal as="span" className="block" speedReveal={1.1}>
-                Your named agent.
+                Own the AI agent.
               </BlurReveal>
               <span className="mt-1 block text-primary">
                 <TextLoop interval={2.5} className="justify-items-start">
-                  {['Plans.', 'Executes.', 'Publishes.']}
+                  {['Plans.', 'Hires.', 'Verifies.', 'Publishes.']}
                 </TextLoop>
               </span>
             </h1>
@@ -53,10 +53,10 @@ export function Hero() {
             className="mt-6 max-w-lg text-pretty text-base text-muted-foreground sm:text-lg"
             variants={fadeInLeft}
           >
-            Mint a Twiin NFT with its own wallet, approve a Claude plan once, and hire
-            Somnia-native sub-agents —{' '}
+            Own the AI agent that plans with Claude, hires sub-agents, and reaches
+            consensus —{' '}
             <HighlightedText from="bottom" variant="ink">
-              every step is consensus-verified on-chain
+              every step is verified on-chain
             </HighlightedText>
             .
           </motion.p>

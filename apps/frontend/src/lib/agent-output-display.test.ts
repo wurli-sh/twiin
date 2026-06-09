@@ -28,8 +28,8 @@ describe('formatAgentJsonOutput', () => {
     })
 
     expect(formatted).toContain('**SOMI/USDC**')
-    expect(formatted).toContain('Price: $0.006800')
-    expect(formatted).toContain('Liquidity: $67.9K')
+    expect(formatted).toContain('Price: **$0.006800**')
+    expect(formatted).toContain('Liquidity: **$67.9K**')
   })
 
   it('formats docs-lens JSON into question and deduped summary', () => {
@@ -43,9 +43,26 @@ describe('formatAgentJsonOutput', () => {
       findings: ['Official Somnia docs query: What are the main LP risks on dreamDEX?'],
     })
 
-    expect(formatted).toContain('Question: What are the main LP risks on dreamDEX?')
+    expect(formatted).toContain('Query: What are the main LP risks on dreamDEX?')
     expect(formatted).toContain('Slippage risk')
     expect((formatted?.match(/Slippage risk/g) ?? []).length).toBe(1)
+  })
+
+  it('includes doc source and long overview without harsh truncation', () => {
+    const longOverview =
+      'Overview — Prototype Notice: Somnia Agents is in prototype state and deployed on both Somnia Mainnet (chain ID 5031) and Somnia Testnet (chain ID 50312). Features and APIs may change as development continues toward production readiness.'
+    const formatted = formatAgentJsonOutput({
+      type: 'docs-lens',
+      question: 'What agents does Somnia offer?',
+      docPath: 'readme',
+      docUrl: 'https://docs.somnia.network/readme.md',
+      answered: true,
+      summary: `• ${longOverview}`,
+    })
+
+    expect(formatted).toContain('50312')
+    expect(formatted).toContain('production readiness')
+    expect(formatted).toContain('Source: readme')
   })
 })
 
@@ -59,9 +76,22 @@ describe('formatReportSectionContent', () => {
     const formatted = formatReportSectionContent(raw, 'Key Metrics')
 
     expect(formatted).toContain('### DreamDEX market')
-    expect(formatted).toContain('Price: $0.006800')
-    expect(formatted).not.toContain('{"type":"dreamdex-mcp"')
+    expect(formatted).toContain('Price: **$0.006800**')
+  }, 10_000)
+
+  it('formats Claude-style docs-lens blocks in Key Metrics', () => {
+    const raw = [
+      'docs-lens',
+      '{"type":"docs-lens","question":"What agents?","answered":true,"summary":"• Overview — Prototype Notice: Somnia Agents is in prototype state"}',
+      'dreamdex-mcp',
+      'somnia ~$0.108314 (CoinGecko)',
+    ].join('\n')
+
+    const formatted = formatReportSectionContent(raw, 'Key Metrics')
+
     expect(formatted).toContain('### Somnia docs')
+    expect(formatted).toContain('Prototype Notice')
+    expect(formatted).not.toContain('{"type"')
   })
 })
 
@@ -82,7 +112,7 @@ describe('parseReportMarkdown', () => {
     const metrics = parsed.sections.find((s) => s.title === 'Key Metrics')
 
     expect(metrics?.content).toContain('### DreamDEX market')
-    expect(metrics?.content).toContain('Price: $0.006800')
+    expect(metrics?.content).toContain('Price: **$0.006800**')
     expect(metrics?.content).not.toContain('{"type":"dreamdex-mcp"')
   })
 })

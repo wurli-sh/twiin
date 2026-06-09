@@ -21,7 +21,7 @@ function isSectionHeading(line: string): boolean {
   if (!trimmed) return false
   if (/^Section\s+\d+:/i.test(trimmed)) return true
   if (/^\*\*.+\*\*$/.test(trimmed) && trimmed.length < 120) return true
-  if (/^#{1,3}\s+/.test(trimmed)) return true
+  if (/^##\s+/.test(trimmed)) return true
   return false
 }
 

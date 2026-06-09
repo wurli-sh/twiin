@@ -36,6 +36,23 @@ type Props = {
   isPublishing?: boolean
 }
 
+import React from 'react'
+
+function extractTextContent(children: React.ReactNode): string {
+  let text = ''
+  React.Children.forEach(children, (child) => {
+    if (typeof child === 'string') text += child
+    else if (typeof child === 'number') text += String(child)
+    else if (React.isValidElement(child)) {
+      const props = child.props as { children?: React.ReactNode }
+      text += extractTextContent(props.children)
+    }
+  })
+  return text
+}
+
+const METRIC_LINE_RE = /^(Price|Spot|Liquidity|Market cap|24h volume|24h change|24h vol): (.+)$/i
+
 const markdownComponents: Components = {
   h2: ({ children }) => (
     <h2 className="mt-4 mb-2 text-sm font-semibold tracking-tight text-foreground first:mt-0">
@@ -43,7 +60,7 @@ const markdownComponents: Components = {
     </h2>
   ),
   h3: ({ children }) => (
-    <h3 className="mt-3 mb-1.5 border-b border-border/60 pb-1 text-[11px] font-semibold uppercase tracking-wide text-foreground first:mt-0">
+    <h3 className="mt-3 mb-1.5 border-b border-border/60 pb-1 text-[11px] font-semibold tracking-wide text-foreground first:mt-0">
       {children}
     </h3>
   ),
@@ -66,7 +83,19 @@ const markdownComponents: Components = {
       {children}
     </ol>
   ),
-  li: ({ children }) => <li className="pl-0.5">{children}</li>,
+  li: ({ children }) => {
+    const text = extractTextContent(children)
+    const metricMatch = text.match(METRIC_LINE_RE)
+    if (metricMatch) {
+      return (
+        <li className="flex items-baseline gap-1.5 pl-0.5 text-[11px]">
+          <span className="shrink-0 font-medium text-muted-foreground">{metricMatch[1]}:</span>
+          <span className="truncate text-sm font-bold text-foreground">{metricMatch[2]}</span>
+        </li>
+      )
+    }
+    return <li className="pl-0.5">{children}</li>
+  },
   hr: () => <div className="my-3 h-px bg-border/70" role="separator" />,
   blockquote: ({ children }) => (
     <blockquote className="my-2 border-l-2 border-primary/30 pl-3 text-xs text-muted-foreground">
@@ -136,7 +165,7 @@ function ReportSectionCard({ section, index }: { section: ReportSection; index: 
         <h4 className="text-xs font-semibold leading-snug text-foreground">{section.title}</h4>
       </div>
       {section.content ? (
-        <div className="pl-7 break-words [overflow-wrap:anywhere]">
+        <div className="space-y-2 pl-7 break-words [overflow-wrap:anywhere]">
           <ReactMarkdown components={markdownComponents}>{section.content}</ReactMarkdown>
         </div>
       ) : null}

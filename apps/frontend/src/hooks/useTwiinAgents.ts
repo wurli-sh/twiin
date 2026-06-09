@@ -15,6 +15,11 @@ import {
   deriveTwiinAccountAddress,
 } from '@/config/contracts'
 import { readContract } from '@/lib/read-contract'
+import {
+  formatPolicyStt,
+  parsePoliciesTuple,
+  type PoliciesTuple,
+} from '@/lib/agent-policy-read'
 import { somniaTestnet } from '@/config/chains'
 
 export interface TwiinAgentInfo {
@@ -84,24 +89,23 @@ export function useTwiinAgents() {
             const balance = await publicClient.getBalance({ address: tbaAddress })
             const balanceFormatted = Number(formatEther(balance)).toFixed(4)
 
-            const policy = await readContract<
-              readonly [bigint, bigint, boolean, bigint, bigint]
-            >(publicClient, {
+            const policy = await readContract<PoliciesTuple>(publicClient, {
               address: CONTRACTS.policy.address,
               abi: AgentPolicyAbi,
               functionName: 'policies',
               args: [id],
             })
+            const parsed = parsePoliciesTuple(policy)
 
             activeAgents.push({
               id,
               name: name || `Agent #${id}`,
               tbaAddress,
               tbaBalance: balanceFormatted,
-              killSwitch: policy[2],
-              dailyCap: formatEther(policy[0]),
-              maxPerTask: formatEther(policy[1]),
-              dailySpent: formatEther(policy[3]),
+              killSwitch: parsed.killSwitch,
+              dailyCap: formatPolicyStt(parsed.dailyCapWei),
+              maxPerTask: formatPolicyStt(parsed.maxPerTaskWei),
+              dailySpent: formatPolicyStt(parsed.dailySpent),
             })
           } catch (e) {
             console.error(`Error loading agent details for ID ${id}:`, e)
@@ -152,7 +156,9 @@ export function useTwiinAgents() {
 
     setAgents((prev) =>
       prev.map((agent) =>
-        agent.id === agentId ? { ...agent, killSwitch: !currentState } : agent,
+        agent.id === agentId
+          ? { ...agent, killSwitch: !Boolean(currentState) }
+          : agent,
       ),
     )
     window.setTimeout(() => void loadAgents(), 2000)

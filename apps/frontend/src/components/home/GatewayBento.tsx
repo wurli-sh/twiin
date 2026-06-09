@@ -29,15 +29,15 @@ export function GatewayBento() {
           className="text-balance text-center text-4xl font-bold tracking-tight text-foreground md:text-5xl"
           variants={fadeInUp}
         >
-          The Gateway to Autonomous Agents
+          Own the AI Agent
         </motion.h2>
         <motion.p className="mt-4 text-center text-muted-foreground" variants={fadeInUp}>
-          Identity on-chain, execution through an{' '}
+          Plans with Claude, hires sub-agents, reaches{' '}
           <HighlightedText variant="lime" from="bottom" inView>
-            open marketplace
+            validator consensus
           </HighlightedText>
           ,{' '}
-            feeds any protocol can consume
+            and publishes on-chain
           .
         </motion.p>
 
