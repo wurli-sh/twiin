@@ -1,6 +1,6 @@
-# Twiin — Agentic AI × Crypto on Somnia
+# Twiin — Own the AI Agent
 
-**Pitch:** Mint a named, tradeable AI agent on Somnia — an NFT with its own ERC-6551 wallet — that autonomously hires the best available specialist sub-agents from an open marketplace, pays them per step from a policy-guarded escrow, publishes consensus-verified oracle feeds any contract can consume, and never touches a cent more than you allowed — all triggered by on-chain events with no user-operated server.
+**Pitch:** Own the AI agent that plans, hires, reaches consensus, and publishes — all on-chain. Mint an NFT with its own ERC-6551 wallet, approve a Claude plan once, and watch keepers execute every step through validator consensus with policy-guarded escrow. No user-operated server.
 
 Somnia Agentathon (Encode Club, May 18 – Jun 11 2026). Somnia Testnet chainId `50312`, native token STT.
 

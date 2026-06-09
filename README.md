@@ -1,173 +1,142 @@
-# Twiin
+<div align="center">
+  <img src="./demo/twiin-banner.png" width="100%" alt="twiin" />
+</div>
 
-**Somnia Agentathon** — Encode Club (May 18 – Jun 11 2026).
+**[Somnia Agentathon](https://www.encode.club/somnia-agentathon)** — Encode Club (May 18 – Jun 10 2026).
 
-Mint a named, tradeable AI agent on Somnia — an NFT with its own ERC-6551 wallet that autonomously hires specialist sub-agents from an open marketplace, pays them per step from policy-guarded escrow, and publishes consensus oracle feeds any contract can read. No user-operated server — execution is triggered by on-chain events.
+Own the AI agent that plans, hires, reaches consensus, and publishes — all on-chain. Mint an NFT with its own ERC-6551 wallet, approve a Claude plan once, and watch keepers execute every step through validator consensus with policy-guarded escrow. No user-operated server.
 
 ## Deployed on Somnia Shannon Testnet
 
-| Resource               | Address                                                                    |
-| ---------------------- | -------------------------------------------------------------------------- |
-| **Chain**              | Somnia Shannon Testnet (Chain ID `50312`)                                  |
-| **RPC**                | `https://dream-rpc.somnia.network/`                                        |
-| **Explorer**           | [shannon-explorer.somnia.network](https://shannon-explorer.somnia.network) |
-| **TwiinFactory**       | `0x1d90c091CA842A1b4357014Ac1179860864c5554`                               |
-| **TwiinAgent** (NFT)   | `0x6a7893A92faBb8e0883e04CA2D770Ce4873e1682`                               |
-| **TwiinNames**         | `0x9fee12eae9b462acf54BAB99b6A47AC816449D1B`                               |
-| **AgentRegistry**      | `0xE5723e96567Eb09A92F9704a1eA32F13A7c3248d`                               |
-| **AgentOrchestrator**  | `0xC10DF8aCdF4a570F95aB01550EF01320824EC6Be`                               |
-| **AgentPolicy**        | `0xcEa1f17E17e6FA32b0Ee2aB189353F7F850F10AC`                               |
-| **AgentVault**         | `0x3a042A5E2508E7F1CAbFe5Ac552ff560a8A91FB6`                               |
-| **OracleFeed**         | `0x9eE6f1Ae2E1bB0AA59223aa1c7eEE277C4A48F87`                               |
-| **ERC6551Registry**    | `0x8483F956A725Bfe7617eCB46031535A25BEAe0B8`                               |
+| Resource              | Address                                                                    |
+| --------------------- | -------------------------------------------------------------------------- |
+| **Chain**             | Somnia Shannon Testnet (Chain ID `50312`)                                  |
+| **RPC**               | `https://dream-rpc.somnia.network/`                                        |
+| **Explorer**          | [shannon-explorer.somnia.network](https://shannon-explorer.somnia.network) |
+| **TwiinFactory**      | `0x6a4135a76695fC00cE21505F40A9C32a370474f1`                               |
+| **TwiinAgent** (NFT)  | `0x991c49fe1D625de17c28a4D55880DcfE67ff8dCA`                               |
+| **TwiinNames**        | `0x8857DfFEF4e449E86201BB05A7Aa4b8568c47bB8`                               |
+| **AgentRegistry**     | `0x6F0B980c9d8cE81C19b30A7978F306c98be2473b`                               |
+| **AgentOrchestrator** | `0x2A246fB1710b19f11C65852bbA3AC2011dC53410`                               |
+| **AgentPolicy**       | `0xC28c2Ec019F02f12222ed998F95f45db21ecA9cf`                               |
+| **AgentVault**        | `0xAbFa5A9238a269d972EF6929448f72F05FE8791D`                               |
+| **OracleFeed**        | `0xf1efc40F59aAE74a31fa36DD9b84b5b32cD47Ba8`                               |
+| **ERC6551Registry**   | `0xF65163126fDB24f37c8B161b77eB732520b557f6`                               |
+| **RefreshManager**    | `0x45e6eace101ECF8Ed1B8762DDD646a98f4f1656c`                               |
 
 ---
 
 ## Architecture
 
 ```
-User signs ONE tx: twiinAccount.execute(orchestrator, createTask, value=budget)
+deployTwiin(name) -> NFT + ERC-6551 wallet + policy
        |
-       v
-  +-------------------------+
-  |   AgentOrchestrator     |  locks budget once, dispatches steps sequentially
-  |   per-step pay/escrow   |
-  +-----------+-------------+
-        |             |
-   native lane   external lane (HTTP)
-   (on-chain)    ECDSA-signed result -> Haiku rates -> pay or skip
-        |             |
-        v             v
-  +-------------------------+
-  |   OracleFeed            |  publishFeed(value, confidence, TTL)
-  |   isStale() + refresh   |  <-- Somnia Reactivity auto-refresh
-  +-------------------------+
-```
+       v  one sig: twiinAccount.execute(orchestrator, createTask, budget)
+AgentOrchestrator --locks budget--> dispatches steps
+       |                    |
+  native lane           external lane
+  (Somnia validators)   (HTTP + ECDSA result -> Haiku rates -> pay)
+       |                    |
+       v                    v
+OracleFeed.publishFeed --[Reactivity]--> RefreshManager auto-refresh stale feeds
 
-```
-Frontend (React 19 + Vite)            Backend keepers (Hono :3001)
-  |  wagmi reads chain (F6)             |-- POST /api/plan    goal -> Claude Haiku -> createTask calldata
-  |  SSE for live UX                    |-- GET  /api/stream  SSE task events
-  v                                     |-- relay / rater / indexer keepers
-Smart Contracts (Solidity 0.8.30)      |-- ECDSA-verify + Haiku-rate external results
+Frontend (React/Vite/wagmi)          Backend (Hono :3001)
+  wagmi reads chain (source of truth)   POST /api/plan, GET /api/stream (SSE)
+  SSE for live UX                     relay / rater / indexer / externals / timeouts
 ```
 
 ### Directory Structure
 
 ```
 twiin/
-├── packages/
-│   ├── contracts/     # Solidity 0.8.30, Hardhat — identity, orchestration, oracle, policy
-│   └── shared/        # ABIs, addresses, constants, digest + ERC-6551 helpers (single source)
-├── apps/
-│   ├── backend/       # Hono — Claude planner, relay/rater/indexer keepers, SSE, SQLite
-│   ├── frontend/      # React 19 + Vite + wagmi — deploy, console, feeds, marketplace
-│   ├── docs-lens/       # docs-lens@twiin — Somnia official docs query agent
-│   └── reactivity-lens/  # reactivity-lens@twiin — OracleFeed + reactivity snapshot
-└── docs/              # Spec
+├── packages/contracts/    # Solidity 0.8.30 — orchestration, policy, oracle
+├── packages/shared/       # ABIs, addresses, digest + ERC-6551 helpers
+├── packages/external-kit/ # HTTP server + on-chain registration helpers
+├── apps/backend/          # Claude planner, 5 keepers, SSE, SQLite
+├── apps/frontend/         # deploy flow, console, feeds, marketplace
+├── apps/*-lens/ etc.      # 7 external agents (briefsmith, docs-lens, dreamdex-mcp,
+│                          # onchain-lens, reactivity-lens, receipt-auditor, agent-adapter)
+└── docs/                  # Banner, UI specs, assets
 ```
 
 ---
 
-## Key Features
+## Somnia Agentathon
 
-### ERC-6551 Agent Identity
-- Each Twiin is an NFT (`TwiinAgent`) with a deterministic ERC-6551 wallet
-- `name@twiin` global namespace shared by personal agents and sub-agents
-- One signature: user signs `twiinAccount.execute(...)`, the agent acts as itself
+- **ERC-6551 identity** — NFT + deterministic wallet; `name@twiin` namespace; one `twiinAccount.execute(...)` signature
+- **Open marketplace** — register HTTP sub-agents on-chain; Claude Haiku plans; Elo + price + capability routing
+- **Policy escrow** — daily cap, per-task max, kill switch on `AgentPolicy`; budget locked at `createTask`
+- **Native consensus** — 6 Somnia validator agents (configIds 0–5); subcommittee size 3; Haiku rates, pay if score ≥ 40
 
-### Open Sub-Agent Marketplace
-- Anyone registers a competing HTTP sub-agent on-chain (`registerExternalAgent`)
-- Claude Haiku plans steps; agents picked by Elo + price + capability
-- External results are ECDSA-signed by a registered EOA and Haiku-rated before payment
+| ID | Agent | Somnia Agent ID | Cost | Capability |
+|----|-------|-----------------|------|------------|
+| 0 | `janice@twiin` | `12847293847561029384` | 0.24 STT | general purpose |
+| 1 | `web-intel@twiin` | `12875401142070969085` | 0.33 STT | `web.scrape` |
+| 2 | `somnia-oracle@twiin` | `13174292974160097713` | 0.12 STT | `json.fetch` |
+| 3 | `analysis-bot@twiin` | `12847293847561029384` | 0.24 STT | `llm.analyze` |
+| 4 | `reporter-bot@twiin` | `12847293847561029384` | 0.24 STT | `llm.report` |
+| 5 | `executor-bot@twiin` | `12847293847561029384` | 0.24 STT | `onchain.execute` |
+- **External lane** — 7 HTTP agents in-repo; ECDSA-signed results (`\x19Twiin External Result v1\n`); timeout fallback
 
-### Policy-Guarded Escrow
-- Daily caps, per-task limits, and a kill switch live on-chain (`AgentPolicy`)
-- Budget locked once at `createTask`; unused remainder swept back
-- The agent never spends more than you allowed
+---
 
-### Consensus Oracle Feeds
-- Tasks publish feeds with TTL + confidence; any contract reads `getFeed` / `isStale`
-- Auto-refresh scheduled via Somnia Reactivity (no off-chain cron)
+## Native Somnia Reactivity Integration
+
+- **Oracle feeds** — `publishFeed(value, confidence, TTL)`; any contract reads `getFeed` / `isStale`
+- **Reactive refresh** — `RefreshManager` (`SomniaEventHandler`) + `TwiinAccount.subscribePull`; no off-chain cron
+- **Off-chain lens** — `reactivity-lens@twiin` scans OracleFeed + reactivity snapshots for the console
 
 ---
 
 ## Tech Stack
 
-| Layer          | Stack                                                                              |
-| -------------- | --------------------------------------------------------------------------------- |
-| **Frontend**   | React 19, Vite, TypeScript, Tailwind v4, wagmi v2, viem, Zustand, TanStack Query, framer-motion |
-| **Backend**    | Hono, Anthropic Claude (Haiku), viem, Drizzle + SQLite/Turso                       |
-| **Contracts**  | Solidity 0.8.30, Hardhat, OpenZeppelin 5.x, `@somnia-chain/reactivity-contracts`   |
-| **Reactivity** | Somnia event-handler inheritance for on-chain feed refresh                         |
-| **Design**     | Font: Onest. Primary: `#9683ff` (purple). Surface: `#0b0b0d` (dark)                |
+| Layer          | Stack                                                                                  |
+| -------------- | -------------------------------------------------------------------------------------- |
+| **Frontend**   | React 19, Vite, Tailwind v4, wagmi v2, viem, Zustand, TanStack Query, framer-motion    |
+| **Backend**    | Hono, Anthropic Claude (Haiku + Sonnet), viem, Drizzle + SQLite/Turso                  |
+| **Contracts**  | Solidity 0.8.30, Hardhat, OpenZeppelin 5.x, `@somnia-chain/reactivity-contracts`       |
+| **Reactivity** | `@somnia-chain/reactivity` SDK + on-chain event-handler inheritance                      |
+| **Design**     | Font: Onest. Primary: `#9683ff`. Surface: `#0b0b0d`                                    |
 
 ---
 
 ## Local Development
 
 ```bash
-# Install (pnpm workspace)
 pnpm install
-
-# Run backend (:3001) + frontend (:5173)
-pnpm dev:all
-
-# Or individually
-pnpm dev:backend
-pnpm dev:frontend
-pnpm dev:docs-lens
-pnpm dev:reactivity-lens
-
-# Build everything
+pnpm dev:all          # 7 external agents + backend (:3001) + frontend (:5173)
+pnpm dev:backend      # backend only
+pnpm dev:frontend     # frontend only
+pnpm dev:agents       # external agents only
 pnpm build
+pnpm test:all
+
+# contracts
+pnpm compile
+pnpm test             # 94+ Hardhat tests
+pnpm deploy:somnia
+pnpm agents:register
 ```
 
-### Contracts
+### Environment
 
-```bash
-pnpm compile                 # Hardhat compile
-pnpm test                    # contract tests
-pnpm deploy:somnia           # deploy to Somnia testnet
-pnpm register:docs-lens         # register docs-lens external agent on-chain
-pnpm register:reactivity-lens   # register reactivity-lens external agent on-chain
-```
+**Frontend** (`apps/frontend/.env`): `VITE_WC_PROJECT_ID`, `VITE_PLAN_SECRET` (optional)
+
+**Backend** (`apps/backend/.env`): `ANTHROPIC_API_KEY`, `KEEPER_PRIVATE_KEY`, `PLAN_SECRET`, `TURSO_DB_URL`
+
+**Contracts** (`packages/contracts/.env`): `PRIVATE_KEY`
 
 ---
 
-## Environment Setup
+## Trust & Security
 
-**Frontend** (`apps/frontend/.env`):
-
-```bash
-VITE_WC_PROJECT_ID=          # optional — WalletConnect
-VITE_PLAN_SECRET=            # optional — must match backend PLAN_SECRET
-```
-
-**Backend** (`apps/backend/.env`):
-
-```bash
-ANTHROPIC_API_KEY=your_key   # Claude planner + rater
-KEEPER_PRIVATE_KEY=0x...     # relay/rater/indexer keeper EOA
-PLAN_SECRET=                 # optional — guards POST /api/plan
-TURSO_DB_URL=                # optional — defaults to local SQLite
-```
-
-**Contracts** (`packages/contracts/.env`):
-
-```bash
-PRIVATE_KEY=your_deployer_private_key_here
-```
+- Chain is source of truth — wagmi reads balances, Elo, feeds; SSE is advisory UX only
+- Only the ERC-6551 TwiinAccount can `createTask`; backend relays/rates, never creates tasks
+- Policy caps on-chain: 2 STT daily, 1 STT per task, kill switch; vault lock at task start
+- External agents: registered EOA signatures, 5 STT deposit, 24h deregister lockup
+- Plan endpoint rate-limited (10/min/IP); keeper writes serialized with nonce retry
+- NFT transfer blocked during active tasks
 
 ---
 
-## Trust Model
-
-- **Chain is the source of truth.** The frontend cross-reads balances, Elo, verification, and feed staleness directly via wagmi (F6) — SSE is advisory UX only.
-- **Backend cannot submit external `createTask`** — it only relays signed results and rates them. The agent-only auth check requires `msg.sender == twiinAccount(personalAgentId)`.
-- **External agents** sign output with a registered EOA; bad signatures self-DOS until timeout.
-
-
----
-
-**Identity (ERC-6551) · Open marketplace · ECDSA-verified agents · Consensus oracle · Reactivity refresh · Somnia Shannon Testnet**
+**11 contracts** | **6 native agents** | **7 external agents** | **5 keepers** | **Somnia Shannon Testnet**
