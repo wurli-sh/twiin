@@ -6,11 +6,24 @@ import {
 import type { DocsLensEnv } from "./env";
 
 const DEFAULT_DOCS_BASE = "https://docs.somnia.network";
-const EXCERPT_MAX_CHARS = 2000;
+const EXCERPT_MAX_CHARS = 10_000;
 const ASK_TIMEOUT_MS = 45_000;
 const PRECHECK_TIMEOUT_MS = 10_000;
 const FALLBACK_ASK_PATH = "readme";
 const SITEMAP_PATH = "sitemap";
+
+const GITBOOK_TAG_RE = /\{%[^%]*%\}/g;
+const GITBOOK_BLOCK_RE = /\{%\s*@mermaid[^%]*%\}[\s\S]*?\{\%\s*endmermaid\s*%\}/gi;
+const GITBOOK_END_RE = /\{%\s*endhint\s*%\}/gi;
+
+function stripGitBookTags(text: string): string {
+  return text
+    .replace(GITBOOK_BLOCK_RE, "")
+    .replace(GITBOOK_TAG_RE, "")
+    .replace(GITBOOK_END_RE, "")
+    .replace(/^\s*[\r\n]/gm, "")
+    .trim();
+}
 
 export const KNOWN_BAD_DOC_PATHS = new Set(["defi", "agents"]);
 
@@ -93,27 +106,101 @@ export function buildDocsSummary(excerpt: string, question: string): string {
     .map((line) => line.trim())
     .filter(Boolean);
   const bullets: string[] = [];
+  const seen = new Set<string>();
+  const MAX_BULLETS = 24;
+  const MAX_SECTION_CHARS = 800;
 
-  for (const line of lines) {
+  const isDiagramLine = (l: string) =>
+    /^(flowchart|subgraph|end\b|-->|--->)/i.test(l) ||
+    (l.includes("[") && l.includes("]") && !l.includes("**") && !l.startsWith("-") && !l.startsWith("*"));
+
+  const conciseText = (text: string): string => {
+    const normalized = text.replace(/^[-*#\d.]+\s*/, "").trim();
+    if (!normalized) return "";
+    if (normalized.length <= MAX_SECTION_CHARS) return normalized;
+    const slice = normalized.slice(0, MAX_SECTION_CHARS);
+    const sentenceEnd = Math.max(slice.lastIndexOf(". "), slice.lastIndexOf("; "));
+    if (sentenceEnd > MAX_SECTION_CHARS * 0.5) {
+      return `${slice.slice(0, sentenceEnd + 1).trimEnd()}…`;
+    }
+    const lastSpace = slice.lastIndexOf(" ");
+    return `${(lastSpace > MAX_SECTION_CHARS * 0.6 ? slice.slice(0, lastSpace) : slice).trimEnd()}…`;
+  };
+
+  const pushBullet = (text: string) => {
+    const normalized = conciseText(text);
+    if (!normalized) return;
+    const key = normalized.toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    bullets.push(normalized);
+  };
+
+  const collectSectionContent = (startIdx: number): string[] => {
+    const content: string[] = [];
+    for (let j = startIdx; j < lines.length; j++) {
+      const candidate = lines[j]!;
+      if (candidate.startsWith("#")) break;
+      if (isDiagramLine(candidate)) continue;
+      const normalized = candidate.replace(/^[-*#\d.]+\s*/, "").trim();
+      if (!normalized) continue;
+      if (/^[-*]\s+/.test(candidate) || /^\d+\.\s+/.test(candidate)) {
+        pushBullet(normalized);
+        continue;
+      }
+      content.push(normalized);
+      if (content.length >= 3) break;
+    }
+    return content;
+  };
+
+  for (let i = 0; i < lines.length && bullets.length < MAX_BULLETS; i++) {
+    const line = lines[i]!;
+
     if (line.startsWith("#")) {
-      bullets.push(line.replace(/^#+\s*/, ""));
-      break;
+      const heading = line.replace(/^#+\s*/, "").trim();
+      const contentLines = collectSectionContent(i + 1);
+      if (contentLines.length > 0) {
+        pushBullet(`${heading} — ${contentLines.join(" ")}`);
+      } else if (!seen.has(heading.toLowerCase())) {
+        seen.add(heading.toLowerCase());
+        bullets.push(heading);
+      }
+      continue;
     }
-  }
 
-  for (const line of lines) {
+    if (isDiagramLine(line)) continue;
+
     const normalized = line.replace(/^[-*#\d.]+\s*/, "");
-    if (keywords.some((keyword) => normalized.toLowerCase().includes(keyword))) {
-      bullets.push(normalized.slice(0, 200));
+    if (/^[-*]\s+/.test(line) || /^\d+\.\s+/.test(line)) {
+      pushBullet(normalized);
+      continue;
     }
-    if (bullets.length >= 5) break;
+
+    if (keywords.some((keyword) => normalized.toLowerCase().includes(keyword))) {
+      pushBullet(normalized);
+    }
   }
 
   if (bullets.length === 0 && lines.length > 0) {
-    bullets.push(lines[0]!.slice(0, 200));
+    for (const line of lines) {
+      if (line.startsWith("#") || isDiagramLine(line)) continue;
+      pushBullet(line);
+      if (bullets.length >= 6) break;
+    }
   }
 
-  return bullets.map((bullet) => `• ${bullet}`).join("\n");
+  const MAX_SUMMARY_CHARS = 3_500;
+  const selected: string[] = [];
+  let used = 0;
+  for (const bullet of bullets) {
+    const entry = `• ${bullet}`;
+    if (used + entry.length + 1 > MAX_SUMMARY_CHARS && selected.length > 0) break;
+    selected.push(bullet);
+    used += entry.length + 1;
+  }
+
+  return selected.map((bullet) => `• ${bullet}`).join("\n");
 }
 
 export function isQuestionAnswered(excerpt: string, question: string): boolean {
@@ -167,9 +254,9 @@ type DocsAttempt = {
 };
 
 function buildAttemptChain(startPath: string): DocsAttempt[] {
-  const attempts: DocsAttempt[] = [{ path: startPath, withAsk: true }];
+  const attempts: DocsAttempt[] = [{ path: startPath, withAsk: false }];
   if (startPath !== FALLBACK_ASK_PATH) {
-    attempts.push({ path: FALLBACK_ASK_PATH, withAsk: true });
+    attempts.push({ path: FALLBACK_ASK_PATH, withAsk: false });
   }
   attempts.push({ path: SITEMAP_PATH, withAsk: false });
   return attempts;
@@ -184,7 +271,8 @@ function buildDocsResponse(params: {
   fallbackUsed: boolean;
 }): string {
   const { env, question, requestedPath, result, withAsk, fallbackUsed } = params;
-  const excerpt = result.text.slice(0, EXCERPT_MAX_CHARS);
+  const cleanText = stripGitBookTags(result.text);
+  const excerpt = cleanText.slice(0, EXCERPT_MAX_CHARS);
   const summary = buildDocsSummary(excerpt, question);
   const answered =
     result.ok && !isPageNotFound(excerpt) && isQuestionAnswered(excerpt, question);
@@ -195,11 +283,9 @@ function buildDocsResponse(params: {
         fallbackUsed
           ? `Used fallback path "${requestedPath}" after primary docs path failed`
           : `Retrieved ${result.text.length} chars from ${requestedPath}`,
-        withAsk
-          ? answered
-            ? "Excerpt appears relevant to the question"
-            : "Excerpt retrieved but may not fully answer the question"
-          : "Included sitemap index as last-resort documentation context",
+      answered
+        ? "Extracted relevant sections from documentation matching the question"
+        : "Documentation content retrieved but may not fully answer the question",
       ]
     : [
         `Official Somnia docs query: ${question}`,

@@ -91,6 +91,51 @@ describe("docs lens helpers", () => {
     expect(summary).toContain("oracles");
   });
 
+  it("pairs headings with following paragraph content", () => {
+    const excerpt = [
+      "# Overview",
+      "",
+      "Prototype Notice: Somnia Agents is in prototype state and deployed on both Somnia Mainnet (chain ID 5031) and Somnia Testnet (chain ID 50312).",
+      "",
+      "# Vision",
+      "",
+      "Somnia provides agents, oracles, and developer tools for on-chain automation.",
+    ].join("\n");
+
+    const summary = buildDocsSummary(
+      excerpt,
+      "What agents, oracles, and developer tools does Somnia offer?",
+    );
+
+    expect(summary).toContain("Overview — Prototype Notice");
+    expect(summary).toContain("50312");
+    expect(summary).toContain("Vision —");
+    expect(summary).toContain("developer tools");
+    expect(summary).not.toMatch(/• Overview\n/);
+    expect(summary).not.toMatch(/• Vision\n/);
+  });
+
+  it("includes list items and keeps full section prose up to the summary budget", () => {
+    const excerpt = [
+      "# Agents",
+      "",
+      "Somnia exposes multiple agent types for developers.",
+      "- JSON API Request agents for structured HTTP calls",
+      "- LLM inference agents for parse-website workflows",
+      "- Consensus agents for validator-backed execution",
+    ].join("\n");
+
+    const summary = buildDocsSummary(
+      excerpt,
+      "What agents and capabilities does Somnia offer?",
+    );
+
+    expect(summary).toContain("JSON API Request");
+    expect(summary).toContain("LLM inference");
+    expect(summary).toContain("Consensus agents");
+    expect(summary).toContain("Agents —");
+  });
+
   it("detects when excerpt answers the question", () => {
     expect(
       isQuestionAnswered(
@@ -120,14 +165,11 @@ describe("docs lens helpers", () => {
 describe("executeDocsLens", () => {
   it("returns structured docs response on success", async () => {
     mockFetchSequence([
-      async (url) => {
-        if (!url.includes("ask=")) {
-          return mockResponse(true, 200, "# Somnia Docs\n\nDocumentation index.");
-        }
+      async (_url) => {
         return mockResponse(
           true,
           200,
-          "# Agents\n\nGas fees are split into reserve and reward pots.",
+          "# Agents\n\nGas fees are split into reserve and reward pots. Agents provide oracles, LLM inference, and developer tools.",
         );
       },
     ]);
@@ -161,7 +203,7 @@ describe("executeDocsLens", () => {
   it("falls back to readme when primary docPath is known-bad", async () => {
     mockFetchSequence([
       async (url) => {
-        expect(url).toContain("readme.md?ask=");
+        expect(url).toContain("readme.md");
         return mockResponse(
           true,
           200,
@@ -188,16 +230,13 @@ describe("executeDocsLens", () => {
     expect(parsed.excerpt).toContain("LP risks");
   });
 
-  it("falls back to readme when primary ask times out", async () => {
+  it("falls back to readme when primary fetch times out", async () => {
     mockFetchSequence([
       async (url) => {
         if (url.includes("developer/building-dapps.md") && !url.includes("ask=")) {
-          return mockResponse(true, 200, "# Building DApps\n\nDeveloper guide.");
-        }
-        if (url.includes("developer/building-dapps.md?ask=")) {
           throw new Error("TimeoutError: The operation was aborted due to timeout");
         }
-        if (url.includes("readme.md?ask=")) {
+        if (url.includes("readme.md") && !url.includes("ask=")) {
           return mockResponse(
             true,
             200,
