@@ -98,7 +98,7 @@ export function DeployAgentPanel({
               type="text"
               value={nameInput}
               onChange={(e) => setNameInput(e.target.value)}
-              placeholder="clairo"
+              placeholder="neo"
               disabled={!isConnected || busy}
               className="w-full bg-transparent px-3 py-2.5 text-sm text-foreground outline-none placeholder:text-muted-foreground disabled:opacity-50"
             />
