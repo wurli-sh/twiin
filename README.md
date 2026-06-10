@@ -1,7 +1,7 @@
 <div align="center">
   <img src="./demo/twiin-banner.png" width="100%" alt="twiin" />
 
-  **[Pitch Deck](./demo/twiin-pitch.pdf)** · **[Live Demo](https://twiin-frontend.vercel.app/)** · **[Source](https://github.com/wurli-sh/twiin)**
+  **[Pitch Deck](./demo/twiin-pitch.pdf)** · **[Demo Video](https://youtu.be/5dUFeZUK1Ko)** · **[Live Demo](https://twiin-frontend.vercel.app/)** · **[Source](https://github.com/wurli-sh/twiin)**
 </div>
 
 **[Somnia Agentathon](https://www.encode.club/somnia-agentathon)** — Encode Club (May 18 – Jun 10 2026).
