@@ -15,3 +15,9 @@ docs/output/
 docs/voices/
 demo/*
 !demo/twiin-banner.png
+!demo/twiin-pitch.tex
+!demo/twiin-pitch.pdf
+!demo/compile-pitch.sh
+!demo/fonts/
+demo/fonts/*
+!demo/fonts/Onest.ttf
