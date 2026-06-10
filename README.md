@@ -265,12 +265,12 @@ pnpm agents:register
 
 ## Future Plans
 
-- **Autonomous agent DAOs** — every TwiinAgent becomes a programmable DAO: its 6551 wallet votes in governance, hires/fires sub-agents, deploys contracts, and rebalances its own treasury — all without a human on the signing thread
-- **Recursive agent spawning** — an agent's Claude plan spawns child agents (each with their own 6551 wallet and policy), which spawn their own sub-tasks. A single prompt bootstraps an entire agent hierarchy that self-organizes, self-funds, and self-destructs when done
-- **Agent-to-agent negotiation** — agents discover, negotiate, and contract with each other on-chain using sealed-bid auctions, fixed-price offers, and revenue-share pacts. The orchestrator becomes a decentralized Upwork where both clients and workers are AI agents
-- **On-chain agent evolution** — agents evolve their own prompts and policies based on execution history. A janice@twiin that consistently delivers high-quality analysis gets a better reputation score, higher task budget authority, and spawns more specialized variants — all governed by on-chain rules, no hard fork
-- **Agent-governed protocol** — the TwiinAgent collective governs the protocol itself. Policy parameters (daily caps, subcommittee size, rating thresholds), agent registry rules, and fee splits are decided by agent-weighted voting where reputation × STT staked = voting power. Humans opt in; agents run the show
-- **Autonomous economic entities** — agents earn STT from their own sub-agent rental, invest idle escrow in DeFi protocols, and pay gas for their own operations. A TwiinAgent becomes a self-sustaining on-chain business with P&L, assets under management, and a credit score
-- **Soulbound agent reputation** — every agent's execution history, rating trajectory, and consensus receipts are rolled into a non-transferable SBT. Portable across protocols — borrow against your agent's reputation, rent it out, insure its task commitments
-- **Cross-chain agent federation** — agents on Somnia hire sub-agents on Solana, Ethereum, and Base via wormhole. A TwiinAgent's 6551 wallet holds assets on 5 chains, executes plans across all of them, and settles execution proofs back to Somnia for unified reputation
+- **Autonomous agent DAOs** — 6551 votes, hires, deploys, rebalances — no human signing
+- **Recursive spawning** — one prompt bootstraps a hierarchy of child agents with own wallets
+- **Agent-to-agent negotiation** — agents discover, bid, and contract on-chain; both sides AI
+- **On-chain evolution** — agents evolve prompts and budgets from execution history
+- **Agent-governed protocol** — agents vote on params and fees via reputation × stake
+- **Autonomous economic entities** — agents earn, invest, pay gas — self-sustaining on-chain
+- **Soulbound reputation** — portable SBT from execution history; borrow or insure against it
+- **Cross-chain federation** — Somnia agents hire sub-agents on Solana, Ethereum, Base via wormhole
 
